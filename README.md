@@ -1,137 +1,151 @@
 # StashBase
 
-**Your personal knowledge, retrievable by AI.**
+**Your knowledge base as AI context — not just your codebase.**
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/status-early%20alpha-orange.svg)](#)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.12-brightgreen.svg)](https://nodejs.org/)
 [![Powered by mfs](https://img.shields.io/badge/powered%20by-mfs-0891b2.svg)](https://github.com/zilliztech/mfs)
-[![Status](https://img.shields.io/badge/status-early%20alpha-orange.svg)](#)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-A local-first knowledge base for notes, papers, transcripts, and saved analysis.
+**StashBase** is a local knowledge base supporting HTML and Markdown, with deep integration of Claude/Codex, and retrievable via MCP.
 
-Use it from coding agents like Claude Code or Codex through MCP. StashBase indexes your library as it grows, so AI tools can retrieve knowledge by meaning instead of repeatedly loading entire folders into context.
+🎨 **HTML-first notes:** Native HTML rendering for rich layouts, links, tables, and media — ready for AI workflows and long-term reference.
+*"Ask your LLM to structure your response as HTML." — Andrej Karpathy*
 
-![Demo](.github/assets/demo.gif)
+⚡ **Entire knowledge base as context:** Notes are semantically embedded and indexed as they land, giving your AI clients a searchable, long-lived library without multi-round searching or manual discovery.
 
-> Demo: Claude Code reshapes a raw podcast transcript into question cards (my preferred reading format). StashBase indexes the notes automatically so the ideas become searchable later while chatting with AI.
+🤖 **MCP-compatible access:** Query your indexed knowledge from any MCP-aware AI client — Claude, ChatGPT, Codex — for direct AI workflows.
 
 ---
 
-## Semantic search for personal knowledge
+## 🚀 Demo
 
-Most AI tools treat knowledge as temporary context: uploaded files, chat history, copied notes, local indexes.
+![Demo](.github/assets/demo.gif)
 
-But personal knowledge lasts longer. Papers, notes, transcripts, and saved analysis accumulate over time, scattered across folders and apps.
+> Claude Code turns a raw podcast transcript into structured question cards (my preferred note format). StashBase indexes the notes automatically so the ideas become part of your long-term AI context.
 
-StashBase is a local knowledge base built for that long-lived knowledge.
+---
 
-It indexes your library once and makes the relevant pieces retrievable later through semantic search — from coding agents, desktop AI clients, or MCP workflows.
+## The accumulation problem
+
+Most AI tools treat knowledge as temporary context:
+
+* uploaded files
+* copied notes
+* chat history
+* local code indexes
+
+But personal knowledge lasts longer.
+
+Papers, transcripts, notes, saved analysis, and half-finished ideas accumulate across folders and apps over time.
+
+StashBase is built for that accumulation layer.
+
+It continuously indexes your library locally and exposes it through semantic + keyword retrieval for Claude, ChatGPT, Codex, and other MCP-compatible AI tools.
+
+Instead of repeatedly loading entire folders into context, your AI retrieves only the relevant pieces when needed.
+
+---
+
+## Example workflow
 
 ```text
-   Claude · ChatGPT · Codex
-              │  (MCP)
-              ▼
-  ┌────────────────────────────┐
-  │  StashBase                 │
-  │  semantic + keyword search │
-  │  embeddings · MCP tools    │
-  └────────────────────────────┘
-              ▲
-              │
-   HTML notes · papers ·
-   podcasts · saved analysis
+podcast transcript
+        ↓
+Claude Code generates notes
+        ↓
+StashBase indexes them locally
+        ↓
+later, in Claude or ChatGPT...
+        ↓
+"that discussion about AI killing SaaS"
+        ↓
+relevant notes retrieved instantly
 ```
-
-A focused Markdown / HTML editor lives in the app, but the retrieval layer is the point — every note is indexed as it lands and stays reachable from any MCP-aware AI tool.
 
 Example query:
 
 ```text
 Query:
-"why do companies keep paying for SaaS?"
+"that podcast arguing AI won't kill SaaS"
 
 → notes/saas-maintenance.html
-   Software is only part of the cost.
-   Reliability, upgrades, permissions,
-   integrations, and support are usually
-   the harder problem.
+
+  Software is only part of the cost.
+  Reliability, upgrades, permissions,
+  integrations, and support are usually
+  the harder problem.
 ```
 
-Instead of repeatedly loading entire folders into context, StashBase indexes your library once and retrieves only the relevant pieces when needed.
+Codebase retrieval is already well served by tools like [Claude Context](https://github.com/zilliztech/claude-context).
 
-StashBase uses [mfs](https://github.com/zilliztech/mfs) under the hood for local semantic indexing and retrieval. mfs itself is built on Milvus Lite.
+StashBase focuses on everything else that accumulates around AI work:
 
-Hybrid retrieval is enabled by default: dense vector kNN fused with BM25 through Milvus's `RRFRanker(k=60)`.
-
-One round-trip. No client-side merge.
+* papers
+* transcripts
+* reading notes
+* research fragments
+* saved analysis
+* generated HTML knowledge pages
 
 ---
 
-## MCP integration
+## Features
 
-Use the same knowledge library from Claude Code, desktop AI clients, or custom MCP workflows.
+### Built-in agent workspace
 
-Example Claude Desktop configuration:
+StashBase treats coding agents as first-class citizens inside the knowledge workspace itself.
 
-```json
-{
-  "mcpServers": {
-    "StashBase": {
-      "command": "npx",
-      "args": ["tsx", "/absolute/path/to/StashBase/mcp/server.ts"]
-    }
-  }
-}
-```
+**In-app terminal.** Claude Code and Codex are pre-wired. The terminal launches directly inside the current space, and anything the agent writes is immediately indexed — no manual refresh or re-indexing step.
 
-Available tools:
+**Skills mirrored across CLIs.** Drop a `skills/<name>/SKILL.md` into a space and StashBase mirrors it into:
 
-* `search_kb`
-* `list_files`
-* `get_file`
-* `index_status`
+* `.claude/commands/<name>.md`
+* `.codex/prompts/<name>.md`
 
-Example workflows:
+Write an agent workflow once and reuse it across multiple coding agents.
+
+**Cross-file link cascade.** Rename a note and StashBase rewrites Markdown / HTML links pointing to the old path with a VS Code-style confirmation dialog.
+
+**PDF → HTML pipeline.** Drop in a PDF and the marker pipeline generates a readable, indexable HTML note + asset bundle.
+
+**Git clone as a space starter.** Paste a repo URL into the Welcome screen and StashBase clones, opens, and indexes it automatically.
+
+---
+
+## Retrieval
+
+Each selected folder becomes a "space".
+
+Every space maintains a continuously updated local semantic index powered by [mfs](https://github.com/zilliztech/mfs) and [Milvus Lite](https://milvus.io/docs/milvus_lite.md).
+
+Files are indexed automatically on boot. External edits — from editors, git checkouts, sync tools, or coding agents — are picked up through filesystem watching.
+
+Supported embedding providers:
+
+* **OpenAI embeddings** — best retrieval quality
+* **Local ONNX embeddings (`bge-m3`)** — fully local after first download
+
+> Embedding configuration is locked per space after the initial index build, so pick before the first index runs.
+
+Hybrid semantic + keyword retrieval is shared across AI tools through MCP.
 
 ```text
-Index this folder
-
-Search my notes for "vector retrieval vs keyword search"
-
-Open the matching note
+          Claude Code · Codex
+                   │
+            shared workspace
+                   │
+        ┌──────────────────────┐
+        │      StashBase       │
+        │ semantic retrieval   │
+        │ keyword retrieval    │
+        │ continuous indexing  │
+        └──────────────────────┘
+                   │
+                  MCP
+                   │
+     Claude · ChatGPT · AI clients
 ```
-
----
-
-## Built-in agent workspace
-
-Beyond MCP as the front door, a few things make running a coding agent *against* a StashBase space a first-class workflow rather than a side-by-side workaround:
-
-* **In-app terminal** — Claude Code and Codex are pre-wired. The PTY launches in the current space, and the file watcher picks up anything the agent writes — sidebar tree refreshes, the open preview re-renders. (That's the demo gif at the top.)
-
-* **Skills** — drop a `skills/<name>/SKILL.md` into a space and StashBase mirrors it into `.claude/commands/<name>.md` and `.codex/prompts/<name>.md`. Write a slash command once, use it across both CLIs.
-
-* **Cross-file link cascade** — rename a note and StashBase rewrites every Markdown / HTML link pointing at the old path, with a VS Code-style "Update N references in M files?" confirmation. Reorganize without breaking what the AI has already filed away.
-
-* **PDF → HTML** — drop a PDF in and the marker pipeline produces a readable, indexable HTML note + assets bundle.
-
-* **Git clone as a space starter** — point the Welcome screen at a repo URL; StashBase clones, opens, and indexes in one step.
-
----
-
-## Current focus
-
-StashBase is currently optimized for knowledge-heavy workflows:
-
-* notes
-* papers
-* podcasts
-* saved analysis
-* AI-generated artifacts
-
-Codebase retrieval is already well served by tools like [Claude Context](https://github.com/zilliztech/claude-context), so StashBase focuses more on the rest of what accumulates around AI work.
-
-Browser history, activity traces, and passive memory capture are intentionally out of scope for now.
 
 ---
 
@@ -139,17 +153,24 @@ Browser history, activity traces, and passive memory capture are intentionally o
 
 Markdown became the default not because it was more expressive, but because it was the lowest-friction format humans were willing to type.
 
-That tradeoff changes once models are generating most of the structure.
+That tradeoff changes once models generate most of the structure.
 
-To an LLM, HTML and Markdown are both just text. But HTML carries richer structure for long-lived knowledge: semantic sections, anchors, embedded media, tables, expandable blocks, and layouts that survive outside any single app.
+To an LLM, HTML and Markdown are both just text. But HTML carries richer structure for long-lived knowledge:
 
-For retrieval systems, that structure matters.
+* semantic sections
+* anchors
+* embedded media
+* tables
+* expandable blocks
+* durable layouts
 
-Markdown still makes sense for drafts and quick notes. StashBase supports both side by side — the "+" button in the sidebar pops a small picker so you choose format at creation time. HTML sits at the top because it's the recommended choice for anything meant to outlive a chat session.
+Markdown still works well for drafts and quick notes. StashBase supports both side by side.
+
+But for finished, shareable, AI-generated knowledge pages, HTML becomes much more compelling once humans are no longer hand-authoring every tag.
 
 > "HTML is the new markdown. I've stopped writing markdown files for almost everything and switched to using Claude Code to generate HTML for me."
 >
-> — Thariq Shihipar ([Anthropic, Claude Code](https://x.com/trq212/status/2052809885763747935))
+> — [Thariq Shihipar](https://x.com/trq212/status/2052809885763747935), Anthropic / Claude Code
 
 > "Ask your LLM to structure your response as HTML."
 >
@@ -165,34 +186,54 @@ cd StashBase
 pnpm install
 pnpm setup:python
 
-# Run
+# Run the Electron app
 pnpm electron
-# or
+
+# Development mode
 pnpm dev
 
-# Build
+# Build distributable app
 pnpm dist:mac
+pnpm dist:win
 ```
 
-Two embedding providers are supported per space:
+Once the app is running:
 
-* **OpenAI** (`text-embedding-3-small`, 1536d)
-  Used by default when an API key is available.
-
-* **Local ONNX** (`bge-m3`, 1024d)
-  Fully local after the first download.
-
-Embedding configuration is locked per space after the initial index build.
+1. From the Welcome screen, open a folder of notes or clone a repo by URL
+2. Let StashBase build the local index (progress shown in the status bar)
+3. Open the in-app Claude Code or Codex terminal from the sidebar
+4. Start generating or retrieving knowledge
 
 ---
 
-## Spaces
+## MCP integration
 
-Each selected folder becomes a "space".
+Connect StashBase to Claude Desktop or other MCP-compatible AI clients.
 
-Every space gets its own `.stashbase/mfs/` sidecar containing a local semantic index powered by [mfs](https://github.com/zilliztech/mfs).
+Open Claude Desktop config:
 
-Files are scanned and indexed automatically on boot. External edits — from editors, git checkouts, sync tools, or coding agents — are picked up through filesystem watching.
+```bash
+open ~/Library/Application\ Support/Claude/claude_desktop_config.json
+```
+
+Add:
+
+```json
+{
+  "mcpServers": {
+    "StashBase": {
+      "command": "npx",
+      "args": ["tsx", "/absolute/path/to/StashBase/mcp/server.ts"]
+    }
+  }
+}
+```
+
+Restart Claude Desktop.
+
+Once connected, Claude can retrieve notes, papers, transcripts, and saved analysis directly from your indexed library.
+
+The same retrieval layer can also be shared with ChatGPT, Codex, or custom MCP workflows.
 
 ---
 
@@ -202,7 +243,21 @@ Early alpha.
 
 macOS receives the most testing today. Windows and Linux generally work but are less exercised.
 
-On-disk schemas and APIs may still change between commits.
+### Reasonably stable
+
+* Note CRUD
+* File watching
+* Space switching
+* Hybrid retrieval
+* Claude Code / Codex terminal integration
+
+### Still evolving
+
+* MCP tool signatures
+* `.stashbase/mfs/` sidecar schema
+* Skill mirroring conventions
+
+Pin a commit if you're embedding StashBase into a larger workflow.
 
 ---
 
@@ -216,6 +271,13 @@ Small focused PRs are preferred. Open an issue before larger changes so scope an
 
 ## About
 
-StashBase is a personal side project by [Li Liu](https://www.linkedin.com/in/cmuliliu/), built alongside work on [Milvus](https://github.com/milvus-io/milvus) at [Zilliz](https://zilliz.com).
+Built by Li Liu.
 
-Not a Zilliz product.
+I work on [Milvus](https://github.com/milvus-io/milvus) at [Zilliz](https://zilliz.com), where I've spent the last few years building vector retrieval infrastructure for AI systems.
+
+Coding with AI already feels fluid inside IDEs. Personal knowledge tools still largely don't.
+
+StashBase is my attempt at the missing layer: a local-first workspace where papers, notes, transcripts, and saved analysis remain continuously retrievable across AI workflows.
+
+This is a personal side project built in the open. PRs, issues, and experiments are welcome.
+
