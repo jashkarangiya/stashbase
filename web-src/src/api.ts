@@ -55,6 +55,8 @@ export interface IndexStatus {
   orphanedCount: number;
   orphaned: string[];
   upToDate: boolean;
+  /** False while the server is still loading the index cache for a space. */
+  indexReady?: boolean;
   /** Space-relative paths of PDFs the server is currently converting
    *  into a readable note + bundle. Empty when no conversions are in
    *  flight. Used by the sidebar to render a transient indicator. */

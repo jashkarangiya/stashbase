@@ -182,6 +182,19 @@ export interface State {
    *  parent the user actually selected (mirrors new-note inline
    *  rename placement). */
   newFolderInputOpen: boolean;
+
+  /** Chrome-style in-document keyword find. Global (not per-tab) to
+   *  mirror the browser: opening Cmd+F overlays one bar over whichever
+   *  view (editor / md preview / html preview iframe) is active, and
+   *  switching tabs carries the bar over. `current` is 1-indexed for
+   *  display; 0 means no match selected (empty query or nothing matched). */
+  find: {
+    open: boolean;
+    query: string;
+    wholeWord: boolean;
+    current: number;
+    total: number;
+  };
 }
 
 export const initialState: State = {
@@ -216,6 +229,7 @@ export const initialState: State = {
   cascadePrompt: null,
   modal: null,
   newFolderInputOpen: false,
+  find: { open: false, query: '', wholeWord: false, current: 0, total: 0 },
 };
 
 export type Action =
@@ -290,7 +304,10 @@ export type Action =
    *  Triggered by double-click on a sidebar file, double-click on the
    *  tab title, or entering edit mode on the tab. */
   | { type: 'PROMOTE_TAB'; id: string }
-  | { type: 'NEW_FOLDER_INPUT'; open: boolean };
+  | { type: 'NEW_FOLDER_INPUT'; open: boolean }
+  | { type: 'FIND_OPEN' }
+  | { type: 'FIND_CLOSE' }
+  | { type: 'FIND_SET'; patch: Partial<State['find']> };
 
 /** Build a fresh empty tab. The id is `crypto.randomUUID` because every
  *  browser shipping in 2024+ (and Electron's bundled Chromium) has it;
@@ -568,5 +585,16 @@ export function reducer(s: State, a: Action): State {
       return { ...s, cascadePrompt: a.prompt };
     case 'NEW_FOLDER_INPUT':
       return { ...s, newFolderInputOpen: a.open };
+    case 'FIND_OPEN':
+      // Re-opening is a no-op on state but lets the bar's effect re-run
+      // (e.g. user pressed Cmd+F again to refocus the input).
+      return s.find.open ? s : { ...s, find: { ...s.find, open: true } };
+    case 'FIND_CLOSE':
+      // Keep `query` / `wholeWord` so reopening pre-fills the last term
+      // (Chrome behavior). `current`/`total` zero out — they're stale
+      // the moment the active controller drops its decorations.
+      return { ...s, find: { ...s.find, open: false, current: 0, total: 0 } };
+    case 'FIND_SET':
+      return { ...s, find: { ...s.find, ...a.patch } };
   }
 }

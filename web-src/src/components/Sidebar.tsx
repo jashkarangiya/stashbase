@@ -73,6 +73,7 @@ export function Sidebar() {
           ><ChevronDownIcon /></span>
           <span
             className="folder-label"
+            title={state.space || 'notes'}
             onClick={(e) => {
               e.stopPropagation();
               dispatch({ type: 'ACTIVE_FOLDER', path: '' });

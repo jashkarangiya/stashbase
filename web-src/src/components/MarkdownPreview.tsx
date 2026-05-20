@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { assetBaseUrl } from '../api';
 import { renderMarkdown } from '../markdown';
 import { useApp } from '../store/AppContext';
+import { makeIframeFindController } from './findIframe';
 
 /**
  * Read-only MD preview. Renders the markdown to a self-contained HTML
@@ -13,10 +14,14 @@ import { useApp } from '../store/AppContext';
  * split-edit iframe — outline clicks pick whichever exists.
  */
 export function MarkdownPreview({ name, content }: { name: string; content: string }) {
-  const { actions, activeTab } = useApp();
+  const { state, actions, activeTab } = useApp();
   const pendingAnchor = activeTab?.pendingAnchor ?? null;
   const pendingScrollY = activeTab?.pendingScrollY ?? null;
   const frameRef = useRef<HTMLIFrameElement | null>(null);
+  // Snapshot find-bar state for the mount-time re-apply path. Read via
+  // ref so the registration effect doesn't churn on every find tick.
+  const findAtMount = useRef(state.find);
+  findAtMount.current = state.find;
   // Tracks the html the iframe has finished parsing. We only apply
   // pending scroll when this matches the latest `html` — otherwise
   // we'd read elements from the stale doc and either scroll to the
@@ -60,6 +65,20 @@ export function MarkdownPreview({ name, content }: { name: string; content: stri
       if (anchor) handleAnchorClick(anchor, e);
     }
 
+    // Cmd+F in the iframe should pop OUR find bar instead of falling
+    // through to the browser's default. The parent reaches in directly
+    // because sandbox=allow-same-origin keeps the realm accessible.
+    function findKeyHandler(e: Event) {
+      const ke = e as KeyboardEvent;
+      if (!(ke.metaKey || ke.ctrlKey)) return;
+      const k = ke.key.toLowerCase();
+      if (k === 'f') { ke.preventDefault(); actions.openFind(); }
+      else if (k === 'g') {
+        ke.preventDefault();
+        if (ke.shiftKey) actions.findPrev(); else actions.findNext();
+      }
+    }
+
     function attach() {
       const doc = iframe?.contentDocument;
       if (!doc || installedDoc === doc) return;
@@ -68,8 +87,17 @@ export function MarkdownPreview({ name, content }: { name: string; content: stri
         img.dataset.stashbasePreviewable = 'true';
       }
       doc.addEventListener('click', clickHandler);
+      doc.addEventListener('keydown', findKeyHandler);
       loadedHtmlRef.current = html;
       applyPendingScroll(doc);
+      // If the find bar is open across the content reload, re-paint
+      // the highlights against the freshly parsed body.
+      const snap = findAtMount.current;
+      if (snap.open && snap.query) {
+        // Schedule async so the controller (registered in a sibling
+        // effect) is in place before we re-apply.
+        queueMicrotask(() => actions.setFindQuery(snap.query));
+      }
     }
 
     iframe.addEventListener('load', attach);
@@ -77,9 +105,22 @@ export function MarkdownPreview({ name, content }: { name: string; content: stri
     return () => {
       iframe.removeEventListener('load', attach);
       installedDoc?.removeEventListener('click', clickHandler);
+      installedDoc?.removeEventListener('keydown', findKeyHandler);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [html]);
+
+  // Register the find controller once per mount. Reads the live
+  // contentDocument on each call so it survives srcDoc reloads
+  // without re-registering.
+  useEffect(() => {
+    const ctl = makeIframeFindController(
+      () => frameRef.current?.contentDocument ?? null,
+      () => frameRef.current?.contentWindow ?? null,
+    );
+    actions.registerFindController(ctl);
+    return () => { actions.registerFindController(null); };
+  }, [actions]);
 
   // Same-file anchor jump (no iframe reload): the loaded ref still
   // matches `html`, so the gate below lets us scroll synchronously.

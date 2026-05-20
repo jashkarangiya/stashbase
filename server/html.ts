@@ -98,16 +98,167 @@ function addScrollBootstrap(html: string): string {
   // The iframe viewer uses `sandbox="allow-scripts"` without
   // `allow-same-origin`. That lets dynamic HTML render while preventing
   // the document from escaping its sandbox, but it also means the parent
-  // cannot set `location.hash` directly. This tiny trusted listener gives
-  // the sidebar outline a safe scroll target. External links are also
-  // forwarded to the parent: otherwise a YouTube/GitHub/etc link
-  // navigates the sandboxed iframe and often renders as a blank page.
+  // cannot set `location.hash` directly or reach the DOM for find-in-page.
+  // This tiny trusted listener gives the sidebar outline a safe scroll
+  // target, runs the in-iframe half of the Cmd+F find bar (parent posts
+  // queries, iframe paints highlights via CSS Custom Highlights), and
+  // forwards external link clicks so a YouTube/GitHub/etc link doesn't
+  // navigate the sandboxed iframe to a blank page.
   const script = `<script>
-window.addEventListener('message', function(e) {
-  if (!e || !e.data || e.data.type !== 'stashbase-scroll') return;
-  var el = document.getElementById(e.data.id);
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-});
+(function() {
+  var HL_ALL = 'stash-find';
+  var HL_CUR = 'stash-find-current';
+  var STYLE_ID = 'stash-find-style';
+  var matches = [];
+  var cursor = -1;
+  var query = '';
+  var wholeWord = false;
+
+  function ensureStyle() {
+    if (document.getElementById(STYLE_ID)) return;
+    var s = document.createElement('style');
+    s.id = STYLE_ID;
+    s.textContent = '::highlight(' + HL_ALL + ') { background: #ffe082; color: inherit; }' +
+                    '::highlight(' + HL_CUR + ') { background: #ff9800; color: #fff; }';
+    document.head.appendChild(s);
+  }
+  function buildRegex(q, ww) {
+    if (!q) return null;
+    var escaped = q.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
+    var body = ww ? '(?<![\\\\p{L}\\\\p{N}_])' + escaped + '(?![\\\\p{L}\\\\p{N}_])' : escaped;
+    try { return new RegExp(body, 'giu'); } catch (_) { return null; }
+  }
+  function rebuild() {
+    matches = [];
+    var re = buildRegex(query, wholeWord);
+    if (!re || !document.body) return;
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: function(n) {
+        var t = n.parentElement && n.parentElement.tagName;
+        if (t === 'SCRIPT' || t === 'STYLE' || t === 'NOSCRIPT') return NodeFilter.FILTER_REJECT;
+        if (!n.nodeValue) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    for (var n = walker.nextNode(); n; n = walker.nextNode()) {
+      var text = n.nodeValue || '';
+      re.lastIndex = 0;
+      var m;
+      while ((m = re.exec(text))) {
+        var r = document.createRange();
+        try {
+          r.setStart(n, m.index);
+          r.setEnd(n, m.index + m[0].length);
+          matches.push(r);
+        } catch (_) {}
+        if (m.index === re.lastIndex) re.lastIndex++;
+      }
+    }
+  }
+  function paint() {
+    if (!window.CSS || !CSS.highlights || typeof Highlight === 'undefined') return;
+    if (matches.length === 0) {
+      CSS.highlights.delete(HL_ALL);
+      CSS.highlights.delete(HL_CUR);
+      return;
+    }
+    var current = cursor >= 0 ? matches[cursor] : null;
+    var others = current ? matches.filter(function(r) { return r !== current; }) : matches;
+    if (others.length) CSS.highlights.set(HL_ALL, new Highlight(...others));
+    else CSS.highlights.delete(HL_ALL);
+    if (current) CSS.highlights.set(HL_CUR, new Highlight(current));
+    else CSS.highlights.delete(HL_CUR);
+  }
+  function scrollToCurrent() {
+    if (cursor < 0 || !matches[cursor]) return;
+    var probe = document.createElement('span');
+    probe.setAttribute('data-stashbase-find-probe', '1');
+    try {
+      matches[cursor].insertNode(probe);
+      probe.scrollIntoView({ behavior: 'auto', block: 'center' });
+    } catch (_) {}
+    var parent = probe.parentNode;
+    probe.remove();
+    if (parent) {
+      parent.normalize();
+      // normalize() invalidates the cached ranges — re-walk so the next
+      // step lands on the right node.
+      rebuild();
+      if (cursor >= matches.length) cursor = matches.length - 1;
+    }
+  }
+  function setQuery(q, ww) {
+    query = q || '';
+    wholeWord = !!ww;
+    ensureStyle();
+    rebuild();
+    cursor = matches.length > 0 ? 0 : -1;
+    paint();
+    if (cursor >= 0) scrollToCurrent();
+    paint();
+  }
+  function step(dir) {
+    if (matches.length === 0) return;
+    cursor = (cursor + dir + matches.length) % matches.length;
+    paint();
+    scrollToCurrent();
+    paint();
+  }
+  function clearFind() {
+    matches = []; cursor = -1; query = '';
+    if (window.CSS && CSS.highlights) {
+      CSS.highlights.delete(HL_ALL);
+      CSS.highlights.delete(HL_CUR);
+    }
+  }
+  function reply(reqId) {
+    try {
+      window.parent.postMessage({
+        type: 'stashbase-find-result',
+        reqId: reqId,
+        current: cursor >= 0 ? cursor + 1 : 0,
+        total: matches.length
+      }, '*');
+    } catch (_) {}
+  }
+
+  window.addEventListener('message', function(e) {
+    if (!e || !e.data) return;
+    var d = e.data;
+    if (d.type === 'stashbase-scroll') {
+      var el = document.getElementById(d.id);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    if (d.type === 'stashbase-find') {
+      if (d.op === 'set') setQuery(d.query || '', d.wholeWord);
+      else if (d.op === 'next') step(1);
+      else if (d.op === 'prev') step(-1);
+      else if (d.op === 'close') clearFind();
+      reply(d.reqId);
+      return;
+    }
+  });
+
+  // Cmd+F / Cmd+G inside the iframe → tell the parent so the find bar
+  // opens (or steps) even when focus lives in the sandboxed document.
+  document.addEventListener('keydown', function(e) {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    var k = (e.key || '').toLowerCase();
+    if (k === 'f') {
+      e.preventDefault();
+      try { window.parent.postMessage({ type: 'stashbase-open-find' }, '*'); } catch (_) {}
+    } else if (k === 'g') {
+      e.preventDefault();
+      try {
+        window.parent.postMessage({
+          type: 'stashbase-find-step',
+          dir: e.shiftKey ? 'prev' : 'next'
+        }, '*');
+      } catch (_) {}
+    }
+  });
+})();
 document.addEventListener('click', function(e) {
   var node = e.target;
   while (node && node.tagName !== 'A' && node.tagName !== 'IMG') node = node.parentElement;

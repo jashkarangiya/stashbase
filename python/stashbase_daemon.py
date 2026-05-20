@@ -625,6 +625,11 @@ def _walk_disk(space_root: Path) -> dict:
     for rel, f in raw:
         if _under_bundle(rel, note_stems):
             continue
+        try:
+            if f.path.stat().st_size == 0:
+                continue
+        except OSError:
+            continue
         on_disk[rel] = f
     return on_disk
 

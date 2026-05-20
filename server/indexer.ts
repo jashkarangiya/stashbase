@@ -132,6 +132,8 @@ export interface IndexStatus {
   orphaned: string[];
   /** True iff pending = 0 and orphaned = 0. */
   upToDate: boolean;
+  /** False while the indexer is still loading its indexed-file cache. */
+  indexReady?: boolean;
   /** PDFs currently being converted to a readable note + bundle.
    *  Stashed onto the status response (rather than its own route)
    *  so the sidebar polls one endpoint to drive its busy-state UI. */

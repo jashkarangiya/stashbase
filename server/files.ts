@@ -285,6 +285,8 @@ export interface FileEntry {
   /** Space-relative POSIX path (e.g. `topic/note.md`). */
   name: string;
   format: FileFormat;
+  /** Raw file size on disk. Zero-byte notes are intentionally not indexed. */
+  size: number;
   heading: string;
   snippet: string;
   imported_at: string;
@@ -346,7 +348,7 @@ export function listFiles(): FileEntry[] {
     seen.add(full);
 
     const cached = previewCache.get(full);
-    let entry: Omit<FileEntry, 'name' | 'format'>;
+    let entry: Pick<FileEntry, 'heading' | 'snippet' | 'imported_at'>;
     if (cached && cached.mtimeMs === st.mtimeMs) {
       entry = { heading: cached.heading, snippet: cached.snippet, imported_at: cached.imported_at };
     } else {
@@ -357,7 +359,7 @@ export function listFiles(): FileEntry[] {
       previewCache.set(full, { mtimeMs: st.mtimeMs, heading, snippet, imported_at });
       entry = { heading, snippet, imported_at };
     }
-    out.push({ name: rel, format, ...entry });
+    out.push({ name: rel, format, size: st.size, ...entry });
   });
   // Evict cache entries for files that no longer exist on disk —
   // otherwise renamed/deleted files accumulate forever.

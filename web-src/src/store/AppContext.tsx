@@ -58,6 +58,22 @@ export interface EditorHandle {
   focus: () => void;
 }
 
+/** Per-view find driver. Whichever view is currently rendered (CM
+ *  editor, MD preview iframe, HTML preview iframe) registers one of
+ *  these on mount so the global FindBar can drive search without
+ *  knowing which surface is underneath. All methods may return a
+ *  Promise — the HTML preview path is async because it round-trips
+ *  through postMessage to the sandboxed iframe. */
+export interface MatchInfo { current: number; total: number; }
+export interface FindController {
+  setQuery: (query: string, opts: { wholeWord: boolean }) => MatchInfo | Promise<MatchInfo>;
+  next: () => MatchInfo | Promise<MatchInfo>;
+  prev: () => MatchInfo | Promise<MatchInfo>;
+  /** Tear down highlights / decorations. Called when the bar closes
+   *  or when this controller is replaced by a tab/mode switch. */
+  close: () => void;
+}
+
 export interface AppActions {
   bootstrap: () => Promise<void>;
   openSpace: (path: string) => Promise<void>;
@@ -131,6 +147,20 @@ export interface AppActions {
    *  first if hidden; flashes a brief glow so the user can tell where
    *  focus landed. Used by the empty-tab landing and the `⌘O` hotkey. */
   focusSearch: () => void;
+
+  /** A view registers its find driver on mount; `null` on unmount.
+   *  Switching tabs / toggling edit mode replaces it. */
+  registerFindController: (c: FindController | null) => void;
+  /** Open the in-document find bar (Cmd+F). No-op if already open;
+   *  the bar's own effect re-focuses the input on re-open. */
+  openFind: () => void;
+  /** Close the find bar + tear down whatever the active controller
+   *  highlighted. Also called implicitly on space switch / tab close. */
+  closeFind: () => void;
+  setFindQuery: (q: string) => void;
+  toggleFindWholeWord: () => void;
+  findNext: () => void;
+  findPrev: () => void;
 }
 
 const AppContext = createContext<{
@@ -154,6 +184,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Sidebar's SearchBox registers its input here so `focusSearch` can
   // reach it without a global DOM query. Mirrors `editorRef`.
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  // Active find driver — whichever view is currently visible (CM
+  // editor / MD preview / HTML preview iframe) registers itself here
+  // on mount, deregisters on unmount.
+  const findCtlRef = useRef<FindController | null>(null);
   // Race protection for `runSearch`: every call bumps this counter and
   // remembers its own value; an older request's response is dropped
   // when it returns after a newer one has been issued.
@@ -306,7 +340,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let nextDelay = POLL_IDLE_MS;
     try {
       const s = await api.indexStatus();
-      const newPending = new Set(s.pending ?? []);
+      const indexReady = s.indexReady !== false;
+      const newPending = indexReady ? new Set(s.pending ?? []) : new Set<string>();
       const newConv = s.pendingConversions ?? [];
       const prev = stateRef.current;
       // Trigger a `/api/files` refresh whenever the indexer's
@@ -345,7 +380,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Keep polling fast while a conversion is in flight, even if
       // the index itself is settled — the user is waiting on a file
       // to appear.
-      const busy = !s.upToDate || newConv.length > 0;
+      const busy = !indexReady || !s.upToDate || newConv.length > 0;
       nextDelay = busy ? POLL_PENDING_MS : POLL_IDLE_MS;
     } catch (err) {
       if (err instanceof ApiError && err.status === 412) {
@@ -587,6 +622,63 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  // Async wrapper: every controller may return either a sync MatchInfo
+  // or a Promise (HTML preview is postMessage round-trip). Centralised
+  // so the FindBar can call sync-looking actions.
+  async function applyMatchInfo(p: MatchInfo | Promise<MatchInfo>): Promise<void> {
+    const info = await Promise.resolve(p);
+    dispatch({ type: 'FIND_SET', patch: { current: info.current, total: info.total } });
+  }
+
+  const registerFindController = useCallback((c: FindController | null) => {
+    // Replacing the controller (tab/mode switch while the bar is open):
+    // tear down the outgoing one so its highlights don't outlive its
+    // owning view. The new one will pick up the current query via its
+    // own mount-time effect.
+    const prev = findCtlRef.current;
+    if (prev && prev !== c) prev.close();
+    findCtlRef.current = c;
+  }, []);
+
+  const openFind = useCallback(() => {
+    dispatch({ type: 'FIND_OPEN' });
+  }, []);
+
+  const closeFind = useCallback(() => {
+    findCtlRef.current?.close();
+    dispatch({ type: 'FIND_CLOSE' });
+  }, []);
+
+  const setFindQuery = useCallback((q: string) => {
+    dispatch({ type: 'FIND_SET', patch: { query: q } });
+    const ctl = findCtlRef.current;
+    if (!ctl) {
+      dispatch({ type: 'FIND_SET', patch: { current: 0, total: 0 } });
+      return;
+    }
+    void applyMatchInfo(ctl.setQuery(q, { wholeWord: stateRef.current.find.wholeWord }));
+  }, []);
+
+  const toggleFindWholeWord = useCallback(() => {
+    const next = !stateRef.current.find.wholeWord;
+    dispatch({ type: 'FIND_SET', patch: { wholeWord: next } });
+    const ctl = findCtlRef.current;
+    if (!ctl) return;
+    void applyMatchInfo(ctl.setQuery(stateRef.current.find.query, { wholeWord: next }));
+  }, []);
+
+  const findNext = useCallback(() => {
+    const ctl = findCtlRef.current;
+    if (!ctl) return;
+    void applyMatchInfo(ctl.next());
+  }, []);
+
+  const findPrev = useCallback(() => {
+    const ctl = findCtlRef.current;
+    if (!ctl) return;
+    void applyMatchInfo(ctl.prev());
+  }, []);
+
   const activateTab = useCallback(async (id: string) => {
     const s = stateRef.current;
     if (s.activeTabId === id) return;
@@ -728,7 +820,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const renameFile = useCallback(async (oldName: string, newBaseName: string) => {
     const extMatch = oldName.match(/\.(md|markdown|html|htm)$/i);
     const ext = extMatch ? extMatch[0] : '';
-    const newName = newBaseName + ext;
+    const lastSlash = oldName.lastIndexOf('/');
+    const dir = lastSlash >= 0 ? oldName.slice(0, lastSlash + 1) : '';
+    const newName = dir + newBaseName + ext;
     if (newName === oldName) {
       dispatch({ type: 'RENAMING', renaming: null });
       return;
@@ -913,6 +1007,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     scheduleSave, flushSave,
     setOutlineHeadings, registerEditor,
     registerSearchInput, focusSearch,
+    registerFindController, openFind, closeFind, setFindQuery,
+    toggleFindWholeWord, findNext, findPrev,
   }), [
     bootstrap, openSpace, goHome,
     loadFiles, refreshIndexState, runSync, runSearch, setFolderOrder,
@@ -926,6 +1022,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     scheduleSave, flushSave,
     setOutlineHeadings, registerEditor,
     registerSearchInput, focusSearch,
+    registerFindController, openFind, closeFind, setFindQuery,
+    toggleFindWholeWord, findNext, findPrev,
   ]);
 
   // Bootstrap + start polling on first mount.

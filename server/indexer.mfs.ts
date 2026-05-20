@@ -200,6 +200,11 @@ export class MfsIndexer implements Indexer {
     // the re-embed takes, so the UI shows the row at full opacity even
     // though search results for it are about to be stale.
     this.indexedNames.delete(fileName);
+    if (content.length === 0) {
+      await getDaemon().call('delete', { path: fileName });
+      log.info(`upsert ${fileName}: empty file, skipped embedding`);
+      return;
+    }
     const t0 = Date.now();
     const res = await getDaemon().call<{ chunks: number; embed_ms: number; total_ms: number }>(
       'upsert', { path: fileName, content: text, ext, file_hash: fileHash },
@@ -324,7 +329,7 @@ export class MfsIndexer implements Indexer {
     // `indexedReady` is false and we report everything pending — that
     // window is < 100ms in practice and at worst flashes a brief
     // "indexing" state, never a stale "all indexed".
-    const filesOnDisk = listFiles();
+    const filesOnDisk = listFiles().filter((f) => f.size > 0);
     const onDiskNames = new Set(filesOnDisk.map((f) => f.name));
     const indexedNow = this.indexedReady ? this.indexedNames : new Set<string>();
 
@@ -348,6 +353,7 @@ export class MfsIndexer implements Indexer {
       orphanedCount: orphaned.length,
       orphaned,
       upToDate: pending.length === 0 && orphaned.length === 0,
+      indexReady: this.indexedReady,
     };
   }
 
@@ -374,12 +380,16 @@ export class MfsIndexer implements Indexer {
     // user didn't change space. Re-arms `boundReady` so data ops
     // queue behind the upcoming set_space.
     this.invalidateBinding();
-    await daemon.call('set_embedder', {
+    const res = await daemon.call<{ provider: string; model: string; dim: number }>('set_embedder', {
       provider: cfg.provider,
       ...(cfg.apiKey ? { api_key: cfg.apiKey } : {}),
       ...(cfg.model ? { model: cfg.model } : {}),
       ...(cfg.dimension ? { dimension: cfg.dimension } : {}),
     });
+    // Daemon's `ready` event always reports the startup default (onnx
+    // bge-m3); log the post-swap state so logs reflect what's actually
+    // being used for embeds.
+    log.info(`embedder set: provider=${res.provider} model=${res.model} dim=${res.dim}`);
     this.embedderKey = key;
     this.embedderGeneration = daemon.currentGeneration();
   }
@@ -432,12 +442,13 @@ export class MfsIndexer implements Indexer {
     if (this.embedderConfig === null) return;
     const daemon = getDaemon();
     if (daemon.currentGeneration() === this.embedderGeneration) return;
-    await daemon.call('set_embedder', {
+    const res = await daemon.call<{ provider: string; model: string; dim: number }>('set_embedder', {
       provider: this.embedderConfig.provider,
       ...(this.embedderConfig.apiKey ? { api_key: this.embedderConfig.apiKey } : {}),
       ...(this.embedderConfig.model ? { model: this.embedderConfig.model } : {}),
       ...(this.embedderConfig.dimension ? { dimension: this.embedderConfig.dimension } : {}),
     });
+    log.info(`embedder re-applied after daemon respawn: provider=${res.provider} model=${res.model} dim=${res.dim}`);
     this.embedderKey = embedderCacheKey(this.embedderConfig);
     this.embedderGeneration = daemon.currentGeneration();
   }

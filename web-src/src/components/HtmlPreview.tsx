@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { assetUrl } from '../api';
-import { useApp } from '../store/AppContext';
+import { useApp, type MatchInfo } from '../store/AppContext';
 
 /**
  * Read-only HTML preview. Loads via `/asset/*` so the iframe's base
@@ -21,7 +21,7 @@ import { useApp } from '../store/AppContext';
  * computation below.
  */
 export function HtmlPreview({ name }: { name: string }) {
-  const { actions, activeTab } = useApp();
+  const { state, actions, activeTab } = useApp();
   const pendingAnchor = activeTab?.pendingAnchor ?? null;
   const content = activeTab?.file?.content ?? '';
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -30,6 +30,10 @@ export function HtmlPreview({ name }: { name: string }) {
   // the message lands on the previous file's content and the pending
   // anchor gets consumed before the new content arrives.
   const loadedNameRef = useRef<string>('');
+  // Snapshot find-bar state so the iframe re-apply path doesn't churn
+  // the find effect on every find tick.
+  const findAtMount = useRef(state.find);
+  findAtMount.current = state.find;
 
   // Cheap content fingerprint used to bust the iframe cache when the
   // file changes on disk (e.g. Claude Code wrote to it via the
@@ -62,10 +66,77 @@ export function HtmlPreview({ name }: { name: string }) {
   function onLoad() {
     loadedNameRef.current = name;
     postScroll();
+    // Re-apply the current query if the bar is open across reload.
+    const snap = findAtMount.current;
+    if (snap.open && snap.query) {
+      queueMicrotask(() => actions.setFindQuery(snap.query));
+    }
   }
 
   // Same-file anchor jumps fire this; cross-file jumps wait for onLoad.
   useEffect(() => { postScroll(); /* eslint-disable-next-line */ }, [pendingAnchor, name]);
+
+  // Register a postMessage-based find controller. The iframe runs the
+  // walk-and-highlight algorithm itself (sandbox=allow-scripts blocks
+  // same-origin DOM access) and replies with the count via reqId.
+  useEffect(() => {
+    let seq = 0;
+    const pending = new Map<number, (info: MatchInfo) => void>();
+    const TIMEOUT_MS = 2000;
+
+    function send(op: 'set' | 'next' | 'prev' | 'close', extra?: Record<string, unknown>): Promise<MatchInfo> {
+      const reqId = ++seq;
+      const win = frameRef.current?.contentWindow;
+      if (!win) return Promise.resolve({ current: 0, total: 0 });
+      return new Promise<MatchInfo>((resolve) => {
+        pending.set(reqId, resolve);
+        try {
+          win.postMessage({ type: 'stashbase-find', op, reqId, ...extra }, '*');
+        } catch {
+          pending.delete(reqId);
+          resolve({ current: 0, total: 0 });
+          return;
+        }
+        // Iframe may have unloaded / errored before responding —
+        // resolve to empty after a short timeout so the bar's spinner
+        // (if any) doesn't hang.
+        setTimeout(() => {
+          const r = pending.get(reqId);
+          if (r) { pending.delete(reqId); r({ current: 0, total: 0 }); }
+        }, TIMEOUT_MS);
+      });
+    }
+
+    function onMessage(e: MessageEvent) {
+      const d = e.data;
+      if (!d || typeof d !== 'object') return;
+      if (d.type === 'stashbase-find-result' && typeof d.reqId === 'number') {
+        const r = pending.get(d.reqId);
+        if (r) {
+          pending.delete(d.reqId);
+          r({ current: d.current ?? 0, total: d.total ?? 0 });
+        }
+      } else if (d.type === 'stashbase-open-find') {
+        actions.openFind();
+      } else if (d.type === 'stashbase-find-step') {
+        // Bootstrap inside the iframe forwards Cmd+G / Shift+Cmd+G.
+        if (d.dir === 'prev') actions.findPrev(); else actions.findNext();
+      }
+    }
+    window.addEventListener('message', onMessage);
+
+    actions.registerFindController({
+      setQuery: (q, opts) => send('set', { query: q, wholeWord: opts.wholeWord }),
+      next: () => send('next'),
+      prev: () => send('prev'),
+      close: () => { void send('close'); },
+    });
+
+    return () => {
+      window.removeEventListener('message', onMessage);
+      actions.registerFindController(null);
+    };
+  }, [actions]);
 
   return (
     <div className="viewer-shell">

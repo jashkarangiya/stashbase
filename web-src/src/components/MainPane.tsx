@@ -1,6 +1,7 @@
 import { ArrowLeftIcon, ArrowRightIcon, EditIcon, PreviewIcon } from '../icons';
 import { useApp } from '../store/AppContext';
 import { EmptyTabLanding } from './EmptyTabLanding';
+import { FindBar } from './FindBar';
 import { HtmlPreview } from './HtmlPreview';
 import { MarkdownPreview } from './MarkdownPreview';
 import { PathBreadcrumb } from './PathBreadcrumb';
@@ -82,6 +83,7 @@ export function MainPane() {
           <span className="seg current">Untitled</span>
         </div>
       )}
+      <FindBar />
       {cur && (
         <div className={'main-floating-actions' + (editMode ? ' editing' : '')}>
           {editMode && saveStatus.text && (
