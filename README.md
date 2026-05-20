@@ -26,6 +26,29 @@
 
 ---
 
+## Install
+
+```bash
+brew install --cask liliu-z/stashbase/stashbase
+```
+
+The cask installs from the latest [GitHub Release](https://github.com/liliu-z/stashbase/releases/latest). It automatically clears the Gatekeeper quarantine and applies an ad-hoc signature so the unsigned alpha build launches without intervention.
+
+Direct download if you don't have brew: [latest macOS build](https://github.com/liliu-z/stashbase/releases/latest) — macOS arm64 (Apple Silicon). Unsigned; the DMG includes a `Fix.sh` script to handle Gatekeeper.
+
+For Intel Mac, Windows, or Linux, build from source (see below).
+
+Once the app is running:
+
+1. From the Welcome screen, open a folder of notes or clone a repo by URL
+2. Let StashBase build the local index (progress shown in the status bar)
+3. Open the in-app Claude Code or Codex terminal from the sidebar
+4. Start generating or retrieving knowledge
+
+**Starter content:** clone [`stashbase-cs183b`](https://github.com/0-bingwu-0/stashbase-cs183b) from the Welcome screen's "Clone repo" option — example notes built from Y Combinator's *How to Start a Startup* (CS183B) lectures.
+
+---
+
 ## The accumulation problem
 
 Most AI tools treat knowledge as temporary context:
@@ -178,7 +201,9 @@ But for finished, shareable, AI-generated knowledge pages, HTML becomes much mor
 
 ---
 
-## Quick start
+## Build from source
+
+For developers, contributors, and platforms without a prebuilt binary (Intel Mac, Windows, Linux). Most users should use the [installer](#install) above.
 
 ```bash
 # Setup
@@ -197,13 +222,6 @@ pnpm dist:mac
 pnpm dist:win
 ```
 
-Once the app is running:
-
-1. From the Welcome screen, open a folder of notes or clone a repo by URL
-2. Let StashBase build the local index (progress shown in the status bar)
-3. Open the in-app Claude Code or Codex terminal from the sidebar
-4. Start generating or retrieving knowledge
-
 ---
 
 ## MCP integration
@@ -221,7 +239,7 @@ Add:
 ```json
 {
   "mcpServers": {
-    "StashBase": {
+    "stashbase": {
       "command": "npx",
       "args": ["tsx", "/absolute/path/to/StashBase/mcp/server.ts"]
     }

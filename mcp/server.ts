@@ -25,7 +25,7 @@
  * Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
  *   {
  *     "mcpServers": {
- *       "StashBase": {
+ *       "stashbase": {
  *         "command": "npx",
  *         "args": ["tsx", "/absolute/path/to/StashBase/mcp/server.ts"]
  *       }
@@ -205,7 +205,7 @@ const DEFAULT_TOP_K = 8;
 const MAX_TOP_K = 25;
 
 const server = new Server(
-  { name: 'StashBase', version: '0.1.0' },
+  { name: 'stashbase', version: '0.1.0' },
   { capabilities: { tools: {} } },
 );
 
