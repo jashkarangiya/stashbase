@@ -17,9 +17,9 @@
 
 ## 🚀 Demo
 
-![Demo](.github/assets/demo.gif)
+![Demo](.github/assets/demo_0521.gif)
 
-> Import the CS183B starter — 20 YC startup lectures, pre-indexed. Ask `@stashbase` from Claude Desktop to pull across lectures, then use the in-app Claude Code terminal to turn the answers into HTML notes — indexed automatically.
+> Import the CS183B starter — 20 YC startup lectures, pre-indexed. Surface ideas in Claude Desktop via `@stashbase`, then use the in-app Claude Code terminal to organize what resonates into HTML notes.
 
 ---
 
