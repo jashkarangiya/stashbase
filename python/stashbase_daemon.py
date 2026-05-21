@@ -359,16 +359,26 @@ class StashbaseStore:
 
     def store_for_path(self, path: str):
         """Look up (embedder, store) for ``path`` (kb-root-relative).
-        First path segment is the space name."""
+        The space name is the **longest** binding key that's a prefix
+        of ``path`` — spaces can be nested (e.g. a user clones the
+        cs183b starter into an outer ``Business/`` folder, opens
+        ``Business/stashbase-cs183b`` as a space, and the daemon needs
+        to route ``Business/stashbase-cs183b/transcripts/...`` to that
+        space, not to a non-existent ``Business``)."""
         if "/" not in path:
             # Top-level file directly under kbRoot — not allowed; every
             # file must live inside a space.
             raise RuntimeError(f"path '{path}' is not inside a space (must be '<space>/...')")
-        space = path.split("/", 1)[0]
-        pk = self._bindings.get(space)
-        if pk is None:
-            raise RuntimeError(f"space '{space}' is not bound; call bind_space first")
-        return self._stores[pk]
+        match: str | None = None
+        for sp in self._bindings.keys():
+            if path == sp or path.startswith(sp + "/"):
+                if match is None or len(sp) > len(match):
+                    match = sp
+        if match is None:
+            raise RuntimeError(
+                f"no bound space matches path '{path}'; call bind_space first",
+            )
+        return self._stores[self._bindings[match]]
 
     def all_stores(self) -> list[tuple[str, Any, Any]]:
         """Returns [(provider_key, embedder, store), ...] for every
