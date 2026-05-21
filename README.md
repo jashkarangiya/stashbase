@@ -7,10 +7,7 @@
 [![Powered by mfs](https://img.shields.io/badge/powered%20by-mfs-0891b2.svg)](https://github.com/zilliztech/mfs)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-**StashBase** is a local knowledge base supporting HTML and Markdown, with deep integration of Claude/Codex, and retrievable via MCP.
-
 🎨 **HTML-first notes:** Native HTML rendering for rich layouts, links, tables, and media — ready for AI workflows and long-term reference.
-*"Ask your LLM to structure your response as HTML." — Andrej Karpathy*
 
 ⚡ **Entire knowledge base as context:** Notes are semantically embedded and indexed as they land, giving your AI clients a searchable, long-lived library without multi-round searching or manual discovery.
 
@@ -20,96 +17,47 @@
 
 ## 🚀 Demo
 
-![Demo](.github/assets/demo.gif)
+![Demo](.github/assets/demo_0521.gif)
 
-> Claude Code turns a raw podcast transcript into structured question cards (my preferred note format). StashBase indexes the notes automatically so the ideas become part of your long-term AI context.
+> Import the CS183B starter — 20 YC startup lectures, pre-indexed. Surface ideas in Claude Desktop via `@stashbase`, then use the in-app Claude Code terminal to organize what resonates into HTML notes.
 
 ---
 
-## Install
+## Try it
 
-```bash
-brew install --cask liliu-z/stashbase/stashbase
-```
-
-The cask installs from the latest [GitHub Release](https://github.com/liliu-z/stashbase/releases/latest). It automatically clears the Gatekeeper quarantine and applies an ad-hoc signature so the unsigned alpha build launches without intervention.
-
-Direct download if you don't have brew: [latest macOS build](https://github.com/liliu-z/stashbase/releases/latest) — macOS arm64 (Apple Silicon). Unsigned; the DMG includes a `Fix.sh` script to handle Gatekeeper.
-
-For Intel Mac, Windows, or Linux, build from source (see below).
+*Coming soon.*
 
 Once the app is running:
 
-1. From the Welcome screen, open a folder of notes or clone a repo by URL
-2. Let StashBase build the local index (progress shown in the status bar)
-3. Open the in-app Claude Code or Codex terminal from the sidebar
-4. Start generating or retrieving knowledge
+1. On the Welcome screen, hit **Clone repo** and paste `https://github.com/0-bingwu-0/stashbase-cs183b` — Stanford CS183B's 20 startup lectures (Sam Altman, Paul Graham, Peter Thiel, …) with a pre-built index. Retrieval works the moment it lands, no first-pass indexing wait.
+2. From Claude Desktop, Claude Code, Codex, or any MCP-aware client, ask `@stashbase how does Sam Altman think about pivots?` — the brew install wires up the MCP server automatically.
+3. Then point it at your own notes: open another folder from the Welcome screen and let StashBase index it in the background.
 
-**Starter content:** clone [`stashbase-cs183b`](https://github.com/0-bingwu-0/stashbase-cs183b) from the Welcome screen's "Clone repo" option — example notes built from Y Combinator's *How to Start a Startup* (CS183B) lectures.
-
----
-
-## The accumulation problem
-
-Most AI tools treat knowledge as temporary context:
-
-* uploaded files
-* copied notes
-* chat history
-* local code indexes
-
-But personal knowledge lasts longer.
-
-Papers, transcripts, notes, saved analysis, and half-finished ideas accumulate across folders and apps over time.
-
-StashBase is built for that accumulation layer.
-
-It continuously indexes your library locally and exposes it through semantic + keyword retrieval for Claude, ChatGPT, Codex, and other MCP-compatible AI tools.
-
-Instead of repeatedly loading entire folders into context, your AI retrieves only the relevant pieces when needed.
+**Embeddings.** StashBase asks for an OpenAI API key on first launch — used only for embeddings (no chat completions), so cost is tiny (a few cents per month for a few MB of notes). [Create a key.](https://platform.openai.com/api-keys) No key? Pick the built-in local model (`bge-m3` ONNX) in the same modal — fully offline, no account, might be slow.
 
 ---
 
 ## Example workflow
 
+Most AI tools treat knowledge as temporary context — uploaded files, copied notes, chat history, code indexes. But personal knowledge lasts longer: papers, transcripts, notes, half-finished analysis accumulate across folders and apps for years.
+
+StashBase is built for that accumulation layer. It continuously indexes your library locally and serves it back to any MCP-aware AI client through semantic + keyword retrieval.
+
 ```text
-podcast transcript
+research paper
         ↓
-Claude Code generates notes
+Claude Code reads and generates notes
         ↓
 StashBase indexes them locally
         ↓
 later, in Claude or ChatGPT...
         ↓
-"that discussion about AI killing SaaS"
+"that paper on test-time compute scaling"
         ↓
 relevant notes retrieved instantly
 ```
 
-Example query:
-
-```text
-Query:
-"that podcast arguing AI won't kill SaaS"
-
-→ notes/saas-maintenance.html
-
-  Software is only part of the cost.
-  Reliability, upgrades, permissions,
-  integrations, and support are usually
-  the harder problem.
-```
-
-Codebase retrieval is already well served by tools like [Claude Context](https://github.com/zilliztech/claude-context).
-
-StashBase focuses on everything else that accumulates around AI work:
-
-* papers
-* transcripts
-* reading notes
-* research fragments
-* saved analysis
-* generated HTML knowledge pages
+Codebase retrieval is already well served by tools like [Claude Context](https://github.com/zilliztech/claude-context). StashBase focuses on everything else that accumulates around AI work — papers, transcripts, reading notes, research fragments, saved analysis, generated HTML knowledge pages.
 
 ---
 
@@ -144,12 +92,7 @@ Every space maintains a continuously updated local semantic index powered by [mf
 
 Files are indexed automatically on boot. External edits — from editors, git checkouts, sync tools, or coding agents — are picked up through filesystem watching.
 
-Supported embedding providers:
-
-* **OpenAI embeddings** — best retrieval quality
-* **Local ONNX embeddings (`bge-m3`)** — fully local after first download
-
-> Embedding configuration is locked per space after the initial index build, so pick before the first index runs.
+Embedding provider (OpenAI or the local `bge-m3` ONNX) is locked per space after the initial index build — pick before the first index runs.
 
 Hybrid semantic + keyword retrieval is shared across AI tools through MCP.
 
@@ -203,7 +146,7 @@ But for finished, shareable, AI-generated knowledge pages, HTML becomes much mor
 
 ## Build from source
 
-For developers, contributors, and platforms without a prebuilt binary (Intel Mac, Windows, Linux). Most users should use the [installer](#install) above.
+For contributors and developers building locally, and for platforms without a prebuilt cask (Intel Mac, Windows). End users should wait for the brew cask above.
 
 ```bash
 # Setup
@@ -236,9 +179,9 @@ The cask defaults to `liliu-z/stashbase/stashbase`, backed by `git@github.com:li
 
 ## MCP integration
 
-Connect StashBase to Claude Desktop or other MCP-compatible AI clients.
+The brew cask wires `@stashbase` into Claude Desktop, Claude Code, and Codex automatically — skip the rest of this section unless you're running from source.
 
-Open Claude Desktop config:
+**Manual config** (source builds). Open Claude Desktop's config:
 
 ```bash
 open ~/Library/Application\ Support/Claude/claude_desktop_config.json
@@ -257,11 +200,7 @@ Add:
 }
 ```
 
-Restart Claude Desktop.
-
-Once connected, Claude can retrieve notes, papers, transcripts, and saved analysis directly from your indexed library.
-
-The same retrieval layer can also be shared with ChatGPT, Codex, or custom MCP workflows.
+Restart Claude Desktop. The same MCP server wires into Codex, Claude Code, or any other MCP-aware client.
 
 ---
 
