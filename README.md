@@ -25,7 +25,13 @@
 
 ## Try it
 
-*Coming soon.*
+Install the macOS cask with Homebrew:
+
+```bash
+brew install --cask liliu-z/stashbase/stashbase
+```
+
+The cask installs the latest GitHub Release and wires `@stashbase` into Claude Desktop, Claude Code, and Codex automatically.
 
 Once the app is running:
 
@@ -179,7 +185,7 @@ The cask defaults to `liliu-z/stashbase/stashbase`, backed by `git@github.com:li
 
 ## MCP integration
 
-The brew cask wires `@stashbase` into Claude Desktop, Claude Code, and Codex automatically — skip the rest of this section unless you're running from source.
+The packaged app wires `@stashbase` into Claude Desktop, Claude Code, and Codex automatically. The Homebrew cask runs that setup during install; direct DMG installs run it the first time the app launches. Skip the rest of this section unless you're running from source.
 
 **Manual config** (source builds). Open Claude Desktop's config:
 

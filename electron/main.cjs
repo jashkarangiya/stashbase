@@ -11,6 +11,8 @@
  */
 const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 
@@ -33,9 +35,136 @@ const PROJECT_ROOT = app.isPackaged ? app.getAppPath() : path.resolve(__dirname,
 const SERVER_ENTRY = app.isPackaged
   ? path.join(PROJECT_ROOT, 'dist', 'server', 'index.mjs')
   : path.join(PROJECT_ROOT, 'server', 'index.ts');
+const MCP_ENTRY = app.isPackaged
+  ? path.join(PROJECT_ROOT, 'dist', 'mcp', 'server.mjs')
+  : path.join(PROJECT_ROOT, 'mcp', 'server.ts');
 
 let mainWindow = null;
 let serverProc = null;
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function readJsonObject(file) {
+  if (!fs.existsSync(file)) return {};
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    console.warn(`[electron] ${file} is not a JSON object; leaving untouched`);
+  } catch (err) {
+    console.warn(`[electron] couldn't parse ${file}: ${err.message}; leaving untouched`);
+  }
+  return null;
+}
+
+function writeJson(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
+}
+
+function writeMcpWrapper() {
+  const binDir = path.join(os.homedir(), '.stashbase', 'bin');
+  const wrapper = path.join(binDir, 'stashbase-mcp');
+  const resourcesPath = app.isPackaged ? process.resourcesPath : PROJECT_ROOT;
+  const commandLines = app.isPackaged
+    ? [
+        'export ELECTRON_RUN_AS_NODE=1',
+        `exec ${shellQuote(process.execPath)} ${shellQuote(MCP_ENTRY)} "$@"`,
+      ]
+    : [
+        `exec ${shellQuote(path.join(PROJECT_ROOT, 'node_modules', '.bin', 'tsx'))} ${shellQuote(MCP_ENTRY)} "$@"`,
+      ];
+  const content = [
+    '#!/bin/sh',
+    'set -eu',
+    `export STASHBASE_APP_ROOT=${shellQuote(PROJECT_ROOT)}`,
+    `export STASHBASE_RESOURCES_PATH=${shellQuote(resourcesPath)}`,
+    ...commandLines,
+    '',
+  ].join('\n');
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(wrapper, content, { mode: 0o755 });
+  fs.chmodSync(wrapper, 0o755);
+  return wrapper;
+}
+
+function configureJsonMcp(file, serverConfig) {
+  const config = readJsonObject(file);
+  if (!config) return false;
+  const currentServers =
+    config.mcpServers && typeof config.mcpServers === 'object' && !Array.isArray(config.mcpServers)
+      ? config.mcpServers
+      : {};
+  config.mcpServers = {
+    ...currentServers,
+    stashbase: serverConfig,
+  };
+  writeJson(file, config);
+  return true;
+}
+
+function replaceTomlTable(raw, tableName, block) {
+  const lines = raw.split(/\r?\n/);
+  const out = [];
+  const headerRe = /^\s*\[([^\]]+)\]\s*$/;
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(headerRe);
+    if (!match || match[1] !== tableName) {
+      out.push(lines[i]);
+      continue;
+    }
+    i += 1;
+    while (i < lines.length) {
+      const nextMatch = lines[i].match(headerRe);
+      if (nextMatch && nextMatch[1] !== tableName && !nextMatch[1].startsWith(`${tableName}.`)) {
+        break;
+      }
+      i += 1;
+    }
+    i -= 1;
+  }
+  const trimmed = out.join('\n').trimEnd();
+  return `${trimmed ? `${trimmed}\n\n` : ''}${block}\n`;
+}
+
+function configureCodex(wrapper) {
+  const file = path.join(os.homedir(), '.codex', 'config.toml');
+  const raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  const block = [
+    '[mcp_servers.stashbase]',
+    `command = ${JSON.stringify(wrapper)}`,
+  ].join('\n');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, replaceTomlTable(raw, 'mcp_servers.stashbase', block));
+  return true;
+}
+
+function configureMcpClients() {
+  if (process.platform !== 'darwin') return;
+  if (!fs.existsSync(MCP_ENTRY)) {
+    console.warn(`[electron] MCP entry missing: ${MCP_ENTRY}`);
+    return;
+  }
+
+  try {
+    const wrapper = writeMcpWrapper();
+    const desktopFile = path.join(
+      os.homedir(),
+      'Library',
+      'Application Support',
+      'Claude',
+      'claude_desktop_config.json',
+    );
+    const claudeCodeFile = path.join(os.homedir(), '.claude.json');
+    configureJsonMcp(desktopFile, { command: wrapper });
+    configureJsonMcp(claudeCodeFile, { type: 'stdio', command: wrapper });
+    configureCodex(wrapper);
+    console.log(`[electron] configured MCP clients with ${wrapper}`);
+  } catch (err) {
+    console.warn(`[electron] MCP auto-config failed: ${err.message}`);
+  }
+}
 
 /** Spawn the Express server as a child. If something else is already on
  *  the port (e.g. you've got `pnpm dev` running in a terminal), we
@@ -252,7 +381,15 @@ ipcMain.handle('shell:openExternal', async (_e, url) => {
   return true;
 });
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  if (process.argv.includes('--configure-mcp')) {
+    configureMcpClients();
+    app.quit();
+    return;
+  }
+  if (app.isPackaged) configureMcpClients();
+  createWindow();
+});
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();

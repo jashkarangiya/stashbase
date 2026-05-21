@@ -11,9 +11,18 @@ const distPath = path.join(root, 'python', 'sidecar');
 const buildPath = path.join(root, 'dist', 'pyinstaller');
 const specPath = path.join(root, 'dist', 'pyinstaller');
 const buildReqs = path.join(root, 'python', 'build-requirements.txt');
+const setupPython = path.join(root, 'scripts', 'setup-python.mjs');
 
 if (!fs.existsSync(python)) {
-  throw new Error('python/.venv is missing. Run `pnpm setup:python` first.');
+  console.log('[build:python-sidecar] python/.venv is missing; running setup:python');
+  execFileSync(process.execPath, [setupPython], {
+    cwd: root,
+    stdio: 'inherit',
+  });
+}
+
+if (!fs.existsSync(python)) {
+  throw new Error('python/.venv setup did not produce python/.venv/bin/python.');
 }
 
 const probe = spawnSync(python, ['-m', 'PyInstaller', '--version'], {
