@@ -31,12 +31,12 @@ Install the macOS cask with Homebrew:
 brew install --cask liliu-z/stashbase/stashbase
 ```
 
-The cask installs the latest GitHub Release and wires `@stashbase` into Claude Desktop, Claude Code, and Codex automatically.
+The cask installs the latest GitHub Release. Use the in-app **MCP Settings** button in the top-right corner to connect `@stashbase` to Claude Code, OpenAI Codex CLI, Gemini CLI, Qwen Code, Cursor, Void, Claude Desktop, Windsurf, VS Code, Cherry Studio, Cline, Augment, Roo Code, Zencoder, ChatGPT, or another MCP-aware client.
 
 Once the app is running:
 
 1. On the Welcome screen, hit **Clone repo** and paste `https://github.com/0-bingwu-0/stashbase-cs183b` — Stanford CS183B's 20 startup lectures (Sam Altman, Paul Graham, Peter Thiel, …) with a pre-built index. Retrieval works the moment it lands, no first-pass indexing wait.
-2. From Claude Desktop, Claude Code, Codex, or any MCP-aware client, ask `@stashbase how does Sam Altman think about pivots?` — the brew install wires up the MCP server automatically.
+2. Open **MCP Settings** from the top-right corner, click **Connector** for your AI client, restart that client, then ask `@stashbase how does Sam Altman think about pivots?`.
 3. Then point it at your own notes: open another folder from the Welcome screen and let StashBase index it in the background.
 
 **Embeddings.** StashBase asks for an OpenAI API key on first launch — used only for embeddings (no chat completions), so cost is tiny (a few cents per month for a few MB of notes). [Create a key.](https://platform.openai.com/api-keys) No key? Pick the built-in local model (`bge-m3` ONNX) in the same modal — fully offline, no account, might be slow.
@@ -185,15 +185,65 @@ The cask defaults to `liliu-z/stashbase/stashbase`, backed by `git@github.com:li
 
 ## MCP integration
 
-The packaged app wires `@stashbase` into Claude Desktop, Claude Code, and Codex automatically. The Homebrew cask runs that setup during install; direct DMG installs run it the first time the app launches. Skip the rest of this section unless you're running from source.
+The packaged app includes an MCP command for `@stashbase`. Use the in-app **MCP Settings** button in the top-right corner to connect it to Claude Code, OpenAI Codex CLI, Gemini CLI, Qwen Code, Cursor, Void, Claude Desktop, Windsurf, VS Code, Cherry Studio, Cline, Augment, Roo Code, Zencoder, ChatGPT, LangChain/LangGraph, or another MCP-aware client.
 
-**Manual config** (source builds). Open Claude Desktop's config:
+Use the manual config below if you're running from source, if a client was installed after StashBase, or if you want to inspect the exact MCP settings.
+
+**MCP Settings support.** StashBase can write known config files directly for Claude Code, Claude Desktop, OpenAI Codex CLI, Gemini CLI, Qwen Code, and Cursor. For GUI-driven or extension-managed clients such as Void, Windsurf, VS Code, Cherry Studio, Cline, Augment, Roo Code, Zencoder, ChatGPT, LangChain/LangGraph, and other MCP clients, the same Connector button copies the right stdio config for pasting into that client's MCP settings.
+
+### MCP command
+
+Homebrew / packaged app:
+
+```bash
+~/.stashbase/bin/stashbase-mcp
+```
+
+Source checkout:
+
+```bash
+npx tsx /absolute/path/to/StashBase/mcp/server.ts
+```
+
+The packaged command is generated when you connect a client from **MCP Settings**. For source builds, replace `/absolute/path/to/StashBase` with your local repo path.
+
+### Claude Code
+
+For a Homebrew / packaged install:
+
+```bash
+claude mcp add stashbase -- ~/.stashbase/bin/stashbase-mcp
+```
+
+For a source checkout:
+
+```bash
+claude mcp add stashbase -- npx tsx /absolute/path/to/StashBase/mcp/server.ts
+```
+
+Restart Claude Code after changing MCP servers.
+
+### Claude Desktop
+
+Open Claude Desktop's config:
 
 ```bash
 open ~/Library/Application\ Support/Claude/claude_desktop_config.json
 ```
 
-Add:
+For a Homebrew / packaged install, add:
+
+```json
+{
+  "mcpServers": {
+    "stashbase": {
+      "command": "/Users/YOUR_USER/.stashbase/bin/stashbase-mcp"
+    }
+  }
+}
+```
+
+For a source checkout, add:
 
 ```json
 {
@@ -206,7 +256,61 @@ Add:
 }
 ```
 
-Restart Claude Desktop. The same MCP server wires into Codex, Claude Code, or any other MCP-aware client.
+Restart Claude Desktop after saving the file.
+
+### Codex CLI
+
+Codex CLI uses TOML configuration. Create or edit:
+
+```bash
+~/.codex/config.toml
+```
+
+For a Homebrew / packaged install, add:
+
+```toml
+[mcp_servers.stashbase]
+command = "/Users/YOUR_USER/.stashbase/bin/stashbase-mcp"
+```
+
+For a source checkout, add:
+
+```toml
+[mcp_servers.stashbase]
+command = "npx"
+args = ["tsx", "/absolute/path/to/StashBase/mcp/server.ts"]
+```
+
+Restart Codex CLI after saving the file. Codex app configuration is not currently managed by this manual TOML path.
+
+### Other MCP clients
+
+StashBase uses stdio transport, so most MCP-aware clients can use the same command.
+
+Homebrew / packaged install:
+
+```json
+{
+  "mcpServers": {
+    "stashbase": {
+      "command": "/Users/YOUR_USER/.stashbase/bin/stashbase-mcp"
+    }
+  }
+}
+```
+
+Source checkout:
+
+```json
+{
+  "mcpServers": {
+    "stashbase": {
+      "command": "npx",
+      "args": ["tsx", "/absolute/path/to/StashBase/mcp/server.ts"]
+    }
+  }
+}
+```
 
 ---
 

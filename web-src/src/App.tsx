@@ -9,6 +9,7 @@ import {
 interface ElectronBridge {
   openFolderDialog?: (opts?: unknown) => Promise<string | null>;
   openExternal?: (url: string) => Promise<boolean>;
+  configureMcp?: (client: string) => Promise<unknown>;
   onFullscreenChange?: (handler: (isFullScreen: boolean) => void) => (() => void);
 }
 import { Welcome } from './components/Welcome';
@@ -22,6 +23,7 @@ import { CascadePromptModal } from './components/CascadePromptModal';
 import { AlertConfirmModal } from './components/AlertConfirmModal';
 import { TerminalPane } from './components/TerminalPane';
 import { TerminalCliPicker } from './components/TerminalCliPicker';
+import { McpSettingsButton, McpSettingsPortal } from './components/McpSettingsButton';
 import { HomeIcon, SidebarLeftIcon } from './icons';
 import { AppProvider, useApp } from './store/AppContext';
 import { useGlobalDragDrop } from './hooks/useGlobalDragDrop';
@@ -157,6 +159,7 @@ function AppBody() {
         <div className="app-chrome-right">
           {!state.welcomeVisible && <EmbedderControl />}
           {!state.welcomeVisible && <TerminalCliPicker />}
+          {!state.welcomeVisible && <McpSettingsButton />}
         </div>
       </div>
       <div
@@ -184,6 +187,7 @@ function AppBody() {
       )}
       <CascadePromptModal />
       <AlertConfirmModal />
+      <McpSettingsPortal />
     </>
   );
 }

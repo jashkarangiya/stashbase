@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { CubeLogoIcon, FolderIcon, GitCloneIcon, NewFolderIcon } from '../icons';
 import { useApp } from '../store/AppContext';
 import { CloneRepoModal } from './CloneRepoModal';
+import { openMcpSettings } from './McpSettingsButton';
 
 interface ElectronAPI {
   openFolderDialog?: (opts: { title?: string; buttonLabel?: string }) => Promise<string | null>;
@@ -98,6 +99,18 @@ export function Welcome() {
               <GitCloneIcon />
             </span>
             <span className="welcome-action-label">Clone repo</span>
+          </button>
+        </div>
+
+        <div className="welcome-mcp">
+          <div className="welcome-mcp-text">
+            <div className="welcome-mcp-title">Connect AI tools</div>
+            <div className="welcome-mcp-sub">
+              Use MCP Settings to connect StashBase to Claude Code, Codex, Cursor, Gemini, and other MCP clients.
+            </div>
+          </div>
+          <button className="welcome-mcp-btn" type="button" onClick={openMcpSettings}>
+            Open MCP Settings
           </button>
         </div>
 

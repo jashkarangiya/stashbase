@@ -37,6 +37,7 @@ import { mount as mountFoldersRoutes } from './routes/folders.ts';
 import { mount as mountUploadRoutes } from './routes/upload.ts';
 import { mount as mountIndexingRoutes } from './routes/indexing.ts';
 import { mount as mountTerminalRoutes } from './routes/terminal.ts';
+import { mount as mountMcpRoutes } from './routes/mcp.ts';
 
 const log = logger('server');
 
@@ -175,6 +176,7 @@ mountFoldersRoutes(app);
 mountUploadRoutes(app);
 mountIndexingRoutes(app);
 mountTerminalRoutes(app);
+mountMcpRoutes(app);
 
 // Dev-only fallthrough: any request that didn't match an `/api/*` or
 // `/asset/*` route gets proxied to Vite. Must be the LAST middleware

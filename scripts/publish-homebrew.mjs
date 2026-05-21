@@ -102,9 +102,6 @@ function caskContent({ url, checksum }) {
     system_command "/usr/bin/codesign",
                    args: ["--force", "--deep", "--sign", "-", "#{appdir}/${appName}"],
                    sudo: false
-    system_command "#{appdir}/${appName}/Contents/MacOS/${productName}",
-                   args: ["--configure-mcp"],
-                   sudo: false
   end
 
   zap trash: [

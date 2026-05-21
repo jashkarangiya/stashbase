@@ -294,6 +294,18 @@ export const api = {
     send<{ current: string }>('PUT', '/api/terminal/cli', { id }),
   checkCli: (id: string) =>
     getJson<{ installed: boolean }>('/api/terminal/check/' + encodeURIComponent(id)),
+  mcpStatus: () =>
+    getJson<{ clients: Record<string, boolean> }>('/api/mcp/status'),
+  configureMcp: (client: string) =>
+    send<{
+      ok: boolean;
+      client?: string;
+      file?: string;
+      command?: string;
+      manual?: unknown;
+      mode?: 'file' | 'clipboard';
+      error?: string;
+    }>('POST', '/api/mcp/configure', { client }),
   /** Rotate the global OpenAI key without touching per-space providers. */
   changeApiKey: (openaiKey: string) =>
     send<{ hasKey: true }>('PUT', '/api/embedder/key', { openaiKey }),

@@ -140,30 +140,108 @@ function configureCodex(wrapper) {
   return true;
 }
 
-function configureMcpClients() {
-  if (process.platform !== 'darwin') return;
+function getMcpServerConfig(wrapper) {
+  return { command: wrapper };
+}
+
+const JSON_MCP_CONFIG_FILES = {
+  'gemini-cli': () => path.join(os.homedir(), '.gemini', 'settings.json'),
+  'qwen-code': () => path.join(os.homedir(), '.qwen', 'settings.json'),
+  cursor: () => path.join(os.homedir(), '.cursor', 'mcp.json'),
+};
+
+function getStandardMcpJson(wrapper) {
+  return {
+    mcpServers: {
+      stashbase: {
+        command: wrapper,
+      },
+    },
+  };
+}
+
+function getMcpManualConfig(client, wrapper) {
+  if (client === 'cherry-studio') {
+    return {
+      kind: 'gui',
+      name: 'stashbase',
+      type: 'STDIO',
+      command: wrapper,
+      arguments: [],
+    };
+  }
+  if (client === 'augment') {
+    return {
+      'augment.advanced': {
+        mcpServers: [
+          {
+            name: 'stashbase',
+            command: wrapper,
+          },
+        ],
+      },
+    };
+  }
+  if (client === 'zencoder') {
+    return {
+      command: wrapper,
+      args: [],
+    };
+  }
+  return getStandardMcpJson(wrapper);
+}
+
+function configureMcpClient(client) {
   if (!fs.existsSync(MCP_ENTRY)) {
-    console.warn(`[electron] MCP entry missing: ${MCP_ENTRY}`);
-    return;
+    throw new Error(`MCP entry missing: ${MCP_ENTRY}`);
   }
 
-  try {
-    const wrapper = writeMcpWrapper();
-    const desktopFile = path.join(
+  const wrapper = writeMcpWrapper();
+  if (client === 'claude-desktop') {
+    if (process.platform !== 'darwin') {
+      throw new Error('Claude Desktop auto configuration is currently supported on macOS only.');
+    }
+    const file = path.join(
       os.homedir(),
       'Library',
       'Application Support',
       'Claude',
       'claude_desktop_config.json',
     );
-    const claudeCodeFile = path.join(os.homedir(), '.claude.json');
-    configureJsonMcp(desktopFile, { command: wrapper });
-    configureJsonMcp(claudeCodeFile, { type: 'stdio', command: wrapper });
-    configureCodex(wrapper);
-    console.log(`[electron] configured MCP clients with ${wrapper}`);
-  } catch (err) {
-    console.warn(`[electron] MCP auto-config failed: ${err.message}`);
+    configureJsonMcp(file, getMcpServerConfig(wrapper));
+    return { client, file, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'file' };
   }
+  if (client === 'claude-code') {
+    const file = path.join(os.homedir(), '.claude.json');
+    configureJsonMcp(file, { type: 'stdio', command: wrapper });
+    return { client, file, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'file' };
+  }
+  if (client === 'codex-cli') {
+    const file = path.join(os.homedir(), '.codex', 'config.toml');
+    configureCodex(wrapper);
+    return { client, file, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'file' };
+  }
+  if (client in JSON_MCP_CONFIG_FILES) {
+    const file = JSON_MCP_CONFIG_FILES[client]();
+    configureJsonMcp(file, getMcpServerConfig(wrapper));
+    return { client, file, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'file' };
+  }
+  if (
+    client === 'chatgpt' ||
+    client === 'void' ||
+    client === 'windsurf' ||
+    client === 'vscode' ||
+    client === 'cherry-studio' ||
+    client === 'cline' ||
+    client === 'augment' ||
+    client === 'roo-code' ||
+    client === 'zencoder' ||
+    client === 'langchain-langgraph' ||
+    client === 'other'
+  ) {
+    return { client, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'clipboard' };
+  }
+  throw new Error(`Unknown MCP client: ${client}`);
 }
 
 /** Spawn the Express server as a child. If something else is already on
@@ -381,13 +459,20 @@ ipcMain.handle('shell:openExternal', async (_e, url) => {
   return true;
 });
 
-app.whenReady().then(() => {
-  if (process.argv.includes('--configure-mcp')) {
-    configureMcpClients();
-    app.quit();
-    return;
+ipcMain.handle('mcp:configure', async (_e, client) => {
+  if (typeof client !== 'string') {
+    return { ok: false, error: 'Invalid MCP client.' };
   }
-  if (app.isPackaged) configureMcpClients();
+  try {
+    const result = configureMcpClient(client);
+    return { ok: true, ...result };
+  } catch (err) {
+    const message = err && typeof err.message === 'string' ? err.message : String(err);
+    return { ok: false, error: message };
+  }
+});
+
+app.whenReady().then(() => {
   createWindow();
 });
 
