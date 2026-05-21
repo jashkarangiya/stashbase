@@ -1,7 +1,12 @@
+/**
+ * Settings → MCP panel. The body of the old MCP Settings modal,
+ * lifted into the unified Settings shell. The "Copied configuration"
+ * confirmation still pops as a secondary modal because it carries the
+ * full JSON the user just put on their clipboard.
+ */
 import { useEffect, useState } from 'react';
-import { api } from '../api';
-import { SettingsIcon } from '../icons';
-import { ModalShell } from './ModalShell';
+import { api } from '../../api';
+import { ModalShell } from '../ModalShell';
 
 type McpClientId =
   | 'claude-code'
@@ -146,48 +151,7 @@ const MCP_CLIENTS: {
   },
 ];
 
-export function McpSettingsButton() {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    function onOpenMcpSettings() {
-      setOpen(true);
-    }
-    window.addEventListener('stashbase-open-mcp-settings', onOpenMcpSettings);
-    return () => window.removeEventListener('stashbase-open-mcp-settings', onOpenMcpSettings);
-  }, []);
-
-  return (
-    <>
-      <button
-        className="icon-btn"
-        type="button"
-        title="MCP settings"
-        onClick={() => setOpen(true)}
-      >
-        <SettingsIcon />
-      </button>
-      {open && <McpSettingsModal onClose={() => setOpen(false)} />}
-    </>
-  );
-}
-
-export function McpSettingsPortal() {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    function onOpenMcpSettings() {
-      setOpen(true);
-    }
-    window.addEventListener('stashbase-open-mcp-settings', onOpenMcpSettings);
-    return () => window.removeEventListener('stashbase-open-mcp-settings', onOpenMcpSettings);
-  }, []);
-  return open ? <McpSettingsModal onClose={() => setOpen(false)} /> : null;
-}
-
-export function openMcpSettings() {
-  window.dispatchEvent(new Event('stashbase-open-mcp-settings'));
-}
-
-function McpSettingsModal({ onClose }: { onClose: () => void }) {
+export function McpClientsPanel() {
   const [busy, setBusy] = useState<McpClientId | null>(null);
   const [connected, setConnected] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
@@ -200,9 +164,7 @@ function McpSettingsModal({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     let cancelled = false;
     api.mcpStatus()
-      .then((res) => {
-        if (!cancelled) setConnected(res.clients);
-      })
+      .then((res) => { if (!cancelled) setConnected(res.clients); })
       .catch(() => { /* status is best-effort */ });
     return () => { cancelled = true; };
   }, []);
@@ -242,11 +204,11 @@ function McpSettingsModal({ onClose }: { onClose: () => void }) {
 
   return (
     <>
-      <ModalShell wide onCancel={onClose}>
-        <h3>MCP Settings</h3>
-        <p className="modal-hint">
-          Connect StashBase as <code>@stashbase</code> for the AI tools listed in the README.
-        </p>
+      <div className="settings-section">
+        <div className="settings-section-title">MCP clients</div>
+        <div className="settings-section-hint">
+          Connect StashBase as <code>@stashbase</code> for the AI tools below.
+        </div>
         <div className="mcp-client-list">
           {MCP_CLIENTS.map((client) => (
             <div className="mcp-client-row" key={client.id}>
@@ -272,12 +234,8 @@ function McpSettingsModal({ onClose }: { onClose: () => void }) {
             {status.text}
           </div>
         )}
-        <div className="modal-actions">
-          <button type="button" className="modal-btn primary" onClick={onClose}>
-            Done
-          </button>
-        </div>
-      </ModalShell>
+      </div>
+
       {copyNotice && (
         <ModalShell wide onCancel={() => setCopyNotice(null)}>
           <h3>{copyNotice.title}</h3>
@@ -291,9 +249,7 @@ function McpSettingsModal({ onClose }: { onClose: () => void }) {
               type="button"
               className="modal-btn primary"
               onClick={() => setCopyNotice(null)}
-            >
-              OK
-            </button>
+            >OK</button>
           </div>
         </ModalShell>
       )}

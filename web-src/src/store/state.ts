@@ -24,6 +24,18 @@ export interface SaveStatus {
   cls: '' | 'saved' | 'error';
 }
 
+/** One chat tab in the right-side terminal panel. The tab's `cli` is
+ *  locked at creation time so changing the global default in
+ *  Settings → Chat CLI doesn't restart open conversations. */
+export interface TerminalTab {
+  id: string;
+  /** CLI id the PTY runs (`claude` / `codex` / …). */
+  cli: string;
+  /** Display name in the tab strip. Default: `"<CLI label>"` (plus a
+   *  `" N"` suffix on duplicates). */
+  title: string;
+}
+
 export interface OpenFile {
   name: string;
   format: 'md' | 'html';
@@ -139,18 +151,21 @@ export interface State {
   terminalOpen: boolean;
   /** Terminal panel width in pixels — user-resizable via drag handle. */
   terminalWidth: number;
-  /** Currently selected AI CLI id (`claude` / `codex` / …). Server is
-   *  the source of truth; this mirrors it so the chip can render the
-   *  right label / icon without an API hop on every render. */
+  /** **Default** AI CLI id used when the user clicks `+` to open a
+   *  new chat tab. Mirrors the server-side preference so the
+   *  Settings → Chat CLI radio reflects the right choice without an
+   *  API hop on every render. Existing tabs keep running their own
+   *  CLI — switching this only affects future tabs. */
   terminalCli: string;
   /** Catalog of available CLIs from the server, populated on demand. */
   terminalClis: TerminalCli[];
-  /** Monotonic session counter — bumped by the picker's "Start new
-   *  session" action. `<XtermView>` includes this in its effect deps,
-   *  so incrementing it forces a teardown + respawn of the WS + PTY.
-   *  Used because hiding the panel (collapse) no longer kills the
-   *  session — the user needs an explicit way to restart it. */
-  terminalSessionId: number;
+  /** Active chat tabs. Each tab owns its own PTY + xterm instance so
+   *  switching tabs preserves scrollback. Cursor-style — a `+` button
+   *  in the tab strip spawns a new one against the default CLI. */
+  terminalTabs: TerminalTab[];
+  /** Id of the currently-visible tab. `null` only when `terminalTabs`
+   *  is empty (panel closed or just initialised). */
+  activeTerminalTabId: string | null;
 
   pendingNames: Set<string>;
   /** Space-relative paths of PDFs the server is converting right now.
@@ -221,7 +236,8 @@ export const initialState: State = {
   terminalWidth: 480,
   terminalCli: 'claude',
   terminalClis: [],
-  terminalSessionId: 0,
+  terminalTabs: [],
+  activeTerminalTabId: null,
   pendingNames: new Set(),
   pendingConversions: [],
   syncRunning: false,
@@ -275,7 +291,10 @@ export type Action =
   | { type: 'TERMINAL_WIDTH'; width: number }
   | { type: 'TERMINAL_CLIS'; current: string; clis: State['terminalClis'] }
   | { type: 'TERMINAL_CLI'; id: string }
-  | { type: 'TERMINAL_NEW_SESSION' }
+  | { type: 'TERMINAL_TAB_NEW'; tab: TerminalTab }
+  | { type: 'TERMINAL_TAB_CLOSE'; id: string }
+  | { type: 'TERMINAL_TAB_ACTIVATE'; id: string }
+  | { type: 'TERMINAL_TABS_RESET' }
   | { type: 'ACTIVE_FOLDER'; path: string }
   /** Move the sidebar's single focus to `path`. Pure visual highlight
    *  — does not touch expand state, activeFolder, or the open file. */
@@ -507,8 +526,32 @@ export function reducer(s: State, a: Action): State {
       return { ...s, terminalCli: a.current, terminalClis: a.clis };
     case 'TERMINAL_CLI':
       return { ...s, terminalCli: a.id };
-    case 'TERMINAL_NEW_SESSION':
-      return { ...s, terminalSessionId: s.terminalSessionId + 1 };
+    case 'TERMINAL_TAB_NEW':
+      return {
+        ...s,
+        terminalTabs: [...s.terminalTabs, a.tab],
+        activeTerminalTabId: a.tab.id,
+      };
+    case 'TERMINAL_TAB_CLOSE': {
+      const idx = s.terminalTabs.findIndex((t) => t.id === a.id);
+      if (idx < 0) return s;
+      const nextTabs = s.terminalTabs.filter((t) => t.id !== a.id);
+      // If we just closed the active tab, jump to a neighbor (prefer
+      // the one immediately to the right, fall back to the left).
+      let nextActive = s.activeTerminalTabId;
+      if (s.activeTerminalTabId === a.id) {
+        nextActive = nextTabs[idx]?.id ?? nextTabs[idx - 1]?.id ?? null;
+      }
+      return { ...s, terminalTabs: nextTabs, activeTerminalTabId: nextActive };
+    }
+    case 'TERMINAL_TAB_ACTIVATE':
+      if (!s.terminalTabs.some((t) => t.id === a.id)) return s;
+      return { ...s, activeTerminalTabId: a.id };
+    case 'TERMINAL_TABS_RESET':
+      // Wipes ALL tabs — called on space switch (the server kills every
+      // PTY in that flow; the frontend has to drop its tab list too or
+      // we'd render dead xterms pointing at the old cwd).
+      return { ...s, terminalTabs: [], activeTerminalTabId: null };
     case 'ACTIVE_FOLDER':
       // Semantically "make this folder the user's current target" —
       // also moves the visual focus there.

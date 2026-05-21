@@ -166,16 +166,149 @@
       background: var(--accent);
     }
 
-    /* Terminal panel container — fills the 4th grid track. xterm draws
-     * its own bg via the theme; we wrap it so the install card can
-     * occupy the same slot with normal flow content. */
-    .terminal-pane {
+    /* Outer container — fills the 4th grid track. Holds the chat-tab
+     * strip + a body that overlays one xterm per tab. */
+    .terminal-pane-shell {
       grid-column: 4;
       grid-row: 1;
       min-width: 0;
       overflow: hidden;
       background: var(--pane);
       border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Cursor-style tab strip at the top of the chat panel. Scrolls
+     * horizontally when many tabs are open; `+` button stays pinned
+     * to the right via flex layout. */
+    .terminal-tabs {
+      display: flex;
+      align-items: stretch;
+      gap: 4px;
+      padding: 6px 6px 4px 6px;
+      min-height: 32px;
+    }
+    .terminal-tabs-list {
+      display: flex;
+      flex: 1;
+      gap: 2px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: thin;
+    }
+    .terminal-tabs-list::-webkit-scrollbar { height: 4px; }
+    .terminal-tabs-list::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 2px;
+    }
+    .terminal-tabs-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .terminal-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px 4px 10px;
+      max-width: 180px;
+      min-width: 0;
+      font-size: 12px;
+      color: var(--muted);
+      border-radius: 6px 6px 0 0;
+      cursor: pointer;
+      border: 1px solid transparent;
+      border-bottom: 0;
+      background: transparent;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .terminal-tab:hover {
+      background: var(--hover);
+      color: var(--fg);
+    }
+    .terminal-tab.active {
+      background: var(--bg);
+      color: var(--fg);
+      border-color: var(--border);
+      font-weight: 500;
+      padding-bottom: 5px;
+    }
+    .terminal-tab-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .terminal-tab-close {
+      width: 18px;
+      height: 18px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1;
+      border-radius: 4px;
+      cursor: pointer;
+      flex-shrink: 0;
+      /* Hidden by default — only surfaces on tab hover or for the
+       * active tab. Avoids visual clutter when many tabs are open. */
+      opacity: 0;
+    }
+    .terminal-tab:hover .terminal-tab-close,
+    .terminal-tab.active .terminal-tab-close {
+      opacity: 1;
+    }
+    .terminal-tab-close:hover {
+      background: var(--hover);
+      color: var(--fg);
+    }
+
+    .terminal-tab-new {
+      width: 24px;
+      height: 24px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .terminal-tab-new:hover {
+      background: var(--hover);
+      color: var(--fg);
+    }
+
+    /* Body — relative anchor for the absolutely-positioned tab panes
+     * below. Inactive panes stay mounted (preserving scrollback +
+     * PTY) but render off-screen via `visibility: hidden`. */
+    .terminal-tabs-body {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+    }
+    .terminal-tab-pane {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    .terminal-tab-pane.active {
+      visibility: visible;
+      pointer-events: auto;
+    }
+
+    /* `.terminal-pane` is now the inside of one tab body, not the
+     * grid container. Holds either the xterm host or the install /
+     * progress card. */
+    .terminal-pane {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
       display: flex;
       flex-direction: column;
     }
@@ -282,80 +415,13 @@
       line-height: 1.5;
     }
 
-    /* Terminal chip — split into two clickable zones:
-     *   `.terminal-toggle` (icon + CLI label) opens/closes the panel
-     *   `.terminal-cli-chev` (chevron)         opens the CLI picker
-     * Both share the embedder picker's naked-by-default / hover-bg
-     * style so the chrome row's two controls read as a matched pair. */
-    .terminal-cli-picker {
-      position: relative;
-      display: inline-flex;
-      align-items: center;
-      gap: 0;
-    }
-    .terminal-toggle {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 5px 6px 5px 8px;
-      border: 0;
-      background: transparent;
-      color: var(--fg);
-      border-radius: 6px 0 0 6px;
-      cursor: pointer;
-      font: inherit;
-      font-size: 12px;
-      font-weight: 500;
-      line-height: 18px;
-    }
-    .terminal-toggle:hover {
-      background: var(--hover);
-    }
-    .terminal-toggle svg {
-      width: 16px;
-      height: 16px;
-      flex-shrink: 0;
-      opacity: 0.75;
-    }
-    .terminal-toggle:hover svg,
-    .terminal-toggle.active svg {
-      opacity: 1;
-    }
-    .terminal-toggle.active {
+    /* Chrome-row terminal toggle — icon-only, sits next to the gear.
+     * Inherits everything from `.icon-btn`; `.active` tints it when
+     * the right-side panel is open. The CLI selection lives in
+     * Settings → Chat CLI (see SettingsModal). */
+    .icon-btn.terminal-toggle.active {
       background: rgba(8, 145, 178, 0.08);
       color: var(--accent);
-    }
-    /* Chevron sits flush against the toggle and only lights up on
-     * hover; no separator line at rest so the two zones look like
-     * one chip until you mouse into them. */
-    .terminal-cli-chev {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 20px;
-      height: 28px;
-      padding: 0;
-      border: 0;
-      background: transparent;
-      color: var(--muted);
-      border-radius: 0 6px 6px 0;
-      cursor: pointer;
-    }
-    .terminal-cli-chev:hover,
-    .terminal-cli-chev.active {
-      background: var(--hover);
-      color: var(--fg);
-    }
-    .terminal-cli-chev svg {
-      width: 11px;
-      height: 11px;
-      opacity: 0.55;
-    }
-
-    /* CLI picker dropdown — same shell as embedder menu, just
-     * anchored under the chevron half of the split chip. */
-    .terminal-cli-menu {
-      min-width: 260px;
     }
 
     /* Each row in the picker is its own flex container so the
@@ -419,48 +485,10 @@
       overflow: hidden;
     }
 
-    /* Lives inside `.app-chrome`. Relative positioning is just an
-     * anchor for the absolute-positioned dropdown menu below. */
-    .embedder-control {
-      position: relative;
-    }
-
-    .embedder-picker {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      border: 0;
-      background: transparent;
-      color: var(--muted);
-      padding: 5px 10px 5px 12px;
-      border-radius: 6px;
-      cursor: pointer;
-      font: inherit;
-      font-size: 12px;
-      line-height: 18px;
-    }
-
-    .embedder-picker:hover {
-      color: var(--fg);
-      background: var(--hover);
-    }
-
-    .embedder-picker svg {
-      flex-shrink: 0;
-    }
-
-    .embedder-chev { width: 11px; height: 11px; opacity: 0.55; }
-
-    .embedder-prefix {
-      color: var(--muted);
-      font-weight: 400;
-    }
-
-    .embedder-label {
-      font-weight: 500;
-      color: var(--fg);
-    }
-
+    /* `.embedder-menu*` and `.embedder-backdrop` are kept as a shared
+     * dropdown shell — Sidebar's "new note" picker reuses them. The
+     * old chrome-row embedder chip itself is gone (configuration
+     * lives in Settings → Embedding now). */
     .embedder-backdrop {
       position: fixed;
       inset: 0;
@@ -2443,4 +2471,200 @@
 
     .welcome-err[hidden] {
       display: none;
+    }
+
+    /* Unified Settings modal — left nav + right content. Wider than
+     * the default modal-card so the MCP client list (the longest
+     * panel) doesn't crowd. */
+    .modal-card.settings-card {
+      width: min(760px, 94vw);
+      padding: 0;
+      max-height: min(78vh, 720px);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .settings-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .settings-header h3 {
+      margin: 0;
+      font-size: 15px;
+    }
+
+    .settings-close {
+      width: 28px;
+      height: 28px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 20px;
+      line-height: 1;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .settings-close:hover {
+      color: var(--fg);
+      background: var(--hover);
+    }
+
+    .settings-body {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      min-height: 0;
+      flex: 1;
+    }
+
+    .settings-nav {
+      display: flex;
+      flex-direction: column;
+      padding: 12px 8px;
+      border-right: 1px solid var(--border);
+      background: var(--pane);
+      gap: 2px;
+    }
+
+    .settings-nav-item {
+      text-align: left;
+      padding: 7px 12px;
+      border: 0;
+      background: transparent;
+      color: var(--fg);
+      font: inherit;
+      font-size: 13px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .settings-nav-item:hover {
+      background: var(--hover);
+    }
+
+    .settings-nav-item.current {
+      background: rgba(8, 145, 178, 0.10);
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .settings-content {
+      padding: 20px 24px;
+      overflow-y: auto;
+      min-width: 0;
+    }
+
+    .settings-section + .settings-section {
+      margin-top: 22px;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+    }
+
+    .settings-section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--fg);
+      margin-bottom: 4px;
+    }
+
+    .settings-section-hint {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-bottom: 10px;
+    }
+
+    .settings-section-hint code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11.5px;
+      background: var(--hover);
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+
+    /* Radio-style list (used by Embedding provider + Chat CLI). Each
+     * row is button-shaped, full-width, with the check rendered on the
+     * right for the current item. */
+    .settings-radio-list {
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .settings-radio-row {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 14px;
+      background: transparent;
+      border: 0;
+      cursor: pointer;
+      font: inherit;
+      color: var(--fg);
+      text-align: left;
+    }
+
+    .settings-radio-row + .settings-radio-row {
+      border-top: 1px solid var(--border);
+    }
+
+    .settings-radio-row:hover {
+      background: var(--hover);
+    }
+
+    .settings-radio-row.current {
+      background: rgba(8, 145, 178, 0.05);
+    }
+
+    .settings-radio-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .settings-radio-name {
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .settings-radio-detail {
+      font-size: 11.5px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .settings-radio-check {
+      width: 14px;
+      height: 14px;
+      color: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .settings-actions-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .modal-btn.danger {
+      color: #b91c1c;
+      border-color: rgba(220, 38, 38, 0.3);
+    }
+    .modal-btn.danger:hover:not(:disabled) {
+      background: rgba(220, 38, 38, 0.06);
+    }
+
+    .settings-panel-loading {
+      color: var(--muted);
+      font-size: 13px;
+      padding: 12px 0;
     }

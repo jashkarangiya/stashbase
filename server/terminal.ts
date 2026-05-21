@@ -231,25 +231,22 @@ class TerminalSession {
   }
 }
 
-/** Holds the single active session (if any) so a space switch can
- *  reach in and kill it. */
-let active: TerminalSession | null = null;
+/** Live PTY sessions — one per chat tab in the renderer. Space switch
+ *  iterates this set to tear them all down (the old cwd is meaningless
+ *  in the new space). Each session removes itself on `ws.close`. */
+const sessions = new Set<TerminalSession>();
 
 export function attachTerminalWebSocket(ws: WebSocket): void {
-  // Single-terminal model — drop any prior session so the renderer
-  // always sees a clean slate when it reconnects.
-  if (active) active.dispose();
   const session = new TerminalSession(ws);
-  active = session;
-  ws.on('close', () => { if (active === session) active = null; });
+  sessions.add(session);
+  ws.on('close', () => { sessions.delete(session); });
 }
 
-/** Kill the current terminal (if any). Used when the user switches
- *  spaces — semantically the old session is bound to the old cwd. */
+/** Kill every live PTY. Used when the user switches spaces — every
+ *  session's cwd no longer makes sense. */
 export function killActiveTerminal(): void {
-  if (!active) return;
-  active.dispose();
-  active = null;
+  for (const session of sessions) session.dispose();
+  sessions.clear();
 }
 
 /** Spawn `npm install -g <package>` for a given CLI outside the PTY,

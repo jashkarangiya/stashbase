@@ -16,14 +16,15 @@ import { Welcome } from './components/Welcome';
 import { Sidebar } from './components/Sidebar';
 import { MainPane } from './components/MainPane';
 import { ContextMenu, DropVeil } from './components/Overlays';
-import { EmbedderControl } from './components/EmbedderControl';
+import { EmbedderRequireKeyGate } from './components/EmbedderRequireKeyGate';
 import { Hotkeys } from './components/Hotkeys';
 import { ImageLightbox } from './components/ImageLightbox';
 import { CascadePromptModal } from './components/CascadePromptModal';
 import { AlertConfirmModal } from './components/AlertConfirmModal';
 import { TerminalPane } from './components/TerminalPane';
-import { TerminalCliPicker } from './components/TerminalCliPicker';
-import { McpSettingsButton, McpSettingsPortal } from './components/McpSettingsButton';
+import { TerminalToggleButton } from './components/TerminalToggleButton';
+import { SettingsButton } from './components/SettingsButton';
+import { SettingsPortal } from './components/SettingsModal';
 import { HomeIcon, LibraryIcon, SidebarLeftIcon } from './icons';
 import { AppProvider, useApp } from './store/AppContext';
 import { useGlobalDragDrop } from './hooks/useGlobalDragDrop';
@@ -165,9 +166,8 @@ function AppBody() {
           <div className="app-chrome-title">{state.space}</div>
         )}
         <div className="app-chrome-right">
-          {!state.welcomeVisible && <EmbedderControl />}
-          {!state.welcomeVisible && <TerminalCliPicker />}
-          {!state.welcomeVisible && <McpSettingsButton />}
+          {!state.welcomeVisible && <TerminalToggleButton />}
+          {!state.welcomeVisible && <SettingsButton />}
         </div>
       </div>
       <div
@@ -195,7 +195,8 @@ function AppBody() {
       )}
       <CascadePromptModal />
       <AlertConfirmModal />
-      <McpSettingsPortal />
+      {!state.welcomeVisible && <EmbedderRequireKeyGate />}
+      <SettingsPortal />
     </>
   );
 }

@@ -1,9 +1,12 @@
 /**
- * Right-side terminal panel. xterm.js renderer + WebSocket to the
- * server's pty bridge. Single shell, auto-runs the user's currently
- * selected CLI (Claude Code / Codex / …) after `cd` to the space.
+ * Right-side terminal panel — Cursor-style tabbed chats. Each tab in
+ * `state.terminalTabs` owns its own PTY + xterm; all tabs render at
+ * once so switching preserves scrollback (inactive tabs are
+ * absolutely-positioned + `visibility: hidden`). New tabs are spawned
+ * from the `+` button in the strip against the default CLI configured
+ * in Settings → Chat CLI.
  *
- * Three states once a CLI is picked:
+ * Per tab the lifecycle is:
  *   1. CLI binary detected → connect WS, shell opens, runs the binary
  *   2. CLI missing → install card with "Install for me" + manual copy
  *   3. Installing → SSE-streamed npm log; flips back to (1) on success
@@ -14,6 +17,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { api, type TerminalCli, type TerminalClisResponse } from '../api';
 import { useApp } from '../store/AppContext';
+import type { TerminalTab } from '../store/state';
 
 type DetectState =
   | { kind: 'loading' }
@@ -23,45 +27,127 @@ type DetectState =
   | { kind: 'install-failed'; cli: TerminalCli; error: string; log: string };
 
 export function TerminalPane() {
-  const { state } = useApp();
+  const { state, dispatch } = useApp();
   const space = state.space;
-  const currentCliId = state.terminalCli;
+  const tabs = state.terminalTabs;
+  const activeId = state.activeTerminalTabId;
+
+  function newTab() {
+    const cliId = state.terminalCli || 'claude';
+    // Title disambiguates duplicates of the same CLI — first tab gets
+    // the bare label, copies append " 2", " 3", … the way browsers
+    // name duplicate windows.
+    const cliInfo = state.terminalClis.find((c) => c.id === cliId);
+    const baseLabel = cliInfo?.label ?? cliId;
+    const sameCli = tabs.filter((t) => t.cli === cliId);
+    const title = sameCli.length === 0 ? baseLabel : `${baseLabel} ${sameCli.length + 1}`;
+    const tab: TerminalTab = { id: crypto.randomUUID(), cli: cliId, title };
+    dispatch({ type: 'TERMINAL_TAB_NEW', tab });
+  }
+
+  if (!space) return null;
+
+  return (
+    <div className="terminal-pane-shell">
+      <div className="terminal-tabs">
+        <div className="terminal-tabs-list">
+          {tabs.map((tab) => (
+            <div
+              key={tab.id}
+              className={'terminal-tab' + (tab.id === activeId ? ' active' : '')}
+              role="tab"
+              aria-selected={tab.id === activeId}
+              onClick={() => dispatch({ type: 'TERMINAL_TAB_ACTIVATE', id: tab.id })}
+              title={tab.title}
+            >
+              <span className="terminal-tab-label">{tab.title}</span>
+              <button
+                type="button"
+                className="terminal-tab-close"
+                aria-label={`Close ${tab.title}`}
+                title="Close tab"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  dispatch({ type: 'TERMINAL_TAB_CLOSE', id: tab.id });
+                }}
+              >×</button>
+            </div>
+          ))}
+        </div>
+        <div className="terminal-tabs-actions">
+          <button
+            type="button"
+            className="terminal-tab-new"
+            title="New chat"
+            onClick={newTab}
+          >+</button>
+        </div>
+      </div>
+      <div className="terminal-tabs-body">
+        {tabs.map((tab) => (
+          <div
+            key={tab.id}
+            className={'terminal-tab-pane' + (tab.id === activeId ? ' active' : '')}
+            role="tabpanel"
+            aria-hidden={tab.id !== activeId}
+          >
+            <TerminalTabBody space={space} cliId={tab.cli} active={tab.id === activeId} />
+          </div>
+        ))}
+        {tabs.length === 0 && (
+          <div className="terminal-pane status">
+            No active chat. Click <code>+</code> above to start one.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Body of a single tab. Owns its CLI-detection state + xterm
+ *  instance. Detection re-runs only when the space changes — each tab
+ *  is locked to its `cliId` at creation. */
+function TerminalTabBody({
+  space,
+  cliId,
+  active,
+}: {
+  space: string;
+  cliId: string;
+  active: boolean;
+}) {
   const [detect, setDetect] = useState<DetectState>({ kind: 'loading' });
 
-  // Re-check whenever the panel mounts, space changes, or CLI choice
-  // changes. The server returns the freshest `installed` flag for the
-  // selected CLI as part of the full registry payload.
   useEffect(() => {
-    if (!space) return;
     let cancelled = false;
     setDetect({ kind: 'loading' });
     api.listClis().then((res: TerminalClisResponse) => {
       if (cancelled) return;
-      const cli = res.clis.find((c) => c.id === currentCliId) ?? res.clis[0];
+      const cli = res.clis.find((c) => c.id === cliId) ?? res.clis[0];
       if (!cli) return;
       setDetect({ kind: cli.installed ? 'installed' : 'missing', cli });
     }).catch(() => {
       if (!cancelled) {
-        // No registry response → assume current CLI is missing so we
-        // surface a card rather than hang on "loading".
         setDetect({
           kind: 'missing',
-          cli: { id: currentCliId, label: currentCliId, vendor: '', installHint: '', installed: false },
+          cli: {
+            id: cliId,
+            label: cliId,
+            vendor: '',
+            installHint: '',
+            installed: false,
+            launchCommand: '',
+          },
         });
       }
     });
     // Mirror `skills/<name>/SKILL.md` into the active CLI's per-project
-    // prompt directory so the user can author slash commands once under
-    // `skills/` and have them appear for whichever CLI they pick.
-    // Only `claude` and `codex` have a known target convention; other
-    // CLIs in the registry skip sync silently. Fire-and-forget — sync
-    // is idempotent and failures (no `skills/` dir, perms) are
-    // non-fatal to the terminal session itself.
-    if (currentCliId === 'claude' || currentCliId === 'codex') {
-      api.syncSkills(currentCliId).catch(() => { /* silent — see above */ });
+    // prompt directory — fire-and-forget, idempotent.
+    if (cliId === 'claude' || cliId === 'codex') {
+      api.syncSkills(cliId).catch(() => { /* silent */ });
     }
     return () => { cancelled = true; };
-  }, [space, currentCliId]);
+  }, [space, cliId]);
 
   function recheck(cli: TerminalCli) {
     setDetect({ kind: 'loading' });
@@ -96,7 +182,6 @@ export function TerminalPane() {
     });
   }
 
-  if (!space) return null;
   if (detect.kind === 'loading') {
     return <div className="terminal-pane status">Checking…</div>;
   }
@@ -114,33 +199,25 @@ export function TerminalPane() {
   if (detect.kind === 'installing') {
     return <InstallProgress cli={detect.cli} log={detect.log} />;
   }
-  return (
-    <XtermView
-      space={space}
-      launchCmd={detect.cli.launchCommand}
-      sessionId={state.terminalSessionId}
-    />
-  );
+  return <XtermView space={space} launchCmd={detect.cli.launchCommand} active={active} />;
 }
 
-/** Renders xterm + connects to /ws/terminal. `launchCmd` is the full
- *  shell command we feed to the shell once it's ready (e.g. `claude`
- *  or `codex`); built server-side in `terminal.ts:launchCommandFor`
- *  so per-CLI flags live with the registry. `sessionId` is a
- *  monotonic counter — bumping it (via the CLI picker's "Start new
- *  session" item) re-runs the effect, which tears the old WS + PTY
- *  down and spawns a fresh one. Space / CLI change also re-spawns
- *  because they show up in `launchCmd`. */
+/** Renders xterm + connects to /ws/terminal. Each tab gets its own
+ *  WebSocket → PTY pair. `active` is forwarded so we can refit when
+ *  the tab is brought back to the front (a hidden xterm doesn't
+ *  receive ResizeObserver hits while its host is visibility:hidden +
+ *  absolutely positioned with stale dimensions). */
 function XtermView({
   space,
   launchCmd,
-  sessionId,
+  active,
 }: {
   space: string;
   launchCmd: string;
-  sessionId: number;
+  active: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -204,6 +281,7 @@ function XtermView({
       allowProposedApi: true,
     });
     const fit = new FitAddon();
+    fitRef.current = fit;
     term.loadAddon(fit);
     term.open(host);
     fit.fit();
@@ -239,9 +317,9 @@ function XtermView({
       } else {
         // Server-initiated close (most commonly: user switched spaces,
         // which kills the PTY because the cwd is now wrong). Tell the
-        // user how to come back instead of leaving them with a frozen
-        // panel — the CLI picker menu has the restart action.
-        term.write('\r\n\x1b[2mSession ended. Open the CLI menu (chevron next to the chip) and pick "Start new session" to restart.\x1b[0m\r\n');
+        // user the next move instead of leaving them with a frozen
+        // panel — close this tab and click `+` for a fresh one.
+        term.write('\r\n\x1b[2mSession ended. Close this tab and click + to start a new one.\x1b[0m\r\n');
       }
     };
 
@@ -311,8 +389,19 @@ function XtermView({
       try { ws.send(JSON.stringify({ type: 'close' })); } catch { /* gone */ }
       ws.close();
       term.dispose();
+      fitRef.current = null;
     };
-  }, [space, launchCmd, sessionId]);
+  }, [space, launchCmd]);
+
+  // When a hidden tab becomes active again, the host's effective size
+  // may have changed (panel resized, sibling tabs spawned). Refit on
+  // the active→true transition so xterm picks up the new dimensions.
+  useEffect(() => {
+    if (!active) return;
+    const fit = fitRef.current;
+    if (!fit) return;
+    try { fit.fit(); } catch { /* host detached mid-frame */ }
+  }, [active]);
 
   return <div className="terminal-pane xterm-host" ref={containerRef} />;
 }

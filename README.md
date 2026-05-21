@@ -7,13 +7,13 @@
 [![Powered by mfs](https://img.shields.io/badge/powered%20by-mfs-0891b2.svg)](https://github.com/zilliztech/mfs)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-**StashBase** is a local knowledge base supporting HTML and Markdown, with deep integration of Claude/Codex, and retrievable via MCP.
+**StashBase** is an HTML-first local knowledge base with built-in Claude Code/Codex, continuous indexing, and MCP-compatible access for AI clients.
 
-🎨 **HTML-first notes:** Native HTML rendering for rich layouts, links, tables, and media — ready for AI workflows and long-term reference.
+🎨 **HTML-first notes:** Rich layouts, links, tables, and media — designed for AI-assisted writing and long-term reference.
 
-⚡ **Entire knowledge base as context:** Notes are semantically embedded and indexed as they land, giving your AI clients a searchable, long-lived library without multi-round searching or manual discovery.
+⚡ **Continuously indexed:** New notes become searchable immediately through semantic retrieval.
 
-🤖 **MCP-compatible access:** Query your indexed knowledge from any MCP-aware AI client — Claude, ChatGPT, Codex — for direct AI workflows.
+🤖 **MCP-compatible access:** Expose the whole indexed knowledge base to Claude, ChatGPT, Codex, and other AI tools.
 
 ---
 
@@ -33,15 +33,13 @@ Install the macOS cask with Homebrew:
 brew install --cask liliu-z/stashbase/stashbase
 ```
 
-The cask installs the latest GitHub Release. Use the in-app **MCP Settings** button in the top-right corner to connect `@stashbase` to Claude Code, OpenAI Codex CLI, Gemini CLI, Qwen Code, Cursor, Void, Claude Desktop, Windsurf, VS Code, Cherry Studio, Cline, Augment, Roo Code, Zencoder, ChatGPT, or another MCP-aware client.
-
 Once the app is running:
 
-1. On the Welcome screen, hit **Clone repo** and paste `https://github.com/0-bingwu-0/stashbase-cs183b` — Stanford CS183B's 20 startup lectures (Sam Altman, Paul Graham, Peter Thiel, …) with a pre-built index. Retrieval works the moment it lands, no first-pass indexing wait.
-2. Open **MCP Settings** from the top-right corner, click **Connector** for your AI client, restart that client, then ask `@stashbase how does Sam Altman think about pivots?`.
-3. Then point it at your own notes: open another folder from the Welcome screen and let StashBase index it in the background.
+1. On the Welcome screen, hit **Clone repo** and paste `https://github.com/0-bingwu-0/stashbase-cs183b` — Stanford CS183B's 20 startup lectures (Sam Altman, …) with a pre-built index.
+2. Open **Settings → MCP** (gear in the top-right corner), click **Connector** for your AI client, restart that client, then ask `@stashbase what's the best time to start a startup?`.
+3. Then bring your own notes: hit **New space** on the Welcome screen and drag your `.md` / `.html` files onto the app — StashBase indexes them in the background.
 
-**Embeddings.** StashBase asks for an OpenAI API key on first launch — used only for embeddings (no chat completions), so cost is tiny (a few cents per month for a few MB of notes). [Create a key.](https://platform.openai.com/api-keys) No key? Pick the built-in local model (`bge-m3` ONNX) in the same modal — fully offline, no account, might be slow.
+**Embeddings.** StashBase asks for an OpenAI API key on first launch — used only for embeddings (no chat completions). The default `text-embedding-3-small` is only $0.02 per 1M tokens. [Create a key.](https://platform.openai.com/api-keys) No API key? Pick the built-in local model (`bge-m3` ONNX) in the same modal — fully offline, no account, might be slower.
 
 ---
 
@@ -187,11 +185,11 @@ The cask defaults to `liliu-z/stashbase/stashbase`, backed by `git@github.com:li
 
 ## MCP integration
 
-The packaged app includes an MCP command for `@stashbase`. Use the in-app **MCP Settings** button in the top-right corner to connect it to Claude Code, OpenAI Codex CLI, Gemini CLI, Qwen Code, Cursor, Void, Claude Desktop, Windsurf, VS Code, Cherry Studio, Cline, Augment, Roo Code, Zencoder, ChatGPT, LangChain/LangGraph, or another MCP-aware client.
+The packaged app includes an MCP command for `@stashbase`. Open **Settings → MCP** (gear in the top-right corner) to connect it to Claude Code, OpenAI Codex CLI, Gemini CLI, Qwen Code, Cursor, Void, Claude Desktop, Windsurf, VS Code, Cherry Studio, Cline, Augment, Roo Code, Zencoder, ChatGPT, LangChain/LangGraph, or another MCP-aware client.
 
 Use the manual config below if you're running from source, if a client was installed after StashBase, or if you want to inspect the exact MCP settings.
 
-**MCP Settings support.** StashBase can write known config files directly for Claude Code, Claude Desktop, OpenAI Codex CLI, Gemini CLI, Qwen Code, and Cursor. For GUI-driven or extension-managed clients such as Void, Windsurf, VS Code, Cherry Studio, Cline, Augment, Roo Code, Zencoder, ChatGPT, LangChain/LangGraph, and other MCP clients, the same Connector button copies the right stdio config for pasting into that client's MCP settings.
+**Connector support.** From **Settings → MCP**, StashBase can write known config files directly for Claude Code, Claude Desktop, OpenAI Codex CLI, Gemini CLI, Qwen Code, and Cursor. For GUI-driven or extension-managed clients such as Void, Windsurf, VS Code, Cherry Studio, Cline, Augment, Roo Code, Zencoder, ChatGPT, LangChain/LangGraph, and other MCP clients, the same Connector button copies the right stdio config for pasting into that client's MCP settings.
 
 ### MCP command
 
@@ -207,7 +205,7 @@ Source checkout:
 npx tsx /absolute/path/to/StashBase/mcp/server.ts
 ```
 
-The packaged command is generated when you connect a client from **MCP Settings**. For source builds, replace `/absolute/path/to/StashBase` with your local repo path.
+The packaged command is generated when you connect a client from **Settings → MCP**. For source builds, replace `/absolute/path/to/StashBase` with your local repo path.
 
 ### Claude Code
 

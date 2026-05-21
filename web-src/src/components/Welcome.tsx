@@ -3,7 +3,7 @@ import { api, errorMessage } from '../api';
 import { CubeLogoIcon, FolderIcon, GitCloneIcon, NewFolderIcon } from '../icons';
 import { useApp } from '../store/AppContext';
 import { CloneRepoModal } from './CloneRepoModal';
-import { openMcpSettings } from './McpSettingsButton';
+import { openSettings } from './SettingsModal';
 
 interface ElectronAPI {
   openFolderDialog?: (opts: {
@@ -236,7 +236,11 @@ export function Welcome() {
               Searchable from Claude, Codex, ChatGPT, and more.
             </div>
           </div>
-          <button className="welcome-mcp-btn" type="button" onClick={openMcpSettings}>
+          <button
+            className="welcome-mcp-btn"
+            type="button"
+            onClick={() => openSettings('mcp')}
+          >
             Open MCP Settings
           </button>
         </div>

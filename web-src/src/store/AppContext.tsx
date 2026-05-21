@@ -997,6 +997,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'TABS_RESET' });
       dispatch({ type: 'COLLAPSE_ALL_FOLDERS' });
       dispatch({ type: 'NAV_RESET' });
+      // Server kills every PTY on space switch (onSwitch →
+      // killActiveTerminal). Drop our tab list to match so we don't
+      // render orphan xterms pointing at the old cwd.
+      dispatch({ type: 'TERMINAL_TABS_RESET' });
       // Prior space's search hits + manual ordering are stale.
       dispatch({ type: 'FILTER', q: '' });
       dispatch({ type: 'SEARCH_CLEAR' });
@@ -1011,6 +1015,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const goHome = useCallback(() => {
     dispatch({ type: 'TABS_RESET' });
+    dispatch({ type: 'TERMINAL_TABS_RESET' });
     dispatch({ type: 'FILTER', q: '' });
     dispatch({ type: 'SEARCH_CLEAR' });
     dispatch({ type: 'WELCOME_SHOW', recent: stateRef.current.recent });

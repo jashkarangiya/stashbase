@@ -32,14 +32,14 @@ export function mount(app: express.Express): void {
     });
   });
 
-  // Switch the active CLI. Kills the current terminal so the next
-  // open picks up the new CLI immediately. (Active session — if any —
-  // is torn down; the next panel open spawns the chosen binary.)
+  // Switch the *default* CLI used when the renderer opens a new chat
+  // tab. Existing tabs keep running their own CLI — each tab owns its
+  // own PTY (see terminal.ts). Space switch still tears down everything
+  // via onSwitch → killActiveTerminal.
   app.put('/api/terminal/cli', (req, res) => {
     const id = typeof req.body?.id === 'string' ? req.body.id : '';
     if (!CLIS[id]) return res.status(400).json({ error: 'unknown cli id' });
     setTerminalCli(id);
-    killActiveTerminal();
     res.json({ current: id });
   });
 
