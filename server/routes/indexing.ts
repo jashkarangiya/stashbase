@@ -186,6 +186,30 @@ export function mount(app: express.Express): void {
     }
   });
 
+  // Export the current space's chunks to a portable Parquet snapshot
+  // at `<space>/.stashbase/snapshot.parquet`. Downstream consumers
+  // auto-import on bind (see `maybeImportSnapshot` in state.ts).
+  app.post('/api/space/export-snapshot', async (_req, res) => {
+    try {
+      const cur = getCurrentSpace();
+      if (!cur) return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
+      const spaceName = getCurrentSpaceName();
+      if (!spaceName) return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
+      const outPath = path.join(cur, '.stashbase', 'snapshot.parquet');
+      const result = await getDaemon().call<{
+        path: string;
+        chunks: number;
+        providers: { provider: string; dim: number; chunks: number }[];
+      }>('export_space', { space: spaceName, out_path: outPath });
+      log.info(
+        `snapshot export ${spaceName}: ${result.chunks} chunk(s) → ${result.path}`,
+      );
+      res.json(result);
+    } catch (err: unknown) {
+      sendError(res, err);
+    }
+  });
+
   // Mirror `skills/<name>/SKILL.md` into the active CLI's per-project
   // prompt directory (Claude Code's `.claude/commands/` or Codex's
   // `.codex/prompts/`). The renderer fires this on terminal panel

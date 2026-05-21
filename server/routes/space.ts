@@ -92,18 +92,37 @@ export function mount(app: express.Express): void {
     }
     try {
       await spawnGitClone(url, dest, parentDir);
-      // Strip any `.stashbase/` directory the upstream repo may have
-      // committed (per-space config + milvus.db + cache). These are
-      // per-machine internal storage and must never travel with a clone:
-      // they'd inherit the previous user's embedder provider (e.g.
-      // OpenAI) and Milvus collection dim, blocking a fresh user without
-      // a key. `.git/` and other dotdirs are user content and stay.
-      fs.rmSync(path.join(dest, '.stashbase'), { recursive: true, force: true });
+      // Selective cleanup of the upstream `.stashbase/` directory.
+      // Per-machine internal state (`config.json`, `mfs/`, `cache/`)
+      // must never travel with a clone — they'd inherit the previous
+      // user's embedder provider + Milvus collection dim, blocking a
+      // fresh user without a key. The **portable** pieces stay:
+      //   - `snapshot.parquet` — the exported chunk index that lets
+      //     the new user skip re-embedding (auto-imported on bind)
+      //   - any future portable artefacts the maintainer ships
+      // `.git/` and other dotdirs are user content and stay.
+      pruneClonedStashbase(path.join(dest, '.stashbase'));
       res.json({ path: dest });
     } catch (err: unknown) {
       sendError(res, err);
     }
   });
+}
+
+/** Internal entries under `.stashbase/` that **must** be wiped after a
+ *  clone — per-machine state, never portable. Everything else in the
+ *  directory stays; the snapshot file lives here intentionally. */
+const STASHBASE_PER_MACHINE_ENTRIES = ['config.json', 'mfs', 'cache'];
+
+/** Selectively delete per-machine internal state out of a freshly-
+ *  cloned space's `.stashbase/` directory, leaving portable artefacts
+ *  (notably `snapshot.parquet`) intact. No-op if the directory doesn't
+ *  exist. */
+function pruneClonedStashbase(stashbaseDir: string): void {
+  if (!fs.existsSync(stashbaseDir)) return;
+  for (const entry of STASHBASE_PER_MACHINE_ENTRIES) {
+    fs.rmSync(path.join(stashbaseDir, entry), { recursive: true, force: true });
+  }
 }
 
 /** `https://github.com/user/repo.git` / `git@github.com:user/repo.git`

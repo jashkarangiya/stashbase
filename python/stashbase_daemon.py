@@ -77,6 +77,7 @@ representation) and kbRoot-relative at the indexer boundary.
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -229,6 +230,32 @@ def _patch_inverted_index_skip() -> None:
 
     _add_index.__stashbase_patched__ = True  # type: ignore[attr-defined]
     IndexParams.add_index = _add_index
+
+
+## Snapshot file format version. Bumped when the on-disk layout or
+## column schema changes incompatibly — the importer hard-rejects any
+## version it doesn't recognise to avoid silent miscoercion.
+SNAPSHOT_VERSION = 2
+
+
+def _strip_space_prefix(value: str, space: str) -> str:
+    """Drop the leading ``<space>`` so the result is space-relative.
+    Handles both ``<space>/foo/bar`` → ``foo/bar`` and the edge case
+    where ``value == space`` (e.g. a top-level file's ``parent_dir``) →
+    empty string. Other inputs pass through unchanged."""
+    if value == space:
+        return ""
+    prefix = space + "/"
+    if value.startswith(prefix):
+        return value[len(prefix):]
+    return value
+
+
+def _join_space_prefix(rel: str, space: str) -> str:
+    """Inverse of `_strip_space_prefix`: prepend the destination space
+    name to a stored space-relative path. Empty input means the value
+    referred to the space root itself."""
+    return space if not rel else f"{space}/{rel}"
 
 
 def _provider_key(provider: str, dim: int) -> str:
@@ -812,6 +839,218 @@ def op_status(svc: StashbaseStore, args: dict) -> dict:
     }
 
 
+def op_export_space(svc: StashbaseStore, args: dict) -> dict:
+    """Dump every chunk under ``space`` to a Parquet file at ``out_path``.
+
+    Source paths are written **space-relative** so the snapshot is
+    portable — a downstream user cloning this repo into a different
+    parent dir still imports correctly (the importer prepends the new
+    space name).
+
+    Parquet (zstd-compressed) over JSONL+gzip because vectors stay in a
+    native ``list<float32>`` column, ``pyarrow``/``pandas``/``duckdb``
+    can all inspect the file directly, and the schema is
+    self-describing. ``KeyValueMetadata`` on the file carries version +
+    per-provider counts so the importer can validate without reading
+    rows.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    _require(args, "space", "out_path")
+    space = args["space"].strip().strip("/")
+    out_path = Path(args["out_path"]).expanduser().resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fields = [
+        "id", "source", "parent_dir", "chunk_index",
+        "start_line", "end_line", "chunk_text",
+        "dense_vector", "content_type", "file_hash",
+        "is_dir", "embed_status", "metadata", "account_id",
+    ]
+
+    sections: list[tuple[str, int, list[dict]]] = []
+    for pk, _emb, store in svc.all_stores():
+        rows = store._query_all(
+            f'source like "{space}/%"', output_fields=fields,
+        )
+        if not rows:
+            continue
+        provider, dim_s = pk.rsplit("_", 1)
+        sections.append((provider, int(dim_s), rows))
+
+    total = sum(len(rows) for _, _, rows in sections)
+    providers_summary = [
+        {"provider": p, "dim": d, "chunks": len(rows)} for p, d, rows in sections
+    ]
+
+    # `metadata` goes in as a JSON-encoded string column so the Parquet
+    # schema doesn't pin to whatever sub-keys MFS happens to emit today.
+    columns: dict[str, list[Any]] = {
+        "provider": [], "dim": [], "id": [],
+        "source_rel": [], "parent_rel": [],
+        "chunk_index": [], "start_line": [], "end_line": [],
+        "chunk_text": [], "content_type": [], "file_hash": [],
+        "is_dir": [], "embed_status": [],
+        "metadata_json": [], "dense_vector": [],
+    }
+    for provider, dim, rows in sections:
+        for row in rows:
+            md_raw = row.get("metadata")
+            if isinstance(md_raw, str):
+                md_json = md_raw
+            elif isinstance(md_raw, dict):
+                md_json = json.dumps(md_raw, separators=(",", ":"))
+            else:
+                md_json = "{}"
+            vec = row.get("dense_vector")
+            columns["provider"].append(provider)
+            columns["dim"].append(dim)
+            columns["id"].append(row["id"])
+            columns["source_rel"].append(_strip_space_prefix(row["source"], space))
+            columns["parent_rel"].append(_strip_space_prefix(row.get("parent_dir") or "", space))
+            columns["chunk_index"].append(int(row["chunk_index"]))
+            columns["start_line"].append(int(row["start_line"]))
+            columns["end_line"].append(int(row["end_line"]))
+            columns["chunk_text"].append(row["chunk_text"])
+            columns["content_type"].append(row.get("content_type", "text"))
+            columns["file_hash"].append(row.get("file_hash", ""))
+            columns["is_dir"].append(bool(row.get("is_dir", False)))
+            columns["embed_status"].append(row.get("embed_status", "complete"))
+            columns["metadata_json"].append(md_json)
+            columns["dense_vector"].append(list(vec) if vec is not None else [])
+
+    schema = pa.schema([
+        pa.field("provider", pa.string()),
+        pa.field("dim", pa.int32()),
+        pa.field("id", pa.string()),
+        pa.field("source_rel", pa.string()),
+        pa.field("parent_rel", pa.string()),
+        pa.field("chunk_index", pa.int32()),
+        pa.field("start_line", pa.int32()),
+        pa.field("end_line", pa.int32()),
+        pa.field("chunk_text", pa.string()),
+        pa.field("content_type", pa.string()),
+        pa.field("file_hash", pa.string()),
+        pa.field("is_dir", pa.bool_()),
+        pa.field("embed_status", pa.string()),
+        pa.field("metadata_json", pa.string()),
+        pa.field("dense_vector", pa.list_(pa.float32())),
+    ]).with_metadata({
+        b"stashbase.version": str(SNAPSHOT_VERSION).encode(),
+        b"stashbase.space": space.encode(),
+        b"stashbase.exported_at": datetime.datetime.now(datetime.timezone.utc).isoformat().encode(),
+        b"stashbase.chunk_count": str(total).encode(),
+        b"stashbase.providers": json.dumps(providers_summary).encode(),
+    })
+    table = pa.table(columns, schema=schema)
+    pq.write_table(table, out_path, compression="zstd")
+
+    return {
+        "path": str(out_path),
+        "chunks": total,
+        "providers": providers_summary,
+    }
+
+
+def op_import_space(svc: StashbaseStore, args: dict) -> dict:
+    """Load a Parquet snapshot at ``in_path`` into ``space``'s collection.
+
+    The space must already be bound. Chunks whose ``(provider, dim)``
+    doesn't match the space's bound provider are skipped and reported
+    back so the caller can surface a clear "switch provider first"
+    message rather than silently dropping data.
+
+    ``MilvusStore.insert_chunks`` uses Milvus ``upsert`` keyed by ``id``,
+    so re-running this op replaces existing rows instead of duplicating.
+    """
+    import pyarrow.parquet as pq
+    from mfs.store import ChunkRecord
+
+    _require(args, "space", "in_path")
+    space = args["space"].strip().strip("/")
+    in_path = Path(args["in_path"]).expanduser().resolve()
+    if not in_path.exists():
+        raise RuntimeError(f"snapshot not found: {in_path}")
+
+    pk_for_space = svc._bindings.get(space)
+    if pk_for_space is None:
+        raise RuntimeError(f"space '{space}' is not bound; call bind_space first")
+
+    # Cheap header check via just the metadata sidecar — no row decode.
+    pq_meta = pq.read_metadata(in_path)
+    file_kv = (pq_meta.metadata or {})
+    version_raw = file_kv.get(b"stashbase.version", b"")
+    try:
+        version = int(version_raw.decode())
+    except (UnicodeDecodeError, ValueError):
+        version = -1
+    if version != SNAPSHOT_VERSION:
+        raise RuntimeError(
+            f"unsupported snapshot version: got {version_raw!r}, want {SNAPSHOT_VERSION}",
+        )
+
+    table = pq.read_table(in_path)
+    rows = table.to_pylist()
+
+    by_pk: dict[str, list[ChunkRecord]] = {}
+    skipped_by_pk: dict[str, int] = {}
+
+    for rec in rows:
+        provider = rec.get("provider")
+        dim = int(rec.get("dim") or 0)
+        if not provider or dim <= 0:
+            continue
+        pk = _provider_key(provider, dim)
+        if pk != pk_for_space:
+            skipped_by_pk[pk] = skipped_by_pk.get(pk, 0) + 1
+            continue
+
+        source = _join_space_prefix(rec.get("source_rel") or "", space)
+        parent = _join_space_prefix(rec.get("parent_rel") or "", space)
+
+        md_json = rec.get("metadata_json") or "{}"
+        try:
+            md = json.loads(md_json)
+        except json.JSONDecodeError:
+            md = {}
+
+        vec = rec.get("dense_vector")
+        by_pk.setdefault(pk, []).append(ChunkRecord(
+            id=rec["id"],
+            source=source,
+            parent_dir=parent,
+            chunk_index=int(rec["chunk_index"]),
+            start_line=int(rec["start_line"]),
+            end_line=int(rec["end_line"]),
+            chunk_text=rec["chunk_text"],
+            dense_vector=list(vec) if vec else None,
+            content_type=rec.get("content_type", "text"),
+            file_hash=rec.get("file_hash", ""),
+            is_dir=bool(rec.get("is_dir", False)),
+            embed_status=rec.get("embed_status", "complete"),
+            metadata=md,
+            account_id="stashbase",
+        ))
+
+    imported = 0
+    BATCH = 500
+    for pk, records in by_pk.items():
+        store = svc._stores[pk][1]
+        for i in range(0, len(records), BATCH):
+            store.insert_chunks(records[i:i + BATCH])
+        imported += len(records)
+
+    skipped_total = sum(skipped_by_pk.values())
+    return {
+        "imported": imported,
+        "skipped": skipped_total,
+        "skipped_providers": [
+            {"provider_key": pk, "chunks": n} for pk, n in skipped_by_pk.items()
+        ],
+    }
+
+
 def op_close_store(svc: StashbaseStore, _args: dict) -> dict:
     """Release every Milvus Lite flock so the server can move / wipe the
     DB. Next ``bind_space`` reopens lazily."""
@@ -831,6 +1070,8 @@ OPS = {
     "scan_diff": op_scan_diff,
     "status": op_status,
     "list": op_list,
+    "export_space": op_export_space,
+    "import_space": op_import_space,
     "close_store": op_close_store,
 }
 

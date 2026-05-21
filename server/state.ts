@@ -27,6 +27,7 @@ import {
 import { syncNewFiles } from './sync.ts';
 import { getDaemon } from './mfs-daemon.ts';
 import { logger, errorMessage } from './log.ts';
+import fs from 'node:fs';
 import path from 'node:path';
 
 const log = logger('state');
@@ -93,13 +94,68 @@ export async function bindIndexerForSpace(spaceAbs: string): Promise<void> {
     throw new Error(`bindIndexerForSpace: ${spaceAbs} is not under kbRoot`);
   }
   await indexer.bindSpace(rel, runtime);
+  await maybeImportSnapshot(spaceAbs, rel);
 }
+
+/** If the space ships a `.stashbase/snapshot.parquet` and the
+ *  collection has no rows for it yet, import the snapshot — lets a
+ *  freshly-cloned starter (e.g. cs183b) come pre-indexed without
+ *  re-embedding. Skips silently when the file is absent, or when the
+ *  space already has data (idempotent: re-runs after the first import
+ *  are no-ops). */
+async function maybeImportSnapshot(spaceAbs: string, spaceName: string): Promise<void> {
+  const snapshot = path.join(spaceAbs, '.stashbase', 'snapshot.parquet');
+  try {
+    if (!fs.statSync(snapshot).isFile()) return;
+  } catch {
+    return;
+  }
+  try {
+    const status = await indexer.status(spaceName);
+    if (status.indexed > 0) return;
+  } catch (err) {
+    log.warn(`snapshot import: status check failed for ${spaceName}: ${errorMessage(err)}`);
+    return;
+  }
+  try {
+    const res = await getDaemon().call<{
+      imported: number;
+      skipped: number;
+      skipped_providers: { provider_key: string; chunks: number }[];
+    }>('import_space', { space: spaceName, in_path: snapshot });
+    if (res.imported > 0) {
+      log.info(`snapshot import ${spaceName}: ${res.imported} chunk(s)`);
+    }
+    if (res.skipped > 0) {
+      const summary = res.skipped_providers
+        .map((p) => `${p.chunks} from ${p.provider_key}`)
+        .join(', ');
+      log.warn(
+        `snapshot import ${spaceName}: skipped ${res.skipped} chunk(s) — ${summary}. ` +
+          `Switch the space's embedder to match (or re-export with the current provider).`,
+      );
+    }
+  } catch (err) {
+    log.warn(`snapshot import ${spaceName} failed: ${errorMessage(err)}`);
+  }
+}
+
 
 // Serialise indexer bind + sync so rapid space switches don't race. The
 // seq guard short-circuits a stale tail when the user has already moved
 // on; the queue chains each switch after the previous one finishes.
 let indexerSwitchSeq = 0;
 let indexerSwitchQueue: Promise<void> = Promise.resolve();
+
+/** Resolves when the in-flight bind + snapshot-import work has settled.
+ *  External callers (notably the fs watcher) await this before kicking
+ *  off their own scans so they don't run `scan_diff` against an
+ *  unbound — or worse, mid-import — collection, which would wrongly
+ *  report every file as `added` and re-embed everything the snapshot
+ *  just imported. */
+export function awaitIndexerReady(): Promise<void> {
+  return indexerSwitchQueue.catch(() => undefined);
+}
 
 export function scheduleIndexerSync(spaceRoot: string, reason: string): void {
   const seq = ++indexerSwitchSeq;

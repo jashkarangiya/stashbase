@@ -21,6 +21,7 @@ import path from 'node:path';
 import { logger, errorMessage } from './log.ts';
 import { onSwitch, getCurrentSpace, getCurrentSpaceName } from './space.ts';
 import { syncIndex } from './sync.ts';
+import { awaitIndexerReady } from './state.ts';
 import type { Indexer } from './indexer.ts';
 
 const log = logger('watcher');
@@ -97,13 +98,26 @@ function scheduleSync(indexer: Indexer): void {
   if (debounceHandle) clearTimeout(debounceHandle);
   debounceHandle = setTimeout(() => {
     debounceHandle = null;
-    const space = getCurrentSpaceName();
-    if (!space) return; // user closed the space mid-debounce
-    log.info('external change detected → running sync');
-    syncIndex(indexer, space).catch((err) =>
-      log.warn(`watcher-triggered sync failed: ${errorMessage(err)}`),
-    );
+    void runSyncAfterReady(indexer);
   }, DEBOUNCE_MS);
+}
+
+async function runSyncAfterReady(indexer: Indexer): Promise<void> {
+  // Wait for any in-flight bind + snapshot-import to drain. Without
+  // this gate, a clone that fires fs events at the same moment the
+  // user opens the cloned space races: scan_diff runs before the
+  // bind+import finishes, sees an empty collection, reports every
+  // file as `added`, and re-embeds the very chunks the snapshot just
+  // imported.
+  await awaitIndexerReady();
+  const space = getCurrentSpaceName();
+  if (!space) return; // space closed mid-debounce or never opened
+  log.info('external change detected → running sync');
+  try {
+    await syncIndex(indexer, space);
+  } catch (err: unknown) {
+    log.warn(`watcher-triggered sync failed: ${errorMessage(err)}`);
+  }
 }
 
 function closeActive(): void {
