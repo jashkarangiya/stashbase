@@ -63,9 +63,11 @@
     "files": [
       "package.json",
       "electron/**/*",
-      "dist/**/*",
+      "dist/server/**",
+      "dist/mcp/**",
       "web/dist-app/**/*",
-      "node_modules/**/*"
+      "node_modules/**/*",
+      "!dist/pyinstaller/**"
     ],
     "extraResources": [
       {
