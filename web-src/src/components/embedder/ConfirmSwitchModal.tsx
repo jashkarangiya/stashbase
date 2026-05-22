@@ -48,9 +48,9 @@ export function ConfirmSwitchModal({
 
   return (
     <ModalShell wide onCancel={onCancel}>
-      <h3>Switch this space to {label}?</h3>
+      <h3>Switch to {label}?</h3>
       <p className="modal-hint">
-        Rebuilds this space's search index. Other spaces aren't affected.
+        Rebuilds the search index across every space. Existing vectors stay searchable while the re-embed runs in the background.
       </p>
       <div className="modal-stats">
         {estimate ? (

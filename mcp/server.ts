@@ -45,8 +45,8 @@ import { MfsIndexer } from '../server/indexer.mfs.ts';
 import {
   ensureKbRoot,
   getApiKey,
+  getEmbedderProvider,
   getKbRoot,
-  getSpaceEmbedderProvider,
   isUnderRoot,
   listKnownSpaces,
   migrateLegacyEmbedderConfig,
@@ -95,19 +95,18 @@ function getEmbedded(): { indexer: MfsIndexer; ready: Promise<void> } {
     const daemon = getDaemon();
     daemon.configure({ kbRoot: getKbRoot() });
     const known = listKnownSpaces();
+    const provider = getEmbedderProvider();
+    const apiKey = getApiKey();
+    const cfg = provider === 'openai' && apiKey
+      ? ({ provider: 'openai' as const, apiKey })
+      : ({ provider: 'onnx' as const });
+    if (provider === 'openai' && !apiKey) {
+      process.stderr.write(
+        '[StashBase] embedder is openai but no key in ~/.stashbase/config.json; ' +
+          'falling back to local ONNX\n',
+      );
+    }
     for (const space of known) {
-      const spaceAbs = path.join(getKbRoot(), space);
-      const provider = getSpaceEmbedderProvider(spaceAbs);
-      const apiKey = getApiKey();
-      const cfg = provider === 'openai' && apiKey
-        ? ({ provider: 'openai' as const, apiKey })
-        : ({ provider: 'onnx' as const });
-      if (provider === 'openai' && !apiKey) {
-        process.stderr.write(
-          `[StashBase] ${space} wants openai but no key in ~/.stashbase/config.json; ` +
-            'falling back to local ONNX\n',
-        );
-      }
       try {
         await inst.bindSpace(space, cfg);
       } catch (err: unknown) {

@@ -1,17 +1,18 @@
 /**
- * Embedder routes: pick / change the per-space embedding provider,
- * manage the global OpenAI key, validate a key without persisting it,
- * estimate the re-embed cost of a provider switch.
+ * Embedder routes: pick the library-wide embedding provider, manage the
+ * global OpenAI key, validate a key without persisting it, estimate the
+ * re-embed cost of a provider switch.
  *
- * Multi-collection model: switching a space's provider does NOT drop
- * any data. The daemon owns one DB at kbRoot with one collection per
+ * Multi-collection model: switching the provider does NOT drop any
+ * data. The daemon owns one Milvus DB at kbRoot with one collection per
  * (provider, dim); `bind_space` registers which collection a space's
  * future writes go to. After a switch:
- *   - Already-indexed files stay in their OLD collection, still
+ *   - Already-indexed rows stay in their OLD collection, still
  *     searchable across the library via the same Milvus DB.
  *   - New / re-saved files write to the NEW collection.
  *   - A follow-up syncIndex re-embeds existing rows under the new
- *     provider — fire-and-forget so the UI stays responsive.
+ *     provider — fire-and-forget so the UI stays responsive. Every
+ *     bound space gets queued in the background.
  */
 import express from 'express';
 import fs from 'node:fs';
@@ -22,33 +23,33 @@ import {
   getApiKey,
   getCurrentSpace,
   getCurrentSpaceName,
-  getSpaceEmbedderProvider,
+  getEmbedderProvider,
+  getKbRoot,
+  listKnownSpaces,
   setApiKey,
-  setSpaceEmbedderProvider,
+  setEmbedderProvider,
   type EmbedderProvider,
 } from '../space.ts';
 import { syncIndex } from '../sync.ts';
-import { indexer, bindIndexerForSpace, resolveSpaceEmbedder } from '../state.ts';
+import { indexer, bindIndexerForSpace, resolveEmbedder } from '../state.ts';
 import { sendError, validateOpenAIKey } from '../http.ts';
 
 const log = logger('routes/embedder');
 
 export function mount(app: express.Express): void {
-  // Per-space provider + global API key. The provider determines which
-  // collection a space's NEW writes go to; existing rows in the old
-  // collection stay searchable.
+  // Library-wide provider + global API key. The provider determines
+  // which collection every space's NEW writes go to; existing rows in
+  // the old collection stay searchable.
   app.get('/api/embedder', (_req, res) => {
-    const cur = getCurrentSpace();
-    if (!cur) return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
     res.json({
-      provider: getSpaceEmbedderProvider(cur),
+      provider: getEmbedderProvider(),
       hasKey: !!getApiKey(),
     });
   });
 
-  // Change the global OpenAI key WITHOUT touching providers / spaces.
+  // Change the global OpenAI key WITHOUT touching the provider choice.
   // Validates the new key first so a typo can't blow away a working
-  // one. If the current space is on OpenAI, we re-bind so the daemon
+  // one. If we're on OpenAI, rebind the current space so the daemon
   // picks up the new key for subsequent embeds (same dim, no data
   // movement).
   app.put('/api/embedder/key', async (req, res) => {
@@ -58,7 +59,7 @@ export function mount(app: express.Express): void {
     if (!check.ok) return res.status(check.status).json({ error: check.error });
     setApiKey(key);
     const cur = getCurrentSpace();
-    if (cur && getSpaceEmbedderProvider(cur) === 'openai') {
+    if (cur && getEmbedderProvider() === 'openai') {
       try {
         await bindIndexerForSpace(cur);
       } catch (err: unknown) {
@@ -68,10 +69,9 @@ export function mount(app: express.Express): void {
     res.json({ hasKey: true });
   });
 
-  // Wipe the global OpenAI key. Spaces still configured as `openai`
-  // won't be re-embedded automatically — their stored vectors stay
-  // valid but new embed / search calls will fail until either a key
-  // is added back or the space is switched to Local.
+  // Wipe the global OpenAI key. If the provider is `openai`, new embed
+  // / search calls will fail until a key is added back or the provider
+  // is switched to Local; existing vectors stay valid.
   app.delete('/api/embedder/key', (_req, res) => {
     setApiKey(undefined);
     res.json({ hasKey: false });
@@ -88,15 +88,11 @@ export function mount(app: express.Express): void {
     res.status(check.status).json({ error: check.error });
   });
 
-  // Switch the embedder for the current space. Re-binds to the new
-  // provider's collection — existing rows stay in the OLD collection
-  // (still searchable) and a background sync re-embeds them into the
-  // NEW one to keep results stable. Other spaces are unaffected.
+  // Switch the library-wide embedder. Re-binds every known space to
+  // the new provider's collection — existing rows stay in the OLD
+  // collection (still searchable) and a background sync re-embeds them
+  // into the NEW one to keep results stable. No space needs to be open.
   app.put('/api/embedder', async (req, res) => {
-    const cur = getCurrentSpace();
-    if (!cur) return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
-    const space = getCurrentSpaceName();
-    if (!space) return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
     const provider: EmbedderProvider | undefined = req.body?.provider;
     if (provider !== 'onnx' && provider !== 'openai') {
       return res.status(400).json({ error: 'provider must be "onnx" or "openai"' });
@@ -108,37 +104,51 @@ export function mount(app: express.Express): void {
       return res.status(400).json({ error: 'openaiKey required for openai provider' });
     }
     try {
-      setSpaceEmbedderProvider(cur, provider);
-      const cfg = resolveSpaceEmbedder(cur) ?? { provider: 'onnx' as const };
-      await indexer.bindSpace(space, cfg);
-      // Schedule a full re-embed against the new collection in the
-      // background — without this, search within the space would
-      // partly hit the old collection (where existing rows live) and
-      // partly miss new edits. The cross-collection search still works
-      // either way, but a single coherent collection per space is
-      // simpler to reason about. Errors logged, not fatal.
-      syncIndex(indexer, space).catch((err) =>
-        log.warn(`embedder: post-switch sync failed: ${errorMessage(err)}`),
-      );
+      setEmbedderProvider(provider);
+      const cfg = resolveEmbedder() ?? { provider: 'onnx' as const };
+      // Rebind + re-embed every known space. The current space is
+      // bound first / synced first so the UI sees fresh results
+      // soonest; the rest fan out in the background.
+      const known = listKnownSpaces();
+      const current = getCurrentSpaceName();
+      const ordered = current
+        ? [current, ...known.filter((s) => s !== current)]
+        : known;
+      for (const space of ordered) {
+        try {
+          await indexer.bindSpace(space, cfg);
+        } catch (err: unknown) {
+          log.warn(`embedder: bindSpace ${space} failed: ${errorMessage(err)}`);
+        }
+      }
+      // Fire-and-forget per-space re-embed. Errors logged, not fatal —
+      // the user can hit the manual sync button per space if needed.
+      for (const space of ordered) {
+        syncIndex(indexer, space).catch((err) =>
+          log.warn(`embedder: post-switch sync ${space} failed: ${errorMessage(err)}`),
+        );
+      }
       res.json({ provider, hasKey: !!apiKey });
     } catch (err: unknown) {
       sendError(res, err);
     }
   });
 
-  // Cost estimate for switching the current space to a given provider.
-  // Walks the space on disk and reports a rough token + USD estimate.
-  // Tokens are estimated as bytes/4 — accurate for English, low for CJK.
+  // Cost estimate for switching to a given provider. Walks the entire
+  // library on disk and reports a rough token + USD estimate. Tokens
+  // are estimated as bytes/4 — accurate for English, low for CJK.
   app.get('/api/embedder/cost-estimate', (req, res) => {
-    const cur = getCurrentSpace();
-    if (!cur) return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
     const provider = typeof req.query.provider === 'string' ? req.query.provider : 'openai';
+    const root = getKbRoot();
     let files = 0;
     let bytes = 0;
-    try {
-      walkSpaceForCost(cur, (size) => { files++; bytes += size; });
-    } catch (err: unknown) {
-      log.warn(`cost-estimate: failed to walk ${cur}: ${errorMessage(err)}`);
+    for (const space of listKnownSpaces()) {
+      const spaceRoot = path.join(root, space);
+      try {
+        walkSpaceForCost(spaceRoot, (size) => { files++; bytes += size; });
+      } catch (err: unknown) {
+        log.warn(`cost-estimate: failed to walk ${spaceRoot}: ${errorMessage(err)}`);
+      }
     }
     const tokens = Math.ceil(bytes / 4);
     const costUsd = provider === 'openai' ? (tokens * 0.02) / 1_000_000 : 0;

@@ -1,13 +1,14 @@
 /**
- * Mounted once at the app root: on every space switch, if the space
- * wants OpenAI (the default) but no global key is on file, pop the
- * `RequireApiKeyModal`. Used to live inside the chrome `EmbedderControl`
- * chip; lifted out because the chip moved into Settings and we still
- * want the prompt to fire whether or not Settings is open.
+ * Mounted once at the app root: on every space switch, if the
+ * library-wide embedder is OpenAI (the default) but no global key is
+ * on file, pop the `RequireApiKeyModal`. Used to live inside the
+ * chrome `EmbedderControl` chip; lifted out because the chip moved
+ * into Settings and we still want the prompt to fire whether or not
+ * Settings is open.
  *
  * Three exits from the modal:
  *   • Save key — validates + persists, daemon hot-swap.
- *   • Use Local instead — switches THIS space to onnx.
+ *   • Use Local instead — switches the whole library to onnx.
  *   • Later — dismiss; re-pops on next space open.
  */
 import { useEffect, useState } from 'react';

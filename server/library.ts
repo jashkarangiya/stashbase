@@ -20,8 +20,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { logger, errorMessage } from './log.ts';
 import {
+  getEmbedderProvider,
   getKbRoot,
-  getSpaceEmbedderProvider,
   listKnownSpaces,
 } from './space.ts';
 import { getDaemon } from './mfs-daemon.ts';
@@ -109,9 +109,9 @@ export interface LibraryInfo {
 export async function getLibraryInfo(): Promise<LibraryInfo> {
   const overview = getLibraryOverview();
   const root = getKbRoot();
+  const provider = getEmbedderProvider();
   const spaces: SpaceInfo[] = [];
   for (const name of listKnownSpaces()) {
-    const provider = getSpaceEmbedderProvider(path.join(root, name));
     let files: string[] = [];
     try {
       const r = await getDaemon().call<{ files: Record<string, string> }>(

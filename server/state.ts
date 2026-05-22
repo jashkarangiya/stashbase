@@ -18,10 +18,9 @@ import {
   getApiKey,
   getCurrentSpace,
   getCurrentSpaceName,
+  getEmbedderProvider,
   getKbRoot,
-  getSpaceEmbedderProvider,
   listKnownSpaces,
-  lockInSpaceProvider,
   onSwitch,
 } from './space.ts';
 import { syncNewFiles } from './sync.ts';
@@ -35,13 +34,11 @@ const log = logger('state');
 /** Single indexer instance shared across every route. */
 export const indexer: Indexer = new MfsIndexer();
 
-/** Resolve a space's runtime embedder config from disk. Returns null
- *  when the resolved provider can't be used right now (openai without
- *  a global key) so the caller can fall back to local. `spaceAbs` is
- *  the absolute on-disk path of the space (used by per-space config
- *  read/write). */
-export function resolveSpaceEmbedder(spaceAbs: string): EmbedderRuntimeConfig | null {
-  const provider = getSpaceEmbedderProvider(spaceAbs);
+/** Resolve the library-wide runtime embedder config. Returns null when
+ *  the configured provider can't be used right now (openai without a
+ *  key), so the caller can fall back to local. */
+export function resolveEmbedder(): EmbedderRuntimeConfig | null {
+  const provider = getEmbedderProvider();
   if (provider === 'onnx') return { provider: 'onnx' };
   const apiKey = getApiKey();
   if (!apiKey) return null;
@@ -62,9 +59,8 @@ export async function bootBindAllSpaces(): Promise<void> {
   }
   log.info(`boot bind: ${known.length} space(s): ${known.join(', ')}`);
   for (const space of known) {
-    const spaceAbs = path.join(getKbRoot(), space);
     try {
-      const cfg = resolveSpaceEmbedder(spaceAbs) ?? { provider: 'onnx' as const };
+      const cfg = resolveEmbedder() ?? { provider: 'onnx' as const };
       await indexer.bindSpace(space, cfg);
     } catch (err: unknown) {
       log.warn(`boot bind ${space} failed: ${errorMessage(err)}`);
@@ -72,18 +68,14 @@ export async function bootBindAllSpaces(): Promise<void> {
   }
 }
 
-/** Bind the indexer to a space: persist its embedder choice, resolve
- *  the runtime config, hand it to the indexer. Called on every space
- *  switch (idempotent). Doesn't trigger sync — caller's responsibility
- *  via `scheduleIndexerSync`. */
+/** Bind the indexer to a space using the library-wide embedder.
+ *  Called on every space switch (idempotent). Doesn't trigger sync —
+ *  caller's responsibility via `scheduleIndexerSync`. */
 export async function bindIndexerForSpace(spaceAbs: string): Promise<void> {
-  // Persist the resolved provider on first bind so a later key change
-  // doesn't silently flip an already-indexed space.
-  lockInSpaceProvider(spaceAbs);
-  const cfg = resolveSpaceEmbedder(spaceAbs);
+  const cfg = resolveEmbedder();
   const runtime = cfg ?? { provider: 'onnx' as const };
   if (!cfg) {
-    log.warn(`embedder: space ${spaceAbs} wants openai but no global key; falling back to local`);
+    log.warn(`embedder: provider is openai but no global key; falling back to local for ${spaceAbs}`);
   }
   // The kbRoot-relative name is the space identifier on the indexer side.
   // We can't use getCurrentSpaceName() here — the switch listener fires
@@ -132,7 +124,7 @@ async function maybeImportSnapshot(spaceAbs: string, spaceName: string): Promise
         .join(', ');
       log.warn(
         `snapshot import ${spaceName}: skipped ${res.skipped} chunk(s) — ${summary}. ` +
-          `Switch the space's embedder to match (or re-export with the current provider).`,
+          `Switch the library's embedder to match (or re-export with the current provider).`,
       );
     }
   } catch (err) {

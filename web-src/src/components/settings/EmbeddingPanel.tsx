@@ -5,7 +5,7 @@
  * `RequireApiKeyModal` auto-pop on space load lives in
  * `EmbedderRequireKeyGate` so it fires whether or not Settings is open.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api, type EmbedderProvider, type EmbedderState } from '../../api';
 import { CheckIcon } from '../../icons';
 import { LABEL, DETAIL } from '../embedder/labels';
@@ -15,6 +15,8 @@ import { ConfirmSwitchModal, type ConfirmDraft } from '../embedder/ConfirmSwitch
 
 export function EmbeddingPanel() {
   const [state, setState] = useState<EmbedderState | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadNonce, setLoadNonce] = useState(0);
   const [keyModalFor, setKeyModalFor] = useState<EmbedderProvider | null>(null);
   const [keyEditOpen, setKeyEditOpen] = useState(false);
   const [keyRemoveOpen, setKeyRemoveOpen] = useState(false);
@@ -24,11 +26,18 @@ export function EmbeddingPanel() {
 
   useEffect(() => {
     let cancelled = false;
+    setLoadError(null);
     api.getEmbedder()
       .then((s) => { if (!cancelled) setState(s); })
-      .catch(() => { /* startup race — silent */ });
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        setLoadError(msg || 'Failed to load embedder settings');
+      });
     return () => { cancelled = true; };
-  }, []);
+  }, [loadNonce]);
+
+  const retryLoad = useCallback(() => setLoadNonce((n) => n + 1), []);
 
   function onPick(next: EmbedderProvider) {
     if (!state || next === state.provider) return;
@@ -84,6 +93,18 @@ export function EmbeddingPanel() {
     setState((s) => (s ? { ...s, hasKey: false } : s));
   }
 
+  if (loadError) {
+    return (
+      <div className="settings-panel-loading">
+        <div className="settings-section-hint" style={{ color: 'var(--danger, #c0392b)' }}>
+          Couldn’t load embedder settings: {loadError}
+        </div>
+        <div className="settings-actions-row" style={{ marginTop: 12 }}>
+          <button type="button" className="modal-btn" onClick={retryLoad}>Retry</button>
+        </div>
+      </div>
+    );
+  }
   if (!state) return <div className="settings-panel-loading">Loading…</div>;
 
   return (
@@ -91,7 +112,7 @@ export function EmbeddingPanel() {
       <div className="settings-section">
         <div className="settings-section-title">Embedding provider</div>
         <div className="settings-section-hint">
-          Switching re-embeds this space. The provider is stored per-space; one OpenAI key is shared across all spaces.
+          Library-wide setting. Switching re-embeds every space in the background; existing vectors stay searchable until the re-embed finishes.
         </div>
         <div className="settings-radio-list">
           {(['onnx', 'openai'] as EmbedderProvider[]).map((p) => (

@@ -1,23 +1,20 @@
 /**
  * Space registry + config persistence.
  *
- * Two layers of persistent config:
+ * Single layer of persistent config — everything lives in the global
+ * `~/.stashbase/config.json` (0600):
+ *   - `recentSpaces`      most-recent first, capped at MAX_RECENT
+ *   - `apiKey`            user-level OpenAI key
+ *   - `embedder.provider` library-wide embedder choice (onnx | openai)
  *
- *   1. Global  — `~/.stashbase/config.json` (0600; may hold the OpenAI key):
- *        - `recentSpaces`     most-recent first, capped at MAX_RECENT
- *        - `apiKey`           single user-level OpenAI key, shared across spaces
- *   2. Per-space — `<space>/.stashbase/config.json`:
- *        - `embedder.provider`   which provider THIS space is indexed with
+ * The provider is library-wide: switching re-embeds every space
+ * (background, fire-and-forget). Existing vectors in the old
+ * (provider, dim) collection stay searchable until the re-embed
+ * finishes — see the multi-collection notes in `routes/embedder.ts`.
  *
- * The provider is **per-space** so different spaces can use different
- * embedders without dragging each other through a re-index. The key is
- * global because it's a user identity thing — one OpenAI key per user.
- *
- * Default provider for a space with no config: openai if a global key
- * is set, else onnx. The choice is locked in (written to per-space
- * config) the first time the space gets bound by the indexer, so a
- * later "user added/removed key" doesn't silently flip already-indexed
- * spaces.
+ * Default provider when unset: `openai`. If no key is configured the
+ * runtime silently falls back to onnx (the UI pops a modal asking the
+ * user to add one).
  *
  * The currently-open space is in-memory only — server restart goes
  * back to the welcome screen. Other modules subscribe to switches via
@@ -57,18 +54,16 @@ interface ConfigFile {
    *  `recentSpaces` on the next write. */
   recentVaults?: RecentSpace[];
   apiKey?: string;
-  /** Legacy field from the global-provider era. On read we migrate its
-   *  `openaiKey` into `apiKey` and push the `provider` choice down into
-   *  each known space's per-space config, then drop the field. */
+  /** Embedder provider is library-wide (one collection family per
+   *  provider on the daemon). `openaiKey` is a leftover from the very
+   *  first global-config schema — its content moved into the top-level
+   *  `apiKey` on read; we keep the type loose so legacy reads don't
+   *  trip the parser. */
   embedder?: { provider?: EmbedderProvider; openaiKey?: string };
   /** Currently selected CLI for the right-side terminal panel. The
    *  server knows the canonical registry; this just records which
    *  entry the user last picked. Defaults to 'claude'. */
   terminalCli?: string;
-}
-
-interface SpaceConfigFile {
-  embedder?: { provider: EmbedderProvider };
 }
 
 let currentSpace: string | null = null;
@@ -369,105 +364,45 @@ export function setTerminalCli(id: string): void {
   writeConfig(cfg);
 }
 
-// ---------- Per-space embedder provider ----------
+// ---------- Embedder provider (global) ----------
 
-function spaceConfigPath(spaceRoot: string): string {
-  return path.join(spaceRoot, '.stashbase', 'config.json');
-}
-
-function readSpaceConfig(spaceRoot: string): SpaceConfigFile {
-  try {
-    const raw = fs.readFileSync(spaceConfigPath(spaceRoot), 'utf8');
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed as SpaceConfigFile : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeSpaceConfig(spaceRoot: string, cfg: SpaceConfigFile): void {
-  try {
-    const dir = path.join(spaceRoot, '.stashbase');
-    fs.mkdirSync(dir, { recursive: true });
-    const file = spaceConfigPath(spaceRoot);
-    const tmp = file + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2), 'utf8');
-    fs.renameSync(tmp, file);
-  } catch (err: any) {
-    log.warn(`failed to persist space config at ${spaceRoot}: ${errorMessage(err)}`);
-  }
-}
-
-/** Read the provider configured for a space. Falls back to **always
- *  `openai`** for spaces that haven't been bound yet — Local is the
- *  explicit fallback, OpenAI is the default goal. The fallback is
- *  *not* persisted here; `lockInSpaceProvider` does that, called by
- *  the indexer on bind. When the user has no key,
- *  `resolveSpaceEmbedder` silently degrades to `onnx` and the UI pops
- *  a modal asking them to add one. */
-export function getSpaceEmbedderProvider(spaceRoot: string): EmbedderProvider {
-  const p = readSpaceConfig(spaceRoot).embedder?.provider;
+/** Library-wide embedder provider. Defaults to `openai` when unset —
+ *  Local is an explicit fallback the user has to pick, OpenAI is the
+ *  default goal. When the user has no key, `resolveEmbedder` silently
+ *  degrades to `onnx` and the UI pops a modal asking them to add one. */
+export function getEmbedderProvider(): EmbedderProvider {
+  const p = readConfig().embedder?.provider;
   if (p === 'onnx' || p === 'openai') return p;
   return 'openai';
 }
 
-/** Persist the provider for a space. The caller is responsible for
- *  triggering a re-index when this changes — the file write itself
+/** Persist the library-wide provider. Callers are responsible for
+ *  re-binding spaces + scheduling re-embeds — the file write itself
  *  doesn't touch Milvus. */
-export function setSpaceEmbedderProvider(spaceRoot: string, provider: EmbedderProvider): void {
+export function setEmbedderProvider(provider: EmbedderProvider): void {
   if (provider !== 'onnx' && provider !== 'openai') {
     throw new Error(`unsupported provider: ${provider}`);
   }
-  writeSpaceConfig(spaceRoot, { embedder: { provider } });
-}
-
-/** If the space has no persisted provider yet, **lock it in as
- *  `openai`** — that's the new default; users get prompted for a key
- *  from the UI if missing. Existing spaces (already `onnx` or
- *  `openai` on disk) are left as-is, so a global default change won't
- *  silently re-embed anything. Returns the persisted provider.
- *  Idempotent. */
-export function lockInSpaceProvider(spaceRoot: string): EmbedderProvider {
-  const existing = readSpaceConfig(spaceRoot).embedder?.provider;
-  if (existing === 'onnx' || existing === 'openai') return existing;
-  const provider: EmbedderProvider = 'openai';
-  setSpaceEmbedderProvider(spaceRoot, provider);
-  return provider;
+  const cfg = readConfig();
+  cfg.embedder = { ...(cfg.embedder ?? {}), provider };
+  writeConfig(cfg);
 }
 
 // ---------- Legacy migration ----------
 
-/** One-time upgrade from the old global-embedder schema. Reads the
- *  `embedder.openaiKey` into the new top-level `apiKey`, and pushes
- *  the old global `embedder.provider` down into each known space's
- *  per-space config (so existing indexed spaces don't get re-embedded
- *  by surprise). Then drops the legacy field. Safe to call repeatedly:
- *  if `cfg.embedder` is already gone, this is a no-op. */
+/** One-time upgrade from the very first global-embedder schema, when
+ *  the OpenAI key lived under `embedder.openaiKey` instead of the
+ *  top-level `apiKey`. Migrates that key forward and drops the
+ *  sub-field. The `embedder.provider` field is preserved — it's the
+ *  canonical store again. Safe to call repeatedly. */
 export function migrateLegacyEmbedderConfig(): void {
   const cfg = readConfig();
-  if (!cfg.embedder) return;
-
+  if (!cfg.embedder?.openaiKey) return;
   const oldKey = cfg.embedder.openaiKey;
-  if (oldKey && typeof oldKey === 'string' && !cfg.apiKey) {
+  if (typeof oldKey === 'string' && oldKey.trim() && !cfg.apiKey) {
     cfg.apiKey = oldKey.trim();
   }
-
-  const oldProvider = cfg.embedder.provider;
-  if (oldProvider === 'onnx' || oldProvider === 'openai') {
-    for (const r of cfg.recentSpaces ?? []) {
-      try {
-        if (!fs.statSync(r.path).isDirectory()) continue;
-      } catch {
-        continue;
-      }
-      // Only seed per-space when there's no choice yet — never overwrite
-      // an existing per-space setting.
-      if (readSpaceConfig(r.path).embedder?.provider) continue;
-      writeSpaceConfig(r.path, { embedder: { provider: oldProvider } });
-    }
-  }
-
-  delete cfg.embedder;
+  delete cfg.embedder.openaiKey;
   writeConfig(cfg);
-  log.info('migrated legacy embedder config to per-space + global apiKey');
+  log.info('migrated legacy embedder.openaiKey into top-level apiKey');
 }

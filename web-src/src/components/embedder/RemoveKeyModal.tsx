@@ -1,8 +1,8 @@
 /**
- * Confirmation for removing the global OpenAI key. Spaces still
- * configured as `openai` keep their per-space config but their
- * embed / search calls will start failing until the user either
- * adds a key back or switches each space to Local.
+ * Confirmation for removing the global OpenAI key. If the library is
+ * still configured as `openai`, embed / search calls will start
+ * failing until the user adds a key back or switches the provider to
+ * Local. Existing vectors stay valid.
  */
 import { useState } from 'react';
 import { errorMessage } from '../../api';
@@ -31,9 +31,9 @@ export function RemoveKeyModal({
     <ModalShell onCancel={onCancel}>
       <h3>Remove API key?</h3>
       <p className="modal-hint">
-        Spaces still set to OpenAI will fail to embed / search until you
-        add a key back or switch them to Local. Existing vectors are
-        kept as-is.
+        If the library is still set to OpenAI, embed / search will fail
+        until you add a key back or switch to Local. Existing vectors
+        are kept as-is.
       </p>
       {error && <div className="modal-error">{error}</div>}
       <div className="modal-actions">

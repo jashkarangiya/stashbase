@@ -322,12 +322,12 @@ export const api = {
       mode?: 'file' | 'clipboard';
       error?: string;
     }>('POST', '/api/mcp/configure', { client }),
-  /** Rotate the global OpenAI key without touching per-space providers. */
+  /** Rotate the global OpenAI key without touching the provider choice. */
   changeApiKey: (openaiKey: string) =>
     send<{ hasKey: true }>('PUT', '/api/embedder/key', { openaiKey }),
-  /** Clear the global OpenAI key. Spaces configured as openai keep
-   *  their per-space config but will fail to embed until a key is
-   *  added back. */
+  /** Clear the global OpenAI key. If the library is on OpenAI, embed /
+   *  search will fail until a key is added back or the provider is
+   *  switched to Local. */
   removeApiKey: () =>
     send<{ hasKey: false }>('DELETE', '/api/embedder/key'),
 };
