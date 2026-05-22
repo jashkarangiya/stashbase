@@ -284,10 +284,21 @@ async function ensureServer() {
   const packagedPython = packagedPythonCandidates.find((candidate) => {
     try { return require('node:fs').existsSync(candidate); } catch { return false; }
   });
-  const packagedDaemon = path.join(process.resourcesPath, 'python', 'sidecar', 'stashbase-daemon');
-  const hasPackagedDaemon = (() => {
-    try { return require('node:fs').existsSync(packagedDaemon); } catch { return false; }
-  })();
+  // PyInstaller --onedir lays out the bundle as
+  // `sidecar/stashbase-daemon/stashbase-daemon` (outer name = dir,
+  // inner name = executable). The --onefile layout used to put the
+  // executable directly at `sidecar/stashbase-daemon`, so check both
+  // for forward compat with anyone still on the old layout, and stat
+  // each candidate as a *file* — spawn-ing the outer directory by
+  // mistake yields EACCES with no useful hint.
+  const packagedDaemonCandidates = [
+    path.join(process.resourcesPath, 'python', 'sidecar', 'stashbase-daemon', 'stashbase-daemon'),
+    path.join(process.resourcesPath, 'python', 'sidecar', 'stashbase-daemon'),
+  ];
+  const packagedDaemon = packagedDaemonCandidates.find((candidate) => {
+    try { return require('node:fs').statSync(candidate).isFile(); } catch { return false; }
+  });
+  const hasPackagedDaemon = Boolean(packagedDaemon);
   const packagedEnv = app.isPackaged
     ? {
         ELECTRON_RUN_AS_NODE: '1',
