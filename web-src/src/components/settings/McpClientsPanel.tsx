@@ -202,6 +202,26 @@ export function McpClientsPanel() {
     }
   }
 
+  async function disconnect(client: McpClientId) {
+    setBusy(client);
+    setStatus(null);
+    try {
+      const result = await api.disconnectMcp(client);
+      if (!result.ok) {
+        setStatus({ kind: 'error', text: result.error || 'Unable to disconnect MCP.' });
+        return;
+      }
+      const file = result.file ? ` (${result.file})` : '';
+      setConnected((next) => ({ ...next, [client]: false }));
+      setStatus({ kind: 'ok', text: `Disconnected ${clientLabel(client)}${file}.` });
+    } catch (err: unknown) {
+      const text = err instanceof Error ? err.message : String(err);
+      setStatus({ kind: 'error', text });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <>
       <div className="settings-section">
@@ -221,10 +241,12 @@ export function McpClientsPanel() {
                 type="button"
                 className={'modal-btn mcp-connector-btn' + (connected[client.id] ? ' connected' : '')}
                 disabled={busy != null}
-                onClick={() => void connect(client.id)}
-                title={connected[client.id] ? `${client.name} is connected. Click to reconnect.` : `Connect ${client.name}`}
+                onClick={() => void (connected[client.id] ? disconnect(client.id) : connect(client.id))}
+                title={connected[client.id] ? `Disconnect ${client.name}` : `Connect ${client.name}`}
               >
-                {busy === client.id ? 'Connecting…' : connected[client.id] ? 'Connected' : 'Connector'}
+                {busy === client.id
+                  ? (connected[client.id] ? 'Disconnecting…' : 'Connecting…')
+                  : connected[client.id] ? 'Disconnect' : 'Connector'}
               </button>
             </div>
           ))}

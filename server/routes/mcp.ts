@@ -41,6 +41,16 @@ export function mount(app: express.Express): void {
       res.status(400).json({ ok: false, error: message });
     }
   });
+
+  app.post('/api/mcp/disconnect', (req, res) => {
+    const client = typeof req.body?.client === 'string' ? req.body.client : '';
+    try {
+      res.json({ ok: true, ...disconnectMcpClient(client) });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(400).json({ ok: false, error: message });
+    }
+  });
 }
 
 const MCP_CLIENT_IDS = [
@@ -89,6 +99,42 @@ function configureMcpClient(client: string): Record<string, unknown> {
   }
   if (clipboardOnlyClient(client)) {
     return { client, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'clipboard' };
+  }
+  throw new Error(`Unknown MCP client: ${client}`);
+}
+
+function disconnectMcpClient(client: string): Record<string, unknown> {
+  if (client === 'claude-desktop') {
+    if (process.platform !== 'darwin') {
+      throw new Error('Claude Desktop auto configuration is currently supported on macOS only.');
+    }
+    const file = path.join(
+      os.homedir(),
+      'Library',
+      'Application Support',
+      'Claude',
+      'claude_desktop_config.json',
+    );
+    removeJsonMcp(file);
+    return { client, file, mode: 'file' };
+  }
+  if (client === 'claude-code') {
+    const file = path.join(os.homedir(), '.claude.json');
+    removeJsonMcp(file);
+    return { client, file, mode: 'file' };
+  }
+  if (client === 'codex-cli') {
+    const file = path.join(os.homedir(), '.codex', 'config.toml');
+    removeCodex(file);
+    return { client, file, mode: 'file' };
+  }
+  if (client in JSON_MCP_CONFIG_FILES) {
+    const file = JSON_MCP_CONFIG_FILES[client]();
+    removeJsonMcp(file);
+    return { client, file, mode: 'file' };
+  }
+  if (clipboardOnlyClient(client)) {
+    throw new Error(`${client} configuration is managed outside StashBase. Remove the pasted stashbase server from that client.`);
   }
   throw new Error(`Unknown MCP client: ${client}`);
 }
@@ -228,6 +274,19 @@ function configureJsonMcp(file: string, serverConfig: Record<string, unknown>): 
   writeJson(file, config);
 }
 
+function removeJsonMcp(file: string): void {
+  if (!fs.existsSync(file)) return;
+  const config = readJsonObject(file);
+  if (!config) throw new Error(`Couldn't parse ${file}; leaving it untouched.`);
+  const servers = config.mcpServers;
+  if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return;
+  delete (servers as Record<string, unknown>).stashbase;
+  if (Object.keys(servers as Record<string, unknown>).length === 0) {
+    delete config.mcpServers;
+  }
+  writeJson(file, config);
+}
+
 function replaceTomlTable(raw: string, tableName: string, block: string): string {
   const lines = raw.split(/\r?\n/);
   const out: string[] = [];
@@ -260,6 +319,36 @@ function configureCodex(file: string, wrapper: string): void {
   ].join('\n');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, replaceTomlTable(raw, 'mcp_servers.stashbase', block));
+}
+
+function removeCodex(file: string): void {
+  if (!fs.existsSync(file)) return;
+  const raw = fs.readFileSync(file, 'utf8');
+  fs.writeFileSync(file, removeTomlTable(raw, 'mcp_servers.stashbase'));
+}
+
+function removeTomlTable(raw: string, tableName: string): string {
+  const lines = raw.split(/\r?\n/);
+  const out: string[] = [];
+  const headerRe = /^\s*\[([^\]]+)\]\s*$/;
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(headerRe);
+    if (!match || match[1] !== tableName) {
+      out.push(lines[i]);
+      continue;
+    }
+    i += 1;
+    while (i < lines.length) {
+      const nextMatch = lines[i].match(headerRe);
+      if (nextMatch && nextMatch[1] !== tableName && !nextMatch[1].startsWith(`${tableName}.`)) {
+        break;
+      }
+      i += 1;
+    }
+    i -= 1;
+  }
+  const trimmed = out.join('\n').trimEnd();
+  return trimmed ? `${trimmed}\n` : '';
 }
 
 function getMcpServerConfig(wrapper: string): Record<string, unknown> {

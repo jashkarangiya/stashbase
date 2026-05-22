@@ -717,6 +717,12 @@
       background: rgba(8, 145, 178, 0.08);
     }
 
+    .mcp-connector-btn.connected:hover:not(:disabled) {
+      color: #b91c1c;
+      border-color: rgba(220, 38, 38, 0.36);
+      background: rgba(220, 38, 38, 0.06);
+    }
+
     .mcp-success {
       margin-top: 10px;
       padding: 8px 10px;

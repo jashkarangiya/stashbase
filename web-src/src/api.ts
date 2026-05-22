@@ -322,6 +322,14 @@ export const api = {
       mode?: 'file' | 'clipboard';
       error?: string;
     }>('POST', '/api/mcp/configure', { client }),
+  disconnectMcp: (client: string) =>
+    send<{
+      ok: boolean;
+      client?: string;
+      file?: string;
+      mode?: 'file' | 'clipboard';
+      error?: string;
+    }>('POST', '/api/mcp/disconnect', { client }),
   /** Rotate the global OpenAI key without touching the provider choice. */
   changeApiKey: (openaiKey: string) =>
     send<{ hasKey: true }>('PUT', '/api/embedder/key', { openaiKey }),
