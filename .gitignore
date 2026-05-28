@@ -12,6 +12,7 @@ python/sidecar/
 *.log
 .DS_Store
 dev-docs/
+design-docs/
 CLAUDE.md
 package-lock.json
 
