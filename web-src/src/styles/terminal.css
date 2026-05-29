@@ -4,7 +4,7 @@
      * the heavy panes. A thin splitter sits in its own grid column so
      * users have a discrete drag target. */
     .app.terminal-open {
-      grid-template-columns: 280px 1fr 6px var(--terminal-width, 480px);
+      grid-template-columns: 324px 1fr 6px var(--terminal-width, 480px);
     }
     .app.sidebar-collapsed.terminal-open {
       grid-template-columns: 0 1fr 6px var(--terminal-width, 480px);

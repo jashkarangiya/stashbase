@@ -123,8 +123,12 @@
        * Closed sidebar / terminal collapse their tracks to 0 instead
        * of structurally adding/removing columns, so CSS can transition
        * the widths smoothly. The transition applies on toggles in both
-       * directions (sidebar collapse, terminal open/close). */
-      grid-template-columns: 280px 1fr 0 0;
+       * directions (sidebar collapse, terminal open/close).
+       *
+       * Sidebar = 324px = 44px ActivityBar + 280px panel content (the
+       * legacy panel width is preserved — the rail was added next to
+       * it, not carved out of it). */
+      grid-template-columns: 324px 1fr 0 0;
       /* Explicit single-row track so .sidebar fills the height instead
        * of shrinking to its content — the Outline pane lives at the
        * bottom of the sidebar and depends on the column being tall. */

@@ -255,30 +255,18 @@ function shallowEqualPdfFailures(
   );
 }
 
-const SIDEBAR_VIEW_KEY = 'stashbase:sidebar-view';
-
-function readSidebarViewPref(): 'files' | 'search' | 'library' {
-  if (typeof window === 'undefined') return 'files';
-  const v = window.localStorage.getItem(SIDEBAR_VIEW_KEY);
-  if (v === 'search') return 'search';
-  if (v === 'library') return 'library';
-  return 'files';
-}
-
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, initialState, (base) => ({
-    ...base,
-    activeSidebarView: readSidebarViewPref(),
-  }));
+  // Always boot into the Files view. Earlier we persisted the last
+  // sidebar view to localStorage so reload would land back where the
+  // user was, but the "what's in this space" tree is the canonical
+  // landing surface — search / library are tasks the user enters on
+  // purpose, not states to be restored. Resetting on launch matches
+  // user expectation ("打开应用默认选中文件") and side-steps the case
+  // where a stale `search` / `library` value persists past the user
+  // remembering they ever picked it.
+  const [state, dispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
   stateRef.current = state;
-
-  // Mirror `activeSidebarView` to localStorage so the user lands back
-  // in their last-used view on reload. Cheap enough to write on every
-  // change — toggle is a click event, not a render-frequency thing.
-  useEffect(() => {
-    window.localStorage.setItem(SIDEBAR_VIEW_KEY, state.activeSidebarView);
-  }, [state.activeSidebarView]);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

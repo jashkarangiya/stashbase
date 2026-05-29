@@ -2,8 +2,11 @@
     .sidebar {
       background: var(--pane);
       border-right: 1px solid var(--border);
+      /* Row layout: 44px ActivityBar rail on the left, the active
+       * sidebar-panel filling the rest. The panel itself owns the
+       * vertical stack (header / list / outline). */
       display: flex;
-      flex-direction: column;
+      flex-direction: row;
       min-width: 0;
       min-height: 0;
       /* Explicit height so the inner `.file-list { flex: 1 }` knows how
@@ -12,9 +15,89 @@
        * the bottom. */
       height: 100%;
       position: relative;
-      /* Clip content as the grid column animates between 280px and 0
+      /* Clip content as the grid column animates between 324px and 0
        * on toggle — without this, file names visually spill into the
        * main pane mid-transition. */
+      overflow: hidden;
+    }
+
+    /* VS Code / Obsidian-style narrow icon rail. Holds the three
+     * mutually-exclusive view toggles (Files / Search / Library) and
+     * paints the active indicator as a 2px accent strip on its left
+     * edge. Hover state on individual buttons; the rail itself is a
+     * flat background so it reads as part of the chrome, not as a
+     * separate panel. */
+    .activity-bar {
+      flex: 0 0 44px;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      padding: 4px 0;
+      gap: 2px;
+      background: var(--pane);
+      border-right: 1px solid var(--border);
+    }
+    .activity-bar-btn {
+      appearance: none;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 44px;
+      height: 40px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 0;
+    }
+    .activity-bar-btn:hover {
+      color: var(--fg);
+      background: var(--hover);
+    }
+    .activity-bar-btn.active {
+      color: var(--fg);
+    }
+    .activity-bar-btn.active::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 6px;
+      bottom: 6px;
+      width: 2px;
+      background: var(--accent);
+      border-radius: 0 2px 2px 0;
+    }
+    .activity-bar-btn svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    /* The right-hand 280px column of the sidebar. Owns the vertical
+     * stack: header / file-list / outline (or search/library
+     * equivalents). `.activity-bar` is sibling on the left; this is
+     * the panel that swaps content based on `state.activeSidebarView`. */
+    .sidebar-panel {
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .files-panel,
+    .search-panel {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .search-panel-body {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
       overflow: hidden;
     }
 
@@ -376,29 +459,20 @@
     }
 
 
-    /* Always-visible search input at the top of the sidebar. Plain
-     case-insensitive substring filter against file name / heading /
-     snippet — see renderFilteredFiles. */
+    /* Search input + mode toggles. The activity bar already carries
+     * the magnifier icon for the view itself, so the input has no
+     * leading glyph — left padding is symmetric. Mode toggles
+     * (≈/= flip, plus Aa / ab when keyword) live on the right of the
+     * input row via the absolute-positioned `.side-search-mode`. */
     .side-search {
       position: relative;
       padding: 10px 12px 8px;
     }
 
-    .side-search-icon {
-      position: absolute;
-      left: 22px;
-      top: 50%;
-      transform: translateY(-50%);
-      width: 14px;
-      height: 14px;
-      color: var(--muted);
-      pointer-events: none;
-    }
-
     .side-search input {
       width: 100%;
       box-sizing: border-box;
-      padding: 6px 10px 6px 32px;
+      padding: 6px 64px 6px 10px;
       border: 1px solid var(--border);
       border-radius: 6px;
       background: var(--bg);
@@ -410,6 +484,50 @@
 
     .side-search input:focus {
       border-color: var(--accent);
+    }
+
+    .side-search-mode {
+      position: absolute;
+      right: 16px;
+      top: 50%;
+      transform: translateY(-50%);
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .side-search-mode-btn {
+      appearance: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 22px;
+      height: 20px;
+      padding: 0 5px;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 11px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .side-search-mode-btn:hover {
+      background: var(--hover);
+      color: var(--fg);
+    }
+    .side-search-mode-btn.active {
+      background: var(--active);
+      border-color: var(--border);
+      color: var(--fg);
+    }
+    .side-search-mode-btn.ab-toggle {
+      text-decoration: underline;
+    }
+    .side-search-mode-btn.side-search-mode-flip {
+      font-size: 13px;
+      font-weight: 600;
     }
 
     /* Brief glow when something programmatically focuses the search
