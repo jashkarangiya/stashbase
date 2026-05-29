@@ -31,6 +31,7 @@ import {
   type Action,
   type CascadeDecision,
   type CascadePrompt,
+  type PendingHighlight,
   type State,
 } from './state';
 
@@ -46,6 +47,7 @@ export type {
   ModalRequest,
   NavEntry,
   OpenFile,
+  PendingHighlight,
   SaveStatus,
   State,
   Tab,
@@ -94,6 +96,16 @@ export interface AppActions {
   setFolderOrder: (parentPath: string, names: string[]) => Promise<void>;
 
   selectFile: (name: string) => Promise<void>;
+  /** Same as `selectFile` but additionally arms the viewer to highlight
+   *  a specific chunk on next render (typically from a search hit
+   *  click). HTML / MD / Code viewers use `startLine` / `endLine` for
+   *  line-range overlay; PdfPreview uses `chunkText` to find the
+   *  passage via pdfjs's find controller. */
+  selectFileWithHighlight: (name: string, hit: PendingHighlight) => Promise<void>;
+  /** Open / close the "show original PDF" split for the currently
+   *  active file. No-op when the active file isn't an HTML with a
+   *  sibling PDF. */
+  toggleSplitOriginalPdf: () => Promise<void>;
   /** Open a file in a new tab (double-click in sidebar / drag-out
    *  semantics). Always creates a new tab even if the file is already
    *  open in another tab — VS Code does the same with the explicit
@@ -118,6 +130,10 @@ export interface AppActions {
    *  anchor / scrollY so a follow-up keystroke / re-render won't
    *  re-scroll. */
   consumePendingScroll: () => void;
+  /** Called by the viewer after it has applied a pending-highlight
+   *  (rendered the chunk overlay / kicked off the PDF text search)
+   *  so a re-render doesn't re-trigger the effect. */
+  consumePendingHighlight: () => void;
   /** Settle the pending cascade dialog with the user's choice. The
    *  rename action awaits this. */
   resolveCascadePrompt: (decision: CascadeDecision) => void;
@@ -497,12 +513,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await flushSave();
     }
     let body;
-    try {
-      body = await api.getFile(name);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      dispatch({ type: 'SAVE_STATUS', status: { text: msg, cls: 'error' } });
-      return;
+    if (/\.pdf$/i.test(name)) {
+      // PDFs aren't loaded as text — PdfPreview pulls the binary from
+      // `/asset/*` directly. We synthesize a FileBody so the rest of
+      // the tab / nav / save-status machinery treats it like any
+      // other open file.
+      body = { name, format: 'pdf' as const, content: '', headings: [] };
+    } else {
+      try {
+        body = await api.getFile(name);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        dispatch({ type: 'SAVE_STATUS', status: { text: msg, cls: 'error' } });
+        return;
+      }
     }
     const scrollY = opts.newTab ? null : captureCurrentScrollY();
     // "Implicit new tab" — first open in a fresh session (no active
@@ -574,6 +598,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     await loadFile(name, { push: true, newTab: true, preview: true });
   }, [flushSave, loadFile]);
+
+  /** Open `name` (preview-tab semantics like `selectFile`) and arm
+   *  the viewer's pending-highlight slot. The viewer consumes it on
+   *  next render and then calls `clearPendingHighlight`.
+   *
+   *  We deliberately do NOT auto-open the PDF split here — the design
+   *  doc considered it, but in practice users searching mostly want
+   *  to read the structured HTML; auto-mounting a PDF viewer in the
+   *  right half is heavy and noisy. The "Show original PDF" toolbar
+   *  button lets the user opt in when they actually want to verify
+   *  against the source. */
+  const selectFileWithHighlight = useCallback(async (name: string, hit: PendingHighlight) => {
+    await selectFile(name);
+    dispatch({ type: 'PENDING_HIGHLIGHT', highlight: hit });
+  }, [selectFile]);
+
+  /** Toggle the "Show original PDF" dual-view for the current tab.
+   *  No-op if the active file isn't an HTML with a sibling PDF. */
+  const toggleSplitOriginalPdf = useCallback(async () => {
+    const s = stateRef.current;
+    const active = getActiveTab(s);
+    const cur = active?.file;
+    if (!cur || cur.format !== 'html') return;
+    if (s.pdfSplit && s.pdfSplit.html === cur.name) {
+      dispatch({ type: 'PDF_SPLIT', split: null });
+      return;
+    }
+    const pdfPath = derivePdfSibling(cur.name);
+    if (!pdfPath) return;
+    if (await assetExists(pdfPath)) {
+      dispatch({ type: 'PDF_SPLIT', split: { html: cur.name, pdf: pdfPath } });
+    }
+  }, []);
 
   /** Double-click in the sidebar = open PINNED. VS Code semantics:
    *    1. File already open → activate, AND promote it if it was
@@ -775,6 +832,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const consumePendingScroll = useCallback(() => {
     dispatch({ type: 'PENDING_SCROLL', anchor: null, scrollY: null });
+  }, []);
+
+  const consumePendingHighlight = useCallback(() => {
+    dispatch({ type: 'PENDING_HIGHLIGHT', highlight: null });
   }, []);
 
   const toggleEditMode = useCallback(async () => {
@@ -1059,8 +1120,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const actions = useMemo<AppActions>(() => ({
     bootstrap, openSpace, openSpaceByName, goHome,
     loadFiles, refreshIndexState, runSync, runSearch, setFolderOrder,
-    selectFile, openInNewTab, newTab, openLibraryOverview, closeTab, closeActiveTab, activateTab,
+    selectFile, selectFileWithHighlight, openInNewTab, newTab, openLibraryOverview, closeTab, closeActiveTab, activateTab,
     navigateTo, navBack, navForward, consumePendingScroll,
+    consumePendingHighlight,
+    toggleSplitOriginalPdf,
     resolveCascadePrompt,
     alert: showAlert, confirm: askConfirm, resolveModal,
     toggleEditMode,
@@ -1074,8 +1137,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }), [
     bootstrap, openSpace, openSpaceByName, goHome,
     loadFiles, refreshIndexState, runSync, runSearch, setFolderOrder,
-    selectFile, openInNewTab, newTab, openLibraryOverview, closeTab, closeActiveTab, activateTab,
+    selectFile, selectFileWithHighlight, openInNewTab, newTab, openLibraryOverview, closeTab, closeActiveTab, activateTab,
     navigateTo, navBack, navForward, consumePendingScroll,
+    consumePendingHighlight,
+    toggleSplitOriginalPdf,
     resolveCascadePrompt,
     showAlert, askConfirm, resolveModal,
     toggleEditMode,
@@ -1121,6 +1186,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(() => ({ state, actions, dispatch }), [state, actions]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+}
+
+/** Map `paper.html` (or `paper.htm`) → `paper.pdf`. Returns null when
+ *  the input doesn't look HTML-shaped, which short-circuits the
+ *  sibling-existence check. */
+function derivePdfSibling(htmlPath: string): string | null {
+  const m = htmlPath.match(/^(.+)\.(html|htm)$/i);
+  if (!m) return null;
+  return `${m[1]}.pdf`;
+}
+
+/** HEAD `/asset/<path>` to test for existence. We tolerate any non-2xx
+ *  as "absent" (404 is the common case; 403 / 500 also count). */
+async function assetExists(spaceRel: string): Promise<boolean> {
+  try {
+    const resp = await fetch('/asset/' + encodeURIComponent(spaceRel).replace(/%2F/g, '/'), {
+      method: 'HEAD',
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  }
 }
 
 export function useApp() {

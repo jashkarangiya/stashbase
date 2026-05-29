@@ -136,7 +136,13 @@ function reorder(
 }
 
 function displayName(name: string): string {
-  return name.replace(/\.(md|markdown|html|htm)$/i, '');
+  // Show the extension. Three viewer formats (md / html / pdf) coexist
+  // — PDF-derived notes ship as a `paper.pdf` + `paper.html` pair, and
+  // collapsing both to "paper" leaves them visually indistinguishable.
+  // ICP is developers who already read extensions everywhere (IDE /
+  // Finder / git), so the noise cost is small. Kept as a hook so we
+  // can flip back to stripping later without churning call sites.
+  return name;
 }
 
 export function FileTree() {
@@ -193,7 +199,17 @@ function SearchHitRow({ hit, query }: { hit: SearchHit; query: string }) {
   return (
     <div
       className="search-hit"
-      onClick={() => { void actions.selectFile(hit.fileName); }}
+      onClick={() => {
+        // Arm the viewer with the chunk's line range + raw text so it
+        // can render a fade overlay (HTML / MD / Code) or do a pdfjs
+        // find-controller search (PDF). The viewer consumes the
+        // highlight on first render and clears it.
+        void actions.selectFileWithHighlight(hit.fileName, {
+          startLine: hit.startLine,
+          endLine: hit.endLine,
+          chunkText: hit.content,
+        });
+      }}
       title={hit.fileName}
     >
       {hit.heading && <div className="search-hit-heading">{hit.heading}</div>}
@@ -403,7 +419,7 @@ function FileRow({
   siblings,
 }: {
   path: string;
-  format: 'md' | 'html';
+  format: 'md' | 'html' | 'pdf';
   paddingLeft: number;
   parent: string;
   siblings: string[];
@@ -590,7 +606,24 @@ function NewFolderInput({ parentPath, depth }: { parentPath: string; depth: numb
 /** Per-format file icon. Both share an outline envelope; the inner
  *  glyph is the format-specific differentiator. Colour is layered on
  *  via the `.format-<x>` CSS class on the row. */
-function FileTypeIcon({ format }: { format: 'md' | 'html' }) {
+function FileTypeIcon({ format }: { format: 'md' | 'html' | 'pdf' }) {
+  if (format === 'pdf') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+        <text
+          x="12"
+          y="19"
+          textAnchor="middle"
+          fontFamily="-apple-system, BlinkMacSystemFont, sans-serif"
+          fontSize="6"
+          fill="currentColor"
+          stroke="none"
+        >PDF</text>
+      </svg>
+    );
+  }
   if (format === 'html') {
     return (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">

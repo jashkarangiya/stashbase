@@ -166,6 +166,26 @@ export function CodeEditor({
     prevRenamingRef.current = isRenaming;
   }, [state.renaming]);
 
+  // Chunk-highlight after a SearchHit click. We pick the line range
+  // (1-based) from pendingHighlight, then dispatch a scroll + select
+  // so the chunk visibly highlights via the selection background.
+  // Sufficient for V1; a fading line decoration is V2.
+  const pendingHighlight = state.tabs.find((t) => t.id === state.activeTabId)?.pendingHighlight ?? null;
+  useEffect(() => {
+    if (!pendingHighlight?.startLine) return;
+    const view = viewRef.current;
+    if (!view) return;
+    const startLine = Math.max(1, Math.min(view.state.doc.lines, pendingHighlight.startLine));
+    const endLine = Math.max(startLine, Math.min(view.state.doc.lines, pendingHighlight.endLine ?? startLine));
+    const from = view.state.doc.line(startLine).from;
+    const to = view.state.doc.line(endLine).to;
+    view.dispatch({
+      selection: { anchor: from, head: to },
+      effects: EditorView.scrollIntoView(from, { y: 'center' }),
+    });
+    actions.consumePendingHighlight();
+  }, [pendingHighlight, actions]);
+
   return <div ref={hostRef} style={{ height: '100%' }} />;
 }
 

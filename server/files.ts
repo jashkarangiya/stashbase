@@ -18,7 +18,7 @@ import { onSwitch, requireCurrentSpace } from './space.ts';
 import { noteSelfWrite } from './watcher.ts';
 import { decodeEntities } from './html.ts';
 import { errorCode } from './log.ts';
-import { detectFormat, type FileFormat } from './format.ts';
+import { detectFormat, detectViewerFormat, type FileFormat, type ViewerFormat } from './format.ts';
 
 export { detectFormat, type FileFormat } from './format.ts';
 
@@ -285,7 +285,9 @@ export function deleteFolder(relPath: string): boolean {
 export interface FileEntry {
   /** Space-relative POSIX path (e.g. `topic/note.md`). */
   name: string;
-  format: FileFormat;
+  /** Widened to `ViewerFormat` to include viewable-only formats like
+   *  `pdf` (which are surfaced in the sidebar but never indexed). */
+  format: ViewerFormat;
   /** Raw file size on disk. Zero-byte notes are intentionally not indexed. */
   size: number;
   heading: string;
@@ -328,7 +330,7 @@ export function listFiles(): FileEntry[] {
   walk(root, '', (rel, full, ent) => {
     if (!ent.isFile()) return;
     if (ent.name.endsWith('.tmp')) return;
-    const format = detectFormat(ent.name);
+    const format = detectViewerFormat(ent.name);
     if (!format) return;
     let st: fs.Stats;
     try { st = fs.statSync(full); } catch { return; }
@@ -338,6 +340,15 @@ export function listFiles(): FileEntry[] {
     let entry: Pick<FileEntry, 'heading' | 'snippet' | 'imported_at'>;
     if (cached && cached.mtimeMs === st.mtimeMs) {
       entry = { heading: cached.heading, snippet: cached.snippet, imported_at: cached.imported_at };
+    } else if (format === 'pdf') {
+      // No cheap server-side preview for PDF — the file is binary;
+      // generating a heading/snippet would require running pdfjs in
+      // the server process (heavy) or shelling out (slow). The
+      // sidebar already has the filename to render; leave heading
+      // empty + snippet empty.
+      const imported_at = st.mtime.toISOString();
+      previewCache.set(full, { mtimeMs: st.mtimeMs, heading: '', snippet: '', imported_at });
+      entry = { heading: '', snippet: '', imported_at };
     } else {
       let content: string;
       try { content = fs.readFileSync(full, 'utf8'); } catch { return; }
@@ -412,7 +423,7 @@ function walk(
   const noteStems = new Set<string>();
   for (const e of entries) {
     if (!e.isFile()) continue;
-    const m = e.name.match(/^(.+)\.(md|markdown|html|htm)$/i);
+    const m = e.name.match(/^(.+)\.(md|markdown|html|htm|pdf)$/i);
     if (m) noteStems.add(m[1]);
   }
   for (const e of entries) {

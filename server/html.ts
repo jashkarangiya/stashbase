@@ -119,7 +119,9 @@ function addScrollBootstrap(html: string): string {
     var s = document.createElement('style');
     s.id = STYLE_ID;
     s.textContent = '::highlight(' + HL_ALL + ') { background: #ffe082; color: inherit; }' +
-                    '::highlight(' + HL_CUR + ') { background: #ff9800; color: #fff; }';
+                    '::highlight(' + HL_CUR + ') { background: #ff9800; color: #fff; }' +
+                    '::highlight(stashbase-chunk) { background: rgba(46, 116, 230, 0.18); ' +
+                    'box-shadow: 0 0 0 2px rgba(46, 116, 230, 0.45); border-radius: 2px; }';
     document.head.appendChild(s);
   }
   function buildRegex(q, ww) {
@@ -222,12 +224,83 @@ function addScrollBootstrap(html: string): string {
     } catch (_) {}
   }
 
+  var HL_CHUNK = 'stashbase-chunk';
+  var chunkHlTimer = null;
+  function clearChunkHl() {
+    if (chunkHlTimer) { clearTimeout(chunkHlTimer); chunkHlTimer = null; }
+    if (window.CSS && CSS.highlights) CSS.highlights.delete(HL_CHUNK);
+  }
+  // Walk text nodes searching for the first occurrence of the needle,
+  // returning a Range that spans it (or null). Whitespace-collapsing
+  // is applied on both sides so chunk text that came through the
+  // markdown-style flattener still finds its rendered counterpart.
+  function findTextRange(needle) {
+    if (!needle) return null;
+    var norm = function(s) { return (s || '').replace(/\\s+/g, ' ').trim(); };
+    needle = norm(needle).slice(0, 80);
+    if (!needle) return null;
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+    var node;
+    while ((node = walker.nextNode())) {
+      var txt = norm(node.nodeValue);
+      var idx = txt.indexOf(needle);
+      if (idx >= 0) {
+        // Re-locate the substring in the unnormalised nodeValue so the
+        // Range offsets line up with on-page characters.
+        var raw = node.nodeValue;
+        var k = 0; var seen = 0; var start = -1;
+        while (k < raw.length && start < 0) {
+          var ws = /\\s/.test(raw[k]);
+          if (!ws || (seen > 0 && raw[k - 1] && !/\\s/.test(raw[k - 1]))) {
+            if (seen === idx) { start = k; break; }
+            seen++;
+          }
+          k++;
+        }
+        if (start < 0) start = 0;
+        var end = Math.min(raw.length, start + needle.length);
+        var r = document.createRange();
+        try {
+          r.setStart(node, start);
+          r.setEnd(node, end);
+          return r;
+        } catch (_) { /* fall through */ }
+      }
+    }
+    return null;
+  }
+  function highlightChunk(text) {
+    clearChunkHl();
+    if (!window.CSS || !CSS.highlights || typeof Highlight === 'undefined') return;
+    var range = findTextRange(text);
+    if (!range) return;
+    try {
+      CSS.highlights.set(HL_CHUNK, new Highlight(range));
+    } catch (_) { return; }
+    // Use a probe so the smooth scroll lands centred even when the
+    // match sits deep in a long block.
+    var probe = document.createElement('span');
+    probe.setAttribute('data-stashbase-chunk-probe', '1');
+    try { range.insertNode(probe); probe.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    catch (_) {}
+    var parent = probe.parentNode;
+    probe.remove();
+    if (parent) parent.normalize();
+    // Auto-fade after 4s — long enough to register the location,
+    // short enough not to fight a follow-up find.
+    chunkHlTimer = setTimeout(clearChunkHl, 4000);
+  }
+
   window.addEventListener('message', function(e) {
     if (!e || !e.data) return;
     var d = e.data;
     if (d.type === 'stashbase-scroll') {
       var el = document.getElementById(d.id);
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    if (d.type === 'stashbase-chunk-highlight') {
+      highlightChunk(d.text || '');
       return;
     }
     if (d.type === 'stashbase-find') {

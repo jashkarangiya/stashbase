@@ -8,7 +8,13 @@
  * same for path segments embedded into the URL.
  */
 
-export type FileFormat = 'md' | 'html';
+/** Viewer format the renderer uses for tab routing. `md` / `html` are
+ *  indexed note formats (text loaded from `/api/files/*`); `pdf` is a
+ *  binary-only viewer (PDF.js renders the file straight from
+ *  `/asset/*`). The server's `detectFormat()` still excludes `pdf`
+ *  because PDFs aren't indexed — this type is wider than the server's
+ *  on purpose. */
+export type FileFormat = 'md' | 'html' | 'pdf';
 
 export interface FileMeta {
   name: string;
@@ -61,12 +67,39 @@ export interface IndexStatus {
    *  into a readable note + bundle. Empty when no conversions are in
    *  flight. Used by the sidebar to render a transient indicator. */
   pendingConversions?: string[];
+  /** Persistent failure list — PDFs whose most recent conversion
+   *  attempt errored. Survives app restart (read back from
+   *  `<KB>/.stashbase/pdf-status.json`). Empty when no failures.
+   *  Drives the failures-list UI and the per-file Retry banner in
+   *  PdfPreview. */
+  pdfFailures?: PdfFailure[];
   /** Monotonic counter the server bumps on every external fs event
    *  (after self-write filtering). Renderer compares against its
    *  last-seen value and triggers `/api/files` on any change — picks
    *  up writes from the terminal panel (Claude Code, `touch`, …) even
    *  for non-indexable files / empty dirs that don't move `pending`. */
   treeVersion?: number;
+}
+
+/** Persistent PDF conversion failure record (subset of the on-disk
+ *  entry — we strip timestamps the UI doesn't need). */
+export interface PdfFailure {
+  path: string;
+  lastError: string;
+  attempts: number;
+}
+
+/** Full PDF status entries returned by `GET /api/pdf/status`. Keyed by
+ *  KB-relative path. PdfPreview uses this to pick out the entry for
+ *  the file it's rendering and decide whether to show the failure
+ *  banner. */
+export type PdfStatusKind = 'in-flight' | 'done' | 'failed' | 'cancelled';
+export interface PdfStatusEntry {
+  status: PdfStatusKind;
+  attempts: number;
+  lastError?: string;
+  lastAttemptAt: string;
+  doneAt?: string;
 }
 
 export interface SyncResult {
@@ -291,6 +324,19 @@ export const api = {
   search: (query: string, top_k = 8) =>
     send<{ hits: SearchHit[] }>('POST', '/api/search', { query, top_k }),
   indexStatus: () => getJson<IndexStatus>('/api/index-status'),
+
+  /** Full per-file PDF conversion status, KB-wide, keyed by KB-relative
+   *  path. PdfPreview calls this when the active file is a PDF to
+   *  decide whether to render the failure banner. */
+  pdfStatus: () =>
+    getJson<{ entries: Record<string, PdfStatusEntry> }>('/api/pdf/status'),
+  /** Retry conversion of a specific PDF (space-relative path). Clears
+   *  the existing status record, removes the stale derived note + bundle
+   *  if present, then re-fires the converter in the background. Client
+   *  observes the outcome via the next `/api/index-status` or
+   *  `/api/pdf/status` poll. */
+  retryPdf: (path: string) =>
+    send<{ ok: boolean }>('POST', '/api/pdf/retry', { path }),
 
   // Embedder ----------------------------------------------------
   getEmbedder: () => getJson<EmbedderState>('/api/embedder'),

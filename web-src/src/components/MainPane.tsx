@@ -5,6 +5,7 @@ import { FindBar } from './FindBar';
 import { HtmlPreview } from './HtmlPreview';
 import { MarkdownPreview } from './MarkdownPreview';
 import { PathBreadcrumb } from './PathBreadcrumb';
+import { PdfPreview } from './PdfPreview';
 import { Split } from './Split';
 import { TabStrip } from './TabStrip';
 
@@ -33,6 +34,10 @@ export function MainPane() {
   const canForward = navCursor >= 0 && navCursor < navStack.length - 1;
   const hasTabs = state.tabs.length > 0;
   const emptyTab = !!activeTab && !cur;
+  // PDF-derived HTML dual-view: side-by-side HTML + PDF when the
+  // search-hit flow detected a sibling .pdf for the active note.
+  const pdfSplit = cur && cur.format === 'html' && state.pdfSplit?.html === cur.name
+    ? state.pdfSplit : null;
 
   return (
     <main className={'main' + (hasTabs ? '' : ' no-file')}>
@@ -48,10 +53,31 @@ export function MainPane() {
         {cur && !editMode && cur.format === 'md' && (
           <MarkdownPreview name={cur.name} content={cur.content} />
         )}
-        {cur && !editMode && cur.format === 'html' && (
+        {cur && !editMode && cur.format === 'html' && !pdfSplit && (
           <HtmlPreview name={cur.name} />
         )}
-        {cur && editMode && (
+        {cur && !editMode && cur.format === 'html' && pdfSplit && (
+          // Dual-view: HTML left, PDF right. Two viewer instances —
+          // each owns its own iframe / canvas state — sitting in a
+          // 50/50 horizontal split. Plain CSS grid; no draggable
+          // divider in v1 (see Desktop UI Planned 04 for the future).
+          <div className="pdf-dual-view">
+            <div className="pdf-dual-pane">
+              <HtmlPreview name={cur.name} />
+            </div>
+            <div className="pdf-dual-divider" aria-hidden />
+            <div className="pdf-dual-pane">
+              <PdfPreview name={pdfSplit.pdf} />
+            </div>
+          </div>
+        )}
+        {cur && cur.format === 'pdf' && (
+          // PDFs have no edit mode — the source is a binary file.
+          // Edit-toggle is hidden below; PdfPreview renders in both
+          // "preview" and "edit" states.
+          <PdfPreview name={cur.name} />
+        )}
+        {cur && editMode && cur.format !== 'pdf' && (
           <Split name={cur.name} format={cur.format} initialContent={cur.content} />
         )}
       </div>
@@ -84,12 +110,22 @@ export function MainPane() {
         </div>
       )}
       <FindBar />
-      {cur && cur.kind !== 'library' && (
+      {cur && cur.kind !== 'library' && cur.format !== 'pdf' && (
         <div className={'main-floating-actions' + (editMode ? ' editing' : '')}>
           {editMode && saveStatus.text && (
             <span className={'save-status' + (saveStatus.cls ? ' ' + saveStatus.cls : '')}>
               {saveStatus.text}
             </span>
+          )}
+          {cur.format === 'html' && (
+            <button
+              className={'icon-btn pdf-split-toggle' + (pdfSplit ? ' active' : '')}
+              type="button"
+              title={pdfSplit ? 'Hide original PDF' : 'Show original PDF'}
+              onClick={() => { void actions.toggleSplitOriginalPdf(); }}
+            >
+              PDF
+            </button>
           )}
           <button
             className={'icon-btn edit-toggle' + (editMode ? ' editing' : '')}
@@ -101,6 +137,12 @@ export function MainPane() {
             <PreviewIcon className="icon-preview" />
           </button>
         </div>
+      )}
+      {cur && cur.format === 'pdf' && (
+        // Slot that PdfPreview portals its zoom / page-count chrome
+        // into — sits on the same row as back/forward + breadcrumb
+        // so we don't waste a row on viewer chrome.
+        <div className="main-floating-actions" id="pdf-chrome-slot" />
       )}
     </main>
   );

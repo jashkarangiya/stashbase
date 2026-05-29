@@ -38,10 +38,13 @@ export interface TerminalTab {
 
 export interface OpenFile {
   name: string;
-  format: 'md' | 'html';
-  /** Last on-disk content — diff target for the autosave path. */
+  format: 'md' | 'html' | 'pdf';
+  /** Last on-disk content — diff target for the autosave path. Empty
+   *  string for PDF (binary file; PdfPreview loads it directly). */
   content: string;
-  /** Server-supplied for HTML; live-extracted for MD (see Outline). */
+  /** Server-supplied for HTML; live-extracted for MD (see Outline);
+   *  PdfPreview dispatches OUTLINE_HEADINGS once pdfjs `getOutline()`
+   *  returns. */
   headings: Heading[];
   /** `'library'` for the `<kbRoot>/AGENT.md` special tab — read-only,
    *  no edit button, no save path. Default (omitted) means a regular
@@ -86,7 +89,22 @@ export interface Tab {
   navCursor: number;
   pendingAnchor: string | null;
   pendingScrollY: number | null;
+  /** Set when a viewer should highlight a specific chunk on next
+   *  render — typically after a click on a SearchHitRow. The viewer
+   *  reads it, scrolls to the range, paints a fading overlay, and
+   *  dispatches PENDING_HIGHLIGHT_CLEAR. Cleared automatically when
+   *  the user navigates to a different file. */
+  pendingHighlight: PendingHighlight | null;
   saveStatus: SaveStatus;
+}
+
+/** Search-hit-derived highlight signal: which lines (for HTML / MD /
+ *  code viewers) plus the raw chunk text (for the PDF viewer to do
+ *  text-layer search when line numbers don't apply). */
+export interface PendingHighlight {
+  startLine?: number;
+  endLine?: number;
+  chunkText: string;
 }
 
 /** Data for the rename-cascade confirmation dialog (VSCode "Update N
@@ -117,6 +135,12 @@ export interface State {
   welcomeError: string | null;
 
   space: string;
+  /** Active "show original PDF" split: when set, MainPane renders the
+   *  HTML preview on the left and the named PDF on the right. Auto-
+   *  set when a search hit on a PDF-derived HTML opens; cleared by
+   *  the toolbar toggle or when the user navigates to an unrelated
+   *  file. */
+  pdfSplit: { html: string; pdf: string } | null;
   recent: { path: string; openedAt: string }[];
   /** OS home directory — used by the Welcome screen to render
    *  `~/foo` instead of the full `/Users/<name>/foo`. */
@@ -220,6 +244,7 @@ export const initialState: State = {
   welcomeVisible: true,
   welcomeError: null,
   space: '',
+  pdfSplit: null,
   recent: [],
   homeDir: '',
   files: [],
@@ -320,6 +345,8 @@ export type Action =
   | { type: 'NAV_SNAPSHOT_SCROLL'; scrollY: number }
   | { type: 'NAV_RESET' }
   | { type: 'PENDING_SCROLL'; anchor: string | null; scrollY: number | null }
+  | { type: 'PENDING_HIGHLIGHT'; highlight: PendingHighlight | null }
+  | { type: 'PDF_SPLIT'; split: { html: string; pdf: string } | null }
   | { type: 'CASCADE_PROMPT'; prompt: CascadePrompt | null }
   | { type: 'MODAL_OPEN'; request: ModalRequest }
   | { type: 'MODAL_CLOSE' }
@@ -347,6 +374,7 @@ export function makeTab(): Tab {
     navCursor: -1,
     pendingAnchor: null,
     pendingScrollY: null,
+    pendingHighlight: null,
     saveStatus: { text: '', cls: '' },
   };
 }
@@ -425,6 +453,7 @@ export function reducer(s: State, a: Action): State {
           saveStatus: { text: '', cls: '' },
           pendingAnchor: null,
           pendingScrollY: null,
+          pendingHighlight: null,
           // Only touch `preview` when explicitly asked — back/forward
           // and in-place anchor nav reuse the same tab and must keep
           // its existing preview/pinned status.
@@ -631,6 +660,10 @@ export function reducer(s: State, a: Action): State {
       };
     case 'PENDING_SCROLL':
       return patchActiveTab(s, { pendingAnchor: a.anchor, pendingScrollY: a.scrollY });
+    case 'PENDING_HIGHLIGHT':
+      return patchActiveTab(s, { pendingHighlight: a.highlight });
+    case 'PDF_SPLIT':
+      return { ...s, pdfSplit: a.split };
     case 'CASCADE_PROMPT':
       return { ...s, cascadePrompt: a.prompt };
     case 'NEW_FOLDER_INPUT':

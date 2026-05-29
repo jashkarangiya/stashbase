@@ -20,6 +20,8 @@ export function Outline() {
   // OUTLINE_HEADINGS; fall back to extracting from the saved buffer
   // (which is what we'll see in read-only preview before any edit).
   // HTML: trust the server-provided list.
+  // PDF: trust whatever PdfPreview pushed via OUTLINE_HEADINGS — the
+  // outline comes from pdfjs `getOutline()` at load time.
   const items = !cur
     ? []
     : cur.format === 'md' && cur.headings.length === 0
@@ -56,8 +58,17 @@ export function Outline() {
  *  HTML runs scripts (sandbox=allow-scripts, no same-origin) so we
  *  postMessage; MD read-only preview uses allow-same-origin and lets
  *  us hash-nav directly. Edit-mode MD preview is also script-mode
- *  (we injected the bootstrap), so postMessage works there too. */
-function scrollToHeading(id: string, format: 'md' | 'html', editMode: boolean) {
+ *  (we injected the bootstrap), so postMessage works there too.
+ *  PDF outline entries are addressed `pdf-h-N`; PdfPreview listens on
+ *  the window for `stashbase-pdf-scroll` and scrolls to the matching
+ *  outline entry. */
+function scrollToHeading(id: string, format: 'md' | 'html' | 'pdf', editMode: boolean) {
+  if (format === 'pdf') {
+    try {
+      window.dispatchEvent(new CustomEvent('stashbase-pdf-scroll', { detail: { id } }));
+    } catch { /* swallow */ }
+    return;
+  }
   const iframe = document.getElementById('previewFrame') as HTMLIFrameElement | null;
   if (!iframe) return;
   if (format === 'html' || editMode) {

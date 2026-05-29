@@ -23,6 +23,7 @@ import { useApp, type MatchInfo } from '../store/AppContext';
 export function HtmlPreview({ name }: { name: string }) {
   const { state, actions, activeTab } = useApp();
   const pendingAnchor = activeTab?.pendingAnchor ?? null;
+  const pendingHighlight = activeTab?.pendingHighlight ?? null;
   const content = activeTab?.file?.content ?? '';
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   // Tracks which `name` the iframe has finished loading. We only post
@@ -63,9 +64,22 @@ export function HtmlPreview({ name }: { name: string }) {
     actions.consumePendingScroll();
   }
 
+  function postChunkHighlight() {
+    if (!pendingHighlight) return;
+    if (loadedNameRef.current !== name) return;
+    try {
+      frameRef.current?.contentWindow?.postMessage(
+        { type: 'stashbase-chunk-highlight', text: pendingHighlight.chunkText },
+        '*',
+      );
+    } catch { /* swallow */ }
+    actions.consumePendingHighlight();
+  }
+
   function onLoad() {
     loadedNameRef.current = name;
     postScroll();
+    postChunkHighlight();
     // Re-apply the current query if the bar is open across reload.
     const snap = findAtMount.current;
     if (snap.open && snap.query) {
@@ -75,6 +89,7 @@ export function HtmlPreview({ name }: { name: string }) {
 
   // Same-file anchor jumps fire this; cross-file jumps wait for onLoad.
   useEffect(() => { postScroll(); /* eslint-disable-next-line */ }, [pendingAnchor, name]);
+  useEffect(() => { postChunkHighlight(); /* eslint-disable-next-line */ }, [pendingHighlight, name]);
 
   // Register a postMessage-based find controller. The iframe runs the
   // walk-and-highlight algorithm itself (sandbox=allow-scripts blocks

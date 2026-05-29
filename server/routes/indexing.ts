@@ -8,10 +8,11 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { errorMessage, logger } from '../log.ts';
-import { fromKbRel, getCurrentSpace, getCurrentSpaceName, getKbRoot, isUnderRoot } from '../space.ts';
+import { fromKbRel, getCurrentSpace, getCurrentSpaceName, getKbRoot, isUnderRoot, toKbRel } from '../space.ts';
 import { syncIndex } from '../sync.ts';
 import { syncSkillsToCli } from '../skills.ts';
-import { getInFlightPdfs } from '../pdf.ts';
+import { getInFlightPdfs, maybeConvertPdf } from '../pdf.ts';
+import { clearRecord, listByStatus, readAll as readPdfStatus } from '../pdf-status.ts';
 import { getFsChangeCounter } from '../watcher.ts';
 import { getDaemon } from '../mfs-daemon.ts';
 import { indexer } from '../state.ts';
@@ -77,19 +78,85 @@ export function mount(app: express.Express): void {
       const space = getCurrentSpaceName();
       const status = await indexer.status(space ?? undefined);
       // Convert kbRoot-relative paths back to space-relative for the UI.
+      // Drop `.pdf` from `pending`: PDFs are visible in the sidebar
+      // (listFiles surfaces them) but never enter the index — keeping
+      // them in `pending` would mean the sidebar permanently pulses
+      // "indexing…" on every PDF row, since they'd never clear.
       const pending = status.pending
         .map((p) => fromKbRel(p))
-        .filter((p): p is string => p != null);
+        .filter((p): p is string => p != null)
+        .filter((p) => !/\.pdf$/i.test(p));
       const orphaned = status.orphaned
         .map((p) => fromKbRel(p))
         .filter((p): p is string => p != null);
+      // PDF status: space-scoped. `pendingConversions` keeps the old
+      // shape (in-flight only) for backwards compatibility with the
+      // sidebar "Converting…" indicator. `pdfFailures` surfaces the
+      // persistent failure list so the UI can render Retry entries.
+      const pdfFailures = listByStatus('failed')
+        .map(({ path: kbRel, entry }) => {
+          const rel = fromKbRel(kbRel);
+          return rel == null ? null : { path: rel, lastError: entry.lastError ?? '', attempts: entry.attempts };
+        })
+        .filter((x): x is { path: string; lastError: string; attempts: number } => x !== null);
       res.json({
         ...status,
         pending,
         orphaned,
         pendingConversions: getInFlightPdfs(),
+        pdfFailures,
         treeVersion: getFsChangeCounter(),
       });
+    } catch (err: unknown) {
+      sendError(res, err);
+    }
+  });
+
+  // PDF conversion status: full map, KB-wide. Used by PdfPreview to
+  // render the per-file failure banner (cheaper than polling the
+  // space-scoped /api/index-status when the viewer just needs one
+  // PDF's status).
+  app.get('/api/pdf/status', (_req, res) => {
+    try {
+      res.json({ entries: readPdfStatus() });
+    } catch (err: unknown) {
+      sendError(res, err);
+    }
+  });
+
+  // PDF Retry: take a space-relative path, clear its status record,
+  // then fire the converter again. The fire-and-forget convert path
+  // writes back to pdf-status.json with the new outcome; the client
+  // polls /api/index-status or /api/pdf/status to observe the
+  // result.
+  app.post('/api/pdf/retry', (req, res) => {
+    try {
+      const rel = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
+      if (!rel) return res.status(400).json({ error: 'path required' });
+      const space = getCurrentSpace();
+      if (!space) return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
+      const abs = path.resolve(space, rel);
+      if (!isUnderRoot(abs)) return res.status(400).json({ error: 'path escapes kbRoot' });
+      if (!fs.existsSync(abs)) return res.status(404).json({ error: 'file not found' });
+      // Clear by KB-relative form (matches what maybeConvertPdf writes
+      // when it spins back up).
+      try {
+        const kbRel = toKbRel(rel);
+        clearRecord(kbRel);
+      } catch { /* no current space — guarded above, defensive */ }
+      // Also remove any stale converted note so maybeConvertPdf's
+      // "skip if note exists" guard doesn't immediately bail. We
+      // leave the .pdf in place (it's the source); the user's Retry
+      // intent is to re-derive the .html / .md.
+      const fmt = process.env.STASHBASE_PDF_FORMAT === 'md' ? 'md' : 'html';
+      const stem = path.basename(abs, path.extname(abs));
+      const dir = path.dirname(abs);
+      const stale = path.join(dir, `${stem}.${fmt}`);
+      try { fs.rmSync(stale, { force: true }); } catch { /* no stale to remove */ }
+      const bundle = path.join(dir, `${stem}_files`);
+      try { fs.rmSync(bundle, { recursive: true, force: true }); } catch { /* no bundle */ }
+      maybeConvertPdf(abs, rel);
+      res.json({ ok: true });
     } catch (err: unknown) {
       sendError(res, err);
     }

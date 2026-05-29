@@ -17,6 +17,7 @@ export function MarkdownPreview({ name, content }: { name: string; content: stri
   const { state, actions, activeTab } = useApp();
   const pendingAnchor = activeTab?.pendingAnchor ?? null;
   const pendingScrollY = activeTab?.pendingScrollY ?? null;
+  const pendingHighlight = activeTab?.pendingHighlight ?? null;
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   // Snapshot find-bar state for the mount-time re-apply path. Read via
   // ref so the registration effect doesn't churn on every find tick.
@@ -132,6 +133,20 @@ export function MarkdownPreview({ name, content }: { name: string; content: stri
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingAnchor, pendingScrollY, html]);
 
+  // Chunk-highlight after a SearchHit click. allow-same-origin lets
+  // us walk the iframe DOM from the parent directly — no postMessage
+  // needed (unlike HtmlPreview, which has to route through the
+  // injected bootstrap because the HTML iframe is fully sandboxed).
+  useEffect(() => {
+    if (!pendingHighlight) return;
+    if (loadedHtmlRef.current !== html) return;
+    const doc = frameRef.current?.contentDocument;
+    if (!doc) return;
+    applyChunkHighlight(doc, pendingHighlight.chunkText);
+    actions.consumePendingHighlight();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingHighlight, html]);
+
   function applyPendingScroll(doc: Document) {
     if (pendingAnchor) {
       const el = doc.getElementById(pendingAnchor);
@@ -204,6 +219,55 @@ function parseAssetUrl(url: URL): { path: string; anchor?: string } | null {
   if (!/\.(md|markdown|html|htm)$/i.test(decoded)) return null;
   const anchor = url.hash.startsWith('#') ? url.hash.slice(1) : undefined;
   return { path: decoded, anchor };
+}
+
+/** Find the first occurrence of `text` (normalised to a single-space
+ *  representation) inside `doc.body`, wrap it in a transient span with
+ *  a fade-out CSS animation, and scroll it into view. The span removes
+ *  itself after 4s so the highlight doesn't linger across navigations. */
+function applyChunkHighlight(doc: Document, raw: string): void {
+  const needle = raw.replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (!needle) return;
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    const txt = (node.nodeValue || '').replace(/\s+/g, ' ');
+    const idx = txt.indexOf(needle);
+    if (idx < 0) continue;
+    // Re-find in the raw nodeValue so range offsets line up. We don't
+    // bother building a precise raw-vs-normalised offset map; the
+    // visible difference between "found within normalised text" and
+    // "found within raw text" is rarely material for highlighting.
+    const rawValue = node.nodeValue || '';
+    const rawIdx = rawValue.indexOf(needle);
+    const start = rawIdx >= 0 ? rawIdx : 0;
+    const end = Math.min(rawValue.length, start + needle.length);
+    const range = doc.createRange();
+    try { range.setStart(node, start); range.setEnd(node, end); } catch { return; }
+    const span = doc.createElement('span');
+    span.setAttribute('data-stashbase-chunk-hl', '1');
+    span.style.background = 'rgba(46, 116, 230, 0.18)';
+    span.style.boxShadow = '0 0 0 2px rgba(46, 116, 230, 0.45)';
+    span.style.borderRadius = '2px';
+    span.style.transition = 'background 0.6s ease-out, box-shadow 0.6s ease-out';
+    try { range.surroundContents(span); }
+    catch { return; }
+    span.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setTimeout(() => {
+      span.style.background = 'transparent';
+      span.style.boxShadow = 'none';
+    }, 3000);
+    setTimeout(() => {
+      // Unwrap so the DOM returns to its original shape; no need for
+      // a global cleanup pass on next highlight.
+      const parent = span.parentNode;
+      if (!parent) return;
+      while (span.firstChild) parent.insertBefore(span.firstChild, span);
+      parent.removeChild(span);
+      parent.normalize();
+    }, 4000);
+    return;
+  }
 }
 
 function withMarkdownAssetBase(html: string, baseHref: string): string {

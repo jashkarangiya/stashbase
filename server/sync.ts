@@ -22,7 +22,8 @@
  * still operates space-relative).
  */
 import { readText } from './files.ts';
-import { fromKbRel } from './space.ts';
+import { discoverNewPdfs } from './pdf.ts';
+import { fromKbRel, getCurrentSpace } from './space.ts';
 import type { Indexer } from './indexer.ts';
 import { logger, errorMessage } from './log.ts';
 
@@ -39,6 +40,14 @@ export interface SyncResult {
  *  (e.g. `cs183b`) — the current open space. Returns space-relative
  *  paths so the manual sync UI can show them straight. */
 export async function syncIndex(indexer: Indexer, space: string): Promise<SyncResult> {
+  // Surface untracked PDFs before running the index diff. We don't
+  // await individual conversions — the converter writes the derived
+  // .html / .md to disk and the fs.watch debounce will catch it on
+  // its next tick. We just want the queueing to start so the user
+  // sees pendingConversions populate.
+  const cur = getCurrentSpace();
+  if (cur) discoverNewPdfs(cur);
+
   const diff = await indexer.syncDiff(space);
   const failed: { name: string; error: string }[] = [];
 
@@ -87,6 +96,11 @@ export async function syncIndex(indexer: Indexer, space: string): Promise<SyncRe
 /** Name-only diff for the current space. Skips content hashing for
  *  speed; the manual sync button (POST /api/sync) handles drift. */
 export async function syncNewFiles(indexer: Indexer, space: string): Promise<SyncResult> {
+  // Same rationale as syncIndex: queue untracked PDFs first so the
+  // sidebar's "Converting…" indicator shows up on space open.
+  const cur = getCurrentSpace();
+  if (cur) discoverNewPdfs(cur);
+
   const status = await indexer.status(space);
   if (status.pending.length === 0 && status.orphaned.length === 0) {
     log.info('index up to date (name-only check)');
