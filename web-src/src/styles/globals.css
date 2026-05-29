@@ -1,0 +1,142 @@
+    :root {
+      color-scheme: light;
+      --fg: #333333;
+      --muted: #8a8a8a;
+      --bg: #ffffff;
+      --pane: #fafafa;
+      --card: #fff;
+      --border: #ececec;
+      /* Cyan accent — matches the .html file icon. Paired with the
+       * #d9a000 amber on .md icons, the two are the project's color
+       * signature (see `.tree-row.file.format-*` comments). */
+      --accent: #0891b2;
+      --hover: #f0f0f0;
+      --active: #e8e8e8;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      font: 14px/1.55 -apple-system, system-ui, "PingFang SC", "Hiragino Sans", sans-serif;
+      color: var(--fg);
+      background: var(--bg);
+      overflow: hidden;
+    }
+
+    /* React mounts into #root — make IT the flex column so the chrome
+     * strip + .app grid get the full viewport. With this on `body` the
+     * flex chain breaks at #root (a plain block) and `.app` collapses
+     * to its content height (~200px). */
+    #root {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Dedicated chrome strip across the top of the window — holds the
+     * embedder picker on the right. In Electron with `hiddenInset` the
+     * macOS traffic lights are inset at the left (x:14, y:14) and the
+     * rest of the strip is empty; we paint our own background so the
+     * boundary between OS chrome and app content is seamless. The whole
+     * strip is a drag region; interactive controls (the picker button)
+     * opt out via the `no-drag` rule below. */
+    .app-chrome {
+      position: relative;
+      flex-shrink: 0;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      background: var(--pane);
+      border-bottom: 1px solid var(--border);
+    }
+
+    /* Left group sits to the right of the traffic lights (which overlay
+     * at x:14, y:14, taking ~62px). Padding here keeps the toggle button
+     * clear of the OS chrome. macOS fullscreen hides the traffic lights;
+     * the `.is-fullscreen` body class (driven by Electron IPC) drops
+     * the inset so the toggle hugs the edge again. */
+    .app-chrome-left {
+      padding-left: 62px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    body.is-fullscreen .app-chrome-left {
+      padding-left: 0;
+    }
+
+    .app-chrome-right {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    /* Centered space name, VSCode-titlebar style. Absolutely positioned
+     * so traffic lights (left) and embedder picker (right) can grow
+     * independently without nudging it off-center. `max-width` leaves
+     * a guard band so a long name truncates with ellipsis instead of
+     * sliding under the picker. */
+    .app-chrome-title {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--muted);
+      white-space: nowrap;
+      max-width: calc(100% - 280px);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      pointer-events: none;
+    }
+
+    body.is-electron .app-chrome {
+      -webkit-app-region: drag;
+    }
+
+    body.is-electron button,
+    body.is-electron input,
+    body.is-electron .tree-row,
+    body.is-electron .outline-item,
+    body.is-electron a,
+    body.is-electron strong {
+      -webkit-app-region: no-drag;
+    }
+
+    .app {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      /* Four columns always — sidebar | main | splitter | terminal.
+       * Closed sidebar / terminal collapse their tracks to 0 instead
+       * of structurally adding/removing columns, so CSS can transition
+       * the widths smoothly. The transition applies on toggles in both
+       * directions (sidebar collapse, terminal open/close). */
+      grid-template-columns: 280px 1fr 0 0;
+      /* Explicit single-row track so .sidebar fills the height instead
+       * of shrinking to its content — the Outline pane lives at the
+       * bottom of the sidebar and depends on the column being tall. */
+      grid-template-rows: minmax(0, 1fr);
+      transition: grid-template-columns 220ms ease;
+    }
+
+    /* Sidebar hidden via toggle — main pane takes the whole width.
+     * Keep the sidebar mounted (preserves selection / scroll / search
+     * state); shrinking the column to 0 + sidebar's own overflow:hidden
+     * is enough to make it invisible without unmounting. */
+    .app.sidebar-collapsed {
+      grid-template-columns: 0 1fr 0 0;
+    }
+

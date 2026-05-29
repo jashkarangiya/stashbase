@@ -1,0 +1,325 @@
+    /* Terminal panel docked on the right. `--terminal-width` is a CSS
+     * var the React layer drives from `state.terminalWidth`, so the
+     * drag-resize handle updates the layout directly without re-rendering
+     * the heavy panes. A thin splitter sits in its own grid column so
+     * users have a discrete drag target. */
+    .app.terminal-open {
+      grid-template-columns: 280px 1fr 6px var(--terminal-width, 480px);
+    }
+    .app.sidebar-collapsed.terminal-open {
+      grid-template-columns: 0 1fr 6px var(--terminal-width, 480px);
+    }
+
+    .terminal-splitter {
+      grid-column: 3;
+      grid-row: 1;
+      cursor: col-resize;
+      background: var(--border);
+      opacity: 0.5;
+      transition: opacity .12s, background .12s;
+    }
+    .terminal-splitter:hover,
+    .terminal-splitter:active {
+      opacity: 1;
+      background: var(--accent);
+    }
+
+    /* Outer container — fills the 4th grid track. Holds the chat-tab
+     * strip + a body that overlays one xterm per tab. */
+    .terminal-pane-shell {
+      grid-column: 4;
+      grid-row: 1;
+      min-width: 0;
+      overflow: hidden;
+      background: var(--pane);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Cursor-style tab strip at the top of the chat panel. Scrolls
+     * horizontally when many tabs are open; `+` button stays pinned
+     * to the right via flex layout. */
+    .terminal-tabs {
+      display: flex;
+      align-items: stretch;
+      gap: 4px;
+      padding: 6px 6px 4px 6px;
+      min-height: 32px;
+    }
+    .terminal-tabs-list {
+      display: flex;
+      flex: 1;
+      gap: 2px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: thin;
+    }
+    .terminal-tabs-list::-webkit-scrollbar { height: 4px; }
+    .terminal-tabs-list::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 2px;
+    }
+    .terminal-tabs-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .terminal-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px 4px 10px;
+      max-width: 180px;
+      min-width: 0;
+      font-size: 12px;
+      color: var(--muted);
+      border-radius: 6px 6px 0 0;
+      cursor: pointer;
+      border: 1px solid transparent;
+      border-bottom: 0;
+      background: transparent;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .terminal-tab:hover {
+      background: var(--hover);
+      color: var(--fg);
+    }
+    .terminal-tab.active {
+      background: var(--bg);
+      color: var(--fg);
+      border-color: var(--border);
+      font-weight: 500;
+      padding-bottom: 5px;
+    }
+    .terminal-tab-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .terminal-tab-close {
+      width: 18px;
+      height: 18px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1;
+      border-radius: 4px;
+      cursor: pointer;
+      flex-shrink: 0;
+      /* Hidden by default — only surfaces on tab hover or for the
+       * active tab. Avoids visual clutter when many tabs are open. */
+      opacity: 0;
+    }
+    .terminal-tab:hover .terminal-tab-close,
+    .terminal-tab.active .terminal-tab-close {
+      opacity: 1;
+    }
+    .terminal-tab-close:hover {
+      background: var(--hover);
+      color: var(--fg);
+    }
+
+    .terminal-tab-new {
+      width: 24px;
+      height: 24px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .terminal-tab-new:hover {
+      background: var(--hover);
+      color: var(--fg);
+    }
+
+    /* Body — relative anchor for the absolutely-positioned tab panes
+     * below. Inactive panes stay mounted (preserving scrollback +
+     * PTY) but render off-screen via `visibility: hidden`. */
+    .terminal-tabs-body {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+    }
+    .terminal-tab-pane {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    .terminal-tab-pane.active {
+      visibility: visible;
+      pointer-events: auto;
+    }
+
+    /* `.terminal-pane` is now the inside of one tab body, not the
+     * grid container. Holds either the xterm host or the install /
+     * progress card. */
+    .terminal-pane {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .terminal-pane.xterm-host {
+      padding: 8px 4px 4px 8px;
+    }
+    /* xterm's own root needs to fill the host so the FitAddon can
+     * compute cols/rows from the actual painted dimensions. */
+    .terminal-pane .xterm,
+    .terminal-pane .xterm-viewport,
+    .terminal-pane .xterm-screen {
+      width: 100%;
+      height: 100%;
+    }
+    .terminal-pane .xterm-viewport {
+      background: var(--pane) !important;
+    }
+
+    .terminal-pane.status {
+      padding: 16px 18px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .install-card,
+    .install-progress {
+      padding: 18px 18px 14px;
+      overflow-y: auto;
+      gap: 10px;
+    }
+    .install-card-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--fg);
+    }
+    .install-card-hint {
+      font-size: 12.5px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin: 0;
+    }
+    .install-card-hint code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      background: var(--hover);
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    .install-card-cmd {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--hover);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+    }
+    .install-card-cmd code {
+      flex: 1;
+      min-width: 0;
+      overflow: auto;
+      white-space: nowrap;
+    }
+    .install-card-copy {
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--fg);
+      padding: 3px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 11px;
+    }
+    .install-card-copy:hover {
+      background: var(--hover);
+    }
+    .install-card-log {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11.5px;
+      background: var(--hover);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      padding: 10px 12px;
+      border-radius: 6px;
+      max-height: 240px;
+      overflow: auto;
+      white-space: pre-wrap;
+      margin: 4px 0 0;
+    }
+    .install-card-log.live {
+      flex: 1;
+      max-height: none;
+    }
+    .install-card-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .install-card-foot {
+      font-size: 11px;
+      color: var(--muted);
+      margin: 0;
+      line-height: 1.5;
+    }
+
+    /* Chrome-row terminal toggle — icon-only, sits next to the gear.
+     * Inherits everything from `.icon-btn`; `.active` tints it when
+     * the right-side panel is open. The CLI selection lives in
+     * Settings → Chat CLI (see SettingsModal). */
+    .icon-btn.terminal-toggle.active {
+      background: rgba(8, 145, 178, 0.08);
+      color: var(--accent);
+    }
+
+    /* Each row in the picker is its own flex container so the
+     * Uninstall affordance (right side) and checkmark have a stable
+     * column independent of the label length. */
+    .cli-row {
+      cursor: pointer;
+      gap: 12px;
+    }
+    .cli-row-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    /* Uninstall surfaces on row hover only — keeps the dropdown quiet
+     * when the user is just browsing, but the action is one click
+     * away when they want it. */
+    .cli-uninstall {
+      visibility: hidden;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--muted);
+      font: inherit;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .cli-row:hover .cli-uninstall,
+    .cli-uninstall:disabled {
+      visibility: visible;
+    }
+    .cli-uninstall:hover:not(:disabled) {
+      color: #b91c1c;
+      border-color: rgba(220, 38, 38, 0.4);
+      background: rgba(220, 38, 38, 0.05);
+    }
+    .cli-uninstall:disabled {
+      cursor: progress;
+      opacity: 0.7;
+    }
+
