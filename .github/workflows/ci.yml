@@ -23,8 +23,59 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
+      - name: Typecheck server + mcp
         run: pnpm exec tsc --noEmit
+
+      - name: Typecheck renderer (web-src)
+        run: pnpm exec tsc --noEmit -p web-src/tsconfig.json
 
       - name: Build web + server
         run: pnpm build
+
+  package-mac:
+    # Validates the release pipeline can produce an unsigned .app bundle
+    # — catches asarUnpack mis-config (e.g. native binaries baked into
+    # asar), extraResources globbing typos, and electron-builder schema
+    # drift before they bite during `pnpm dist:brew`. We skip the DMG
+    # step (`--dir`) so the job stays under ~5 min and avoids the
+    # PyInstaller python-sidecar build (which only matters for the
+    # actual release).
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web + server + mcp
+        run: pnpm build
+
+      - name: Package unsigned .app (dry-run, no DMG / no PyInstaller)
+        run: pnpm pack:mac
+
+      - name: Verify ripgrep binary made it out of asar
+        # If asarUnpack misses @vscode/ripgrep the binary ends up baked
+        # into app.asar and can't be spawned at runtime. This walk
+        # confirms `rg` exists outside the asar archive.
+        run: |
+          set -euo pipefail
+          unpacked_root="release/mac-arm64/StashBase.app/Contents/Resources/app.asar.unpacked"
+          if [ ! -d "$unpacked_root" ]; then
+            echo "::error::expected unpacked dir not found at $unpacked_root"
+            exit 1
+          fi
+          rg_path=$(find "$unpacked_root" -type f -name rg -print -quit || true)
+          if [ -z "$rg_path" ]; then
+            echo "::error::ripgrep binary missing from app.asar.unpacked — check package.json asarUnpack"
+            exit 1
+          fi
+          echo "OK: ripgrep unpacked at $rg_path"
