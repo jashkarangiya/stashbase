@@ -234,27 +234,82 @@
     .edit-toggle.editing .icon-edit { display: none; }
     .edit-toggle.editing .icon-preview { display: block; }
 
-    /* Two-pane edit layout for HTML / MD. Side-by-side source + preview;
-     each pane scrolls independently. CodeMirror takes the left half,
-     the existing viewer mounts in the right half. */
+    /* Two-pane edit layout for HTML / MD. Source + preview; each pane
+     scrolls independently. CodeMirror takes the source pane, the
+     existing viewer mounts in the preview pane. The track template
+     (columns vs rows, and the ratio) is set inline by `Split.tsx`
+     from the persisted ratio + orientation — only the structural /
+     divider styling lives here. */
     .split {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      height: calc(100% - 0px);
+      height: 100%;
       /* live inside main-body */
       overflow: hidden;
+      min-width: 0;
+      min-height: 0;
     }
 
     .split-source {
       overflow: auto;
-      border-right: 1px solid var(--border);
       background: var(--bg);
+      min-width: 0;
+      min-height: 0;
     }
 
     .split-preview {
       overflow: hidden;
       background: var(--bg);
       position: relative;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    /* Draggable divider — its own grid track so a grab anywhere on it
+     * resizes the split rather than landing in either pane. Hosts the
+     * orientation-flip button centered on the bar. */
+    .split-divider {
+      position: relative;
+      background: var(--border);
+      display: grid;
+      place-items: center;
+      z-index: 1;
+      transition: background 0.12s ease;
+    }
+    .split-divider:hover {
+      background: var(--accent, #4a8cff);
+    }
+    .split-divider-horizontal {
+      cursor: col-resize;
+    }
+    .split-divider-vertical {
+      cursor: row-resize;
+    }
+    /* Orientation flip button — sits on the divider; its own click is
+     * stopped from starting a drag (handled in Split.tsx). */
+    .split-orient-btn {
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--pane);
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1;
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      opacity: 0;
+      transition: opacity 0.12s ease, color 0.12s ease;
+    }
+    .split:hover .split-orient-btn,
+    .split-divider:hover .split-orient-btn {
+      opacity: 1;
+    }
+    .split-orient-btn:hover {
+      color: var(--fg);
+      background: var(--hover);
     }
 
     .split-preview>iframe {
@@ -580,6 +635,19 @@
      * double-clicking either the sidebar file or the tab title. */
     .tab.preview .tab-label {
       font-style: italic;
+    }
+
+    /* Drag-reorder (HTML5 DnD, mirrors FileTree's drop-indicator
+     * approach). The tab being dragged dims; the drop target paints an
+     * inset accent edge on the side the dragged tab would land. */
+    .tab.dragging {
+      opacity: 0.4;
+    }
+    .tab.drop-before {
+      box-shadow: inset 2px 0 0 0 var(--accent, #4a8cff);
+    }
+    .tab.drop-after {
+      box-shadow: inset -2px 0 0 0 var(--accent, #4a8cff);
     }
 
     .tab-close {

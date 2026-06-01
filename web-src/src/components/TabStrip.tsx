@@ -81,6 +81,10 @@ export function TabStrip() {
     e.preventDefault();
   }
 
+  // TODO(09⏳02 b/c): drag-to-split (drop a tab on the right edge of the
+  // main pane → vertical split) and drag-to-window (drag a tab out →
+  // spawn a new window). Both couple to multi-window state; only the
+  // in-strip reorder (a) is implemented here.
   function onStripDrop(e: DragEvent<HTMLDivElement>) {
     if (!dragId) return;
     // If the user dropped on a child tab, that handler already ran and
