@@ -28,20 +28,22 @@ export interface SearchHit {
 }
 
 export interface EmbedderRuntimeConfig {
-  provider: 'onnx' | 'openai';
-  /** API key for hosted providers. Required for `openai`. */
+  /** V1 is OpenAI-only — no embedder switching. */
+  provider: 'openai';
+  /** OpenAI API key. Absent ⇒ the space is registered but indexing
+   *  stays disabled until the user adds a key (graceful no-key degrade). */
   apiKey?: string;
-  /** Optional override; impls have sensible defaults per provider. */
+  /** Optional model override (default `text-embedding-3-small`). */
   model?: string;
-  /** Optional override; if omitted the impl uses the provider's default. */
+  /** Optional dimension override (default 1536). */
   dimension?: number;
 }
 
 export interface Indexer {
-  /** Bind a space to its embedder provider. Determines which collection
-   *  new files under this space land in. Idempotent — safe to call on
-   *  every server start for every known space, and after a daemon
-   *  respawn (the impl re-issues the underlying op on reconnect). */
+  /** Register a space with the indexer. V1 has one fixed collection, so
+   *  this just makes the space known (and builds the collection on the
+   *  first bind carrying a key). Idempotent — safe to call on every
+   *  server start for every known space, and after a daemon respawn. */
   bindSpace(space: string, cfg: EmbedderRuntimeConfig): Promise<void>;
 
   /** Stop routing new files for the space. Existing rows stay
@@ -61,7 +63,10 @@ export interface Indexer {
 
   /** Move a file in the index. `content` is the (unchanged) body — the
    *  impl may or may not re-embed depending on the backend. The MFS
-   *  impl does a full re-embed (no in-place source update upstream). */
+   *  impl fast-paths this: when every stored chunk's `file_hash` still
+   *  matches, it reuses the cached `dense_vector`s and only rewrites
+   *  `source` / `id` (no re-embed). It falls back to a full
+   *  delete + re-insert if any chunk drifted or lacks a vector. */
   renameFile(oldPath: string, newPath: string, content: string): Promise<void>;
 
   /** Move every file under `oldPrefix` to `newPrefix`. `files` carries

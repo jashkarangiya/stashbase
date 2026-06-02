@@ -2,12 +2,12 @@
  * Process-wide indexer state + space-switch orchestration.
  *
  * One `MfsIndexer` instance lives for the lifetime of the server
- * process. The daemon underneath owns one Milvus DB at kbRoot with
- * one collection per (provider, dim); each space is `bind_space`-ed to
- * the collection matching its embedder provider. Boot binds every
- * known space under kbRoot so MCP cross-space search has them all
- * available; opening a space re-binds (idempotent) and runs a name-
- * only sync to pick up any new files.
+ * process. The daemon underneath owns one Milvus DB at kbRoot with a
+ * single collection (V1 fixes the embedder to OpenAI — no switching).
+ * Every space is `bind_space`-ed into that one collection. Boot binds
+ * every known space under kbRoot so MCP cross-space search has them all
+ * available; opening a space re-binds (idempotent) and runs a name-only
+ * sync to pick up any new files.
  *
  * Extracted from `server/index.ts` so route modules can import the
  * indexer without picking up the whole route registration kitchen sink.
@@ -18,7 +18,6 @@ import {
   getApiKey,
   getCurrentSpace,
   getCurrentSpaceName,
-  getEmbedderProvider,
   getKbRoot,
   listKnownSpaces,
   onClose,
@@ -62,12 +61,31 @@ function recordSnapshotWarning(space: string, warning: SnapshotImportWarning): v
   snapshotWarnings.set(space, warning);
 }
 
-/** Resolve the library-wide runtime embedder config. Returns null when
- *  the configured provider can't be used right now (openai without a
- *  key), so the caller can fall back to local. */
+/** Spaces whose snapshot vector-cache is currently loaded in the daemon
+ *  (keyed by kbRoot-relative name). Loaded just before an import-time
+ *  reindex and cleared once that reindex drains, so the daemon doesn't
+ *  hold every snapshot's vectors in memory forever. */
+const loadedSnapshotCaches = new Set<string>();
+
+/** Drop the daemon-side snapshot vector cache for `spaceAbs`'s space if
+ *  one was loaded. Called after the import-time sync finishes (or is
+ *  abandoned). Best-effort: a failed clear only costs daemon memory. */
+async function clearSnapshotCacheIfLoaded(spaceAbs: string): Promise<void> {
+  const rel = path.relative(getKbRoot(), spaceAbs).split(path.sep).join('/');
+  if (!loadedSnapshotCaches.has(rel)) return;
+  loadedSnapshotCaches.delete(rel);
+  try {
+    await getDaemon().call('clear_vector_cache', { space: rel });
+  } catch (err) {
+    log.warn(`snapshot cache clear ${rel} failed: ${errorMessage(err)}`);
+  }
+}
+
+/** Resolve the runtime embedder config (V1 = OpenAI only). Returns null
+ *  when no API key is set — the caller still binds the space (so it's
+ *  registered) but indexing stays disabled until the user adds a key
+ *  (graceful no-key degrade). */
 export function resolveEmbedder(): EmbedderRuntimeConfig | null {
-  const provider = getEmbedderProvider();
-  if (provider === 'onnx') return { provider: 'onnx' };
   const apiKey = getApiKey();
   if (!apiKey) return null;
   return { provider: 'openai', apiKey };
@@ -75,8 +93,9 @@ export function resolveEmbedder(): EmbedderRuntimeConfig | null {
 
 /** Configure + spawn the daemon, then bind every known space under
  *  kbRoot. Idempotent on the bind side; safe to call once at server
- *  startup. Spaces with no openai key fall back to onnx so they stay
- *  searchable (the choice isn't persisted — user intent is preserved). */
+ *  startup. With no API key, spaces are still bound (registered) but the
+ *  collection isn't created until a key is supplied — search just
+ *  returns nothing until then. */
 export async function bootBindAllSpaces(): Promise<void> {
   const daemon = getDaemon();
   daemon.configure({ kbRoot: getKbRoot() });
@@ -86,9 +105,9 @@ export async function bootBindAllSpaces(): Promise<void> {
     return;
   }
   log.info(`boot bind: ${known.length} space(s): ${known.join(', ')}`);
+  const cfg = resolveEmbedder() ?? { provider: 'openai' as const };
   for (const space of known) {
     try {
-      const cfg = resolveEmbedder() ?? { provider: 'onnx' as const };
       await indexer.bindSpace(space, cfg);
     } catch (err: unknown) {
       log.warn(`boot bind ${space} failed: ${errorMessage(err)}`);
@@ -96,14 +115,15 @@ export async function bootBindAllSpaces(): Promise<void> {
   }
 }
 
-/** Bind the indexer to a space using the library-wide embedder.
- *  Called on every space switch (idempotent). Doesn't trigger sync —
- *  caller's responsibility via `scheduleIndexerSync`. */
+/** Bind the indexer to a space using the OpenAI embedder. Called on
+ *  every space switch (idempotent). Doesn't trigger sync — caller's
+ *  responsibility via `scheduleIndexerSync`. With no key the space is
+ *  still bound but indexing is disabled. */
 export async function bindIndexerForSpace(spaceAbs: string): Promise<void> {
   const cfg = resolveEmbedder();
-  const runtime = cfg ?? { provider: 'onnx' as const };
+  const runtime = cfg ?? { provider: 'openai' as const };
   if (!cfg) {
-    log.warn(`embedder: provider is openai but no global key; falling back to local for ${spaceAbs}`);
+    log.warn(`embedder: no OpenAI key set — ${spaceAbs} bound but indexing/search disabled until a key is added`);
   }
   // The kbRoot-relative name is the space identifier on the indexer side.
   // We can't use getCurrentSpaceName() here — the switch listener fires
@@ -117,14 +137,22 @@ export async function bindIndexerForSpace(spaceAbs: string): Promise<void> {
   await maybeImportSnapshot(spaceAbs, rel);
 }
 
-/** If the space ships a `.stashbase/snapshot.parquet` and the
- *  collection has no rows for it yet, import the snapshot — lets a
- *  freshly-cloned starter (e.g. cs183b) come pre-indexed without
- *  re-embedding. Skips silently when the file is absent, or when the
- *  space already has data (idempotent: re-runs after the first import
- *  are no-ops). */
+/** If the space ships a `.stashbase/snapshot.parquet` (v3 = a pure
+ *  embedding cache) and the collection has no rows for it yet, load the
+ *  cache into the daemon so the import-time reindex reuses vectors
+ *  instead of re-embedding — lets a freshly-cloned starter (e.g. cs183b)
+ *  come pre-indexed cheaply. The actual chunk rows are produced by the
+ *  normal reindex (`syncNewFiles`) that follows; this only primes the
+ *  cache. The cache is cleared by `clearSnapshotCacheIfLoaded` once that
+ *  reindex drains.
+ *
+ *  Skips silently when the snapshot is absent or the space already has
+ *  data. Requires the sibling `snapshot.meta.json` descriptor and a
+ *  matching embedder; a mismatch records a UI warning and falls back to
+ *  a full re-embed. */
 async function maybeImportSnapshot(spaceAbs: string, spaceName: string): Promise<void> {
   const snapshot = path.join(spaceAbs, '.stashbase', 'snapshot.parquet');
+  const metaPath = path.join(spaceAbs, '.stashbase', 'snapshot.meta.json');
   try {
     if (!fs.statSync(snapshot).isFile()) return;
   } catch {
@@ -134,40 +162,51 @@ async function maybeImportSnapshot(spaceAbs: string, spaceName: string): Promise
     const status = await indexer.status(spaceName);
     if (status.indexed > 0) return;
   } catch (err) {
-    log.warn(`snapshot import: status check failed for ${spaceName}: ${errorMessage(err)}`);
+    log.warn(`snapshot: status check failed for ${spaceName}: ${errorMessage(err)}`);
+    return;
+  }
+  // v3 carries its descriptor (embedder identity + counts) in a JSON
+  // sidecar, not in the Parquet. No JSON ⇒ legacy / unknown snapshot:
+  // skip the cache and let the reindex embed from scratch.
+  let meta: {
+    embedder?: { provider?: string; model?: string; dim?: number };
+    vectors?: number;
+    chunks?: number;
+  };
+  try {
+    meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+  } catch {
+    log.warn(`snapshot ${spaceName}: missing/invalid snapshot.meta.json (re-export with this build) — embedding from scratch`);
     return;
   }
   try {
     const res = await getDaemon().call<{
-      imported: number;
-      skipped: number;
-      skipped_providers: { provider_key: string; chunks: number }[];
-    }>('import_space', { space: spaceName, in_path: snapshot });
-    if (res.imported > 0) {
-      log.info(`snapshot import ${spaceName}: ${res.imported} chunk(s)`);
-      // A successful import supersedes any prior warning we'd surfaced
-      // for this space (e.g. the user switched embedder to match).
-      clearSnapshotWarning(spaceName);
-    }
-    if (res.skipped > 0) {
-      const summary = res.skipped_providers
-        .map((p) => `${p.chunks} from ${p.provider_key}`)
-        .join(', ');
+      loaded: number;
+      mismatch: boolean;
+      expected?: { provider: string; model: string | null; dim: number };
+      got?: { provider?: string; model?: string; dim?: number };
+    }>('load_vector_cache', { space: spaceName, in_path: snapshot, embedder: meta.embedder ?? {} });
+    if (res.mismatch) {
       log.warn(
-        `snapshot import ${spaceName}: skipped ${res.skipped} chunk(s) — ${summary}. ` +
-          `Switch the library's embedder to match (or re-export with the current provider).`,
+        `snapshot ${spaceName}: embedder mismatch (snapshot ${JSON.stringify(res.got)} ` +
+          `vs current ${JSON.stringify(res.expected)}) — re-embedding. ` +
+          `Switch the library's embedder to match, or re-export.`,
       );
-      // Stash for the UI to surface — see /api/index-status, which
-      // injects this into the response so the renderer banner can
-      // appear without a separate poll.
+      const got = res.got ?? meta.embedder ?? {};
       recordSnapshotWarning(spaceName, {
-        skipped: res.skipped,
-        details: res.skipped_providers.map((p) => ({ provider: p.provider_key, chunks: p.chunks })),
+        skipped: meta.vectors ?? meta.chunks ?? 0,
+        details: [{ provider: `${got.provider ?? '?'}_${got.dim ?? '?'}`, chunks: meta.vectors ?? meta.chunks ?? 0 }],
         at: new Date().toISOString(),
       });
+      return;
+    }
+    if (res.loaded > 0) {
+      loadedSnapshotCaches.add(spaceName);
+      clearSnapshotWarning(spaceName);
+      log.info(`snapshot ${spaceName}: vector cache primed (${res.loaded} vectors) — reindex will reuse`);
     }
   } catch (err) {
-    log.warn(`snapshot import ${spaceName} failed: ${errorMessage(err)}`);
+    log.warn(`snapshot cache load ${spaceName} failed: ${errorMessage(err)}`);
   }
 }
 
@@ -209,6 +248,10 @@ export function scheduleIndexerSync(spaceRoot: string, reason: string, windowId 
           if (spaceName) await syncNewFiles(indexer, spaceName);
         } catch (err: unknown) {
           log.warn(`${reason}: index sync failed for ${spaceRoot}: ${errorMessage(err)}`);
+        } finally {
+          // The import-time reindex (if any) has drained — free the
+          // daemon-side snapshot vector cache. No-op when none was loaded.
+          await clearSnapshotCacheIfLoaded(spaceRoot);
         }
       });
     });

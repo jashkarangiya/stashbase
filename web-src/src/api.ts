@@ -192,20 +192,12 @@ export interface KeywordSearchResult {
   truncated: boolean;
 }
 
-export type EmbedderProvider = 'onnx' | 'openai';
+/** V1 is OpenAI-only — no embedder switching. */
+export type EmbedderProvider = 'openai';
 
 export interface EmbedderState {
   provider: EmbedderProvider;
   hasKey: boolean;
-}
-
-export interface EmbedderCostEstimate {
-  provider: string;
-  files: number;
-  bytes: number;
-  tokens: number;
-  /** USD, computed at the server. May be 0 for non-API providers. */
-  costUsd: number;
 }
 
 
@@ -346,12 +338,6 @@ export const api = {
   /** Read `<kbRoot>/.stashbase/space-metadata.md` — the agent-maintained
    *  library 目录. Powers the LibraryPanel's overview row. */
   getLibraryOverview: () => getJson<{ content: string }>('/api/library/overview'),
-  /** Run `git clone <url>` into `<kbRoot>/<name>`, returning the
-   *  absolute path of the freshly-cloned working tree. `name`
-   *  defaults to the inferred repo name. Caller follows up with
-   *  `openSpaceByName(name)`. */
-  gitClone: (url: string, name = '') =>
-    send<{ path: string }>('POST', '/api/git/clone', { url, name }),
   /** Copy a local folder into kbRoot as a new space. `source` is an
    *  absolute path; the renderer obtains it from
    *  `window.electron.openFolderDialog` (Electron-only). `name`
@@ -474,15 +460,11 @@ export const api = {
 
   // Embedder ----------------------------------------------------
   getEmbedder: () => getJson<EmbedderState>('/api/embedder'),
-  setEmbedder: (provider: EmbedderProvider, openaiKey?: string) =>
-    send<EmbedderState>('PUT', '/api/embedder', { provider, openaiKey }),
-  /** Validate without saving. Used before storing a fresh OpenAI key
-   *  so a bad key never lands in `~/.stashbase/config.json`. Throws
+  /** Validate an OpenAI key without saving. Used before storing a fresh
+   *  key so a bad one never lands in `~/.stashbase/config.json`. Throws
    *  `ApiError` on invalid; resolves on valid. */
-  validateEmbedder: (provider: EmbedderProvider, openaiKey?: string) =>
-    send<Record<string, never>>('POST', '/api/embedder/validate', { provider, openaiKey }),
-  embedderCostEstimate: (provider: EmbedderProvider) =>
-    getJson<EmbedderCostEstimate>('/api/embedder/cost-estimate?provider=' + encodeURIComponent(provider)),
+  validateEmbedder: (openaiKey: string) =>
+    send<Record<string, never>>('POST', '/api/embedder/validate', { openaiKey }),
 
   // Terminal CLIs ----------------------------------------------
   listClis: () => getJson<TerminalClisResponse>('/api/terminal/clis'),

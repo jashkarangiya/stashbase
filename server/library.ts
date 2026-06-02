@@ -152,8 +152,8 @@ export function getResolvedRules(spaceName?: string): string {
 export interface SpaceInfo {
   /** kbRoot-relative space name (`cs183b`, `work/research`). */
   name: string;
-  /** Embedder provider configured for this space. */
-  provider: 'onnx' | 'openai';
+  /** Embedder provider (V1 fixed to OpenAI). */
+  provider: 'openai';
   /** Number of indexed files in this space. */
   file_count: number;
   /** Sample of file names (kbRoot-relative), up to 8. */

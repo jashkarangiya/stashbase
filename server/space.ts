@@ -5,16 +5,10 @@
  * `~/.stashbase/config.json` (0600):
  *   - `recentSpaces`      most-recent first, capped at MAX_RECENT
  *   - `apiKey`            user-level OpenAI key
- *   - `embedder.provider` library-wide embedder choice (onnx | openai)
  *
- * The provider is library-wide: switching re-embeds every space
- * (background, fire-and-forget). Existing vectors in the old
- * (provider, dim) collection stay searchable until the re-embed
- * finishes — see the multi-collection notes in `routes/embedder.ts`.
- *
- * Default provider when unset: `openai`. If no key is configured the
- * runtime silently falls back to onnx (the UI pops a modal asking the
- * user to add one).
+ * V1 fixes the embedder to OpenAI — there's no provider switching. If no
+ * key is configured, indexing/search are disabled until the user adds
+ * one (the UI pops a gate asking for it); files still save and preview.
  *
  * The currently-open space is in-memory only — server restart goes
  * back to the welcome screen. Other modules subscribe to switches via
@@ -43,7 +37,10 @@ export interface RecentSpace {
   openedAt: string;
 }
 
-export type EmbedderProvider = 'onnx' | 'openai';
+/** V1 is OpenAI-only. Kept as a one-member type so the surrounding
+ *  config plumbing reads clearly and a future provider re-introduction
+ *  has an obvious seam. */
+export type EmbedderProvider = 'openai';
 
 export interface McpServerConfig {
   command: string;
@@ -694,26 +691,11 @@ export function setTerminalCli(id: string): void {
 
 // ---------- Embedder provider (global) ----------
 
-/** Library-wide embedder provider. Defaults to `openai` when unset —
- *  Local is an explicit fallback the user has to pick, OpenAI is the
- *  default goal. When the user has no key, `resolveEmbedder` silently
- *  degrades to `onnx` and the UI pops a modal asking them to add one. */
+/** The embedder provider. V1 is fixed to OpenAI — there's no switching,
+ *  so this is a constant. Kept as a function so call sites that surface
+ *  "which provider" in info payloads don't need to special-case. */
 export function getEmbedderProvider(): EmbedderProvider {
-  const p = readConfig().embedder?.provider;
-  if (p === 'onnx' || p === 'openai') return p;
   return 'openai';
-}
-
-/** Persist the library-wide provider. Callers are responsible for
- *  re-binding spaces + scheduling re-embeds — the file write itself
- *  doesn't touch Milvus. */
-export function setEmbedderProvider(provider: EmbedderProvider): void {
-  if (provider !== 'onnx' && provider !== 'openai') {
-    throw new Error(`unsupported provider: ${provider}`);
-  }
-  const cfg = readConfig();
-  cfg.embedder = { ...(cfg.embedder ?? {}), provider };
-  writeConfig(cfg);
 }
 
 // ---------- Legacy migration ----------

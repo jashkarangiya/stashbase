@@ -33,7 +33,7 @@ export function KeyModal({
       // validateEmbedder throws ApiError on a bad key; resolves silently
       // on success. The server-side check ran against /v1/models — at
       // this point we know the key is valid, hand it to the caller.
-      await api.validateEmbedder('openai', trimmed);
+      await api.validateEmbedder(trimmed);
       onSaved(trimmed);
     } catch (err: unknown) {
       setError(errorMessage(err));

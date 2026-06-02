@@ -45,7 +45,6 @@ import { MfsIndexer } from '../server/indexer.mfs.ts';
 import {
   ensureKbRoot,
   getApiKey,
-  getEmbedderProvider,
   getKbRoot,
   isInsideKbRoot,
   listKnownSpaces,
@@ -108,15 +107,16 @@ function getEmbedded(): { indexer: MfsIndexer; ready: Promise<void> } {
     const daemon = getDaemon();
     daemon.configure({ kbRoot: getKbRoot() });
     const known = listKnownSpaces();
-    const provider = getEmbedderProvider();
     const apiKey = getApiKey();
-    const cfg = provider === 'openai' && apiKey
+    // V1 is OpenAI-only. With no key, spaces still bind (registered) but
+    // indexing/search stay disabled until a key is set.
+    const cfg = apiKey
       ? ({ provider: 'openai' as const, apiKey })
-      : ({ provider: 'onnx' as const });
-    if (provider === 'openai' && !apiKey) {
+      : ({ provider: 'openai' as const });
+    if (!apiKey) {
       process.stderr.write(
-        '[StashBase] embedder is openai but no key in ~/.stashbase/config.json; ' +
-          'falling back to local ONNX\n',
+        '[StashBase] no OpenAI key in ~/.stashbase/config.json; ' +
+          'search/indexing disabled until one is added\n',
       );
     }
     for (const space of known) {
@@ -613,7 +613,7 @@ const BUILTIN_TOOLS = [
       name: 'set_file_metadata',
       description:
         'Set the agent-maintained metadata for one file, stored in ' +
-        '`<space>/.stashbase/file-metadata.md` — a sidecar kept OUT of the user\'s file so you ' +
+        '`<space>/file-metadata.md` — a sidecar kept OUT of the user\'s file so you ' +
         'never edit their content. `path` is kbRoot-relative (e.g. "cs183b/note.md"); ' +
         'its first segment is the space. `metadata` is an object of arbitrary keys; it ' +
         'REPLACES that file\'s whole section (not a merge), and passing an empty object ' +

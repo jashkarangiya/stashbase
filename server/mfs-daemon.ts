@@ -41,7 +41,7 @@ interface Pending {
 }
 
 export interface BindSpaceArgs {
-  provider: 'onnx' | 'openai';
+  provider: 'openai';
   apiKey?: string;
   model?: string;
   dimension?: number;
@@ -286,7 +286,7 @@ function resolvePythonBin(): string {
     return 'python3';
   })();
 
-  const probe = spawnSync(bin, ['-c', 'import mfs, onnxruntime, tokenizers, numpy'], {
+  const probe = spawnSync(bin, ['-c', 'import mfs, openai, numpy'], {
     encoding: 'utf8',
   });
   if (probe.status !== 0) {
