@@ -29,7 +29,7 @@ GlobalWorkerOptions.workerSrc = workerSrc;
  *   1. Outline extraction → dispatched into the shared `cur.headings`
  *      slot so the existing Outline panel works without a per-format
  *      fork.
- *   2. Failure banner sourced from `pdf-status.json` so users see
+ *   2. Failure banner sourced from `state.db` so users see
  *      "conversion failed, click to retry" in-context, not buried in
  *      a separate failure list.
  *   3. Chunk text search — when a search hit on a PDF-derived HTML
@@ -530,4 +530,3 @@ async function extractOutline(
     setHeadings([]);
   }
 }
-

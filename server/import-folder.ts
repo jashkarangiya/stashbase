@@ -31,7 +31,7 @@ export interface ImportFolderResult {
   mode: ImportFolderMode;
 }
 
-const STASHBASE_PER_MACHINE_ENTRIES = ['config.json', 'mfs', 'cache'];
+const STASHBASE_PER_MACHINE_ENTRIES = ['config.json', 'store', 'mfs', 'cache', 'state.db'];
 const CONFIRM_ENTRY_LIMIT = 0;
 
 export function previewFolderImport(

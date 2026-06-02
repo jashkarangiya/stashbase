@@ -18,6 +18,7 @@ await esbuild.build({
   external: [
     // Native module rebuilt by electron-builder and loaded from packaged node_modules.
     'node-pty',
+    'better-sqlite3',
   ],
   banner: {
     js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",

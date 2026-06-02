@@ -3,7 +3,7 @@
  * space. The story we keep hitting:
  *
  *   1. Previous StashBase session held the lock on
- *      `<space>/.stashbase/mfs/milvus.db`.
+ *      `<KB>/.stashbase/store/milvus.db`.
  *   2. It exited dirtily — `kill -9`, force-quit, OS shutdown, or a
  *      shutdown that ran past our 4 s `indexer.close()` ceiling on a
  *      big library where Milvus's own flush takes longer.
@@ -32,14 +32,17 @@ import { logger } from './log.ts';
 const log = logger('stale-lock');
 
 /** Kill any orphaned stashbase daemon still holding the flock on
- *  this space's `milvus.db`. No-op when the db doesn't exist yet,
+ *  this KB's `milvus.db`. No-op when the db doesn't exist yet,
  *  when `lsof` isn't available, or when no one's holding the lock. */
-export function clearStaleMilvusLock(spaceRoot: string): void {
+export function clearStaleMilvusLock(kbRoot: string): void {
   if (process.platform === 'win32') return;
-  const milvusDb = path.join(spaceRoot, '.stashbase', 'mfs', 'milvus.db');
-  if (!fs.existsSync(milvusDb)) return;
+  const candidates = [
+    path.join(kbRoot, '.stashbase', 'store', 'milvus.db'),
+    path.join(kbRoot, '.stashbase', 'mfs', 'milvus.db'),
+  ].filter((p) => fs.existsSync(p));
+  if (candidates.length === 0) return;
 
-  const lsof = spawnSync('lsof', ['-t', milvusDb], { encoding: 'utf8' });
+  const lsof = spawnSync('lsof', ['-t', ...candidates], { encoding: 'utf8' });
   // `lsof -t <file>` exits 1 when nobody holds it (which is the happy
   // path — nothing to clean up). It exits 127 when lsof itself isn't
   // installed; we silently bail in both cases.

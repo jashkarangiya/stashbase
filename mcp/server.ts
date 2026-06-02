@@ -613,7 +613,7 @@ const BUILTIN_TOOLS = [
       name: 'set_file_metadata',
       description:
         'Set the agent-maintained metadata for one file, stored in ' +
-        '`<space>/file-metadata.md` — a sidecar kept OUT of the user\'s file so you ' +
+        '`<space>/.stashbase/file-metadata.md` — a sidecar kept OUT of the user\'s file so you ' +
         'never edit their content. `path` is kbRoot-relative (e.g. "cs183b/note.md"); ' +
         'its first segment is the space. `metadata` is an object of arbitrary keys; it ' +
         'REPLACES that file\'s whole section (not a merge), and passing an empty object ' +
@@ -904,11 +904,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         }
         fs.mkdirSync(path.dirname(abs), { recursive: true });
         fs.writeFileSync(abs, content);
-        if (content.trim()) {
-          const { indexer, ready } = getEmbedded();
-          await ready;
-          await indexer.upsertFile(kbRel, content);
-        }
+        const { indexer, ready } = getEmbedded();
+        await ready;
+        await indexer.upsertFile(kbRel, content);
       },
     );
     return {

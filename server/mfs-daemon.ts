@@ -8,7 +8,7 @@
  *
  * The daemon is anchored at the **KB root**: every space lives under
  * `<kb_root>/<space>/...` and one `milvus.db` at
- * `<kb_root>/.stashbase/mfs/milvus.db` holds every collection. The
+ * `<kb_root>/.stashbase/store/milvus.db` holds every collection. The
  * Node side ensures each known space is `bind_space`-ed (recorded
  * here so a respawn can replay them).
  *
@@ -73,7 +73,10 @@ class MfsDaemon extends EventEmitter {
    *  same path. */
   configure(opts: { kbRoot: string }): void {
     if (this.kbRoot !== null && this.kbRoot !== opts.kbRoot) {
-      throw new Error(`kbRoot already configured to ${this.kbRoot}; reconfigure not supported`);
+      if (this.proc || this.readyP) {
+        throw new Error(`kbRoot already configured to ${this.kbRoot}; close daemon before reconfigure`);
+      }
+      this.bindings.clear();
     }
     this.kbRoot = opts.kbRoot;
   }

@@ -617,7 +617,25 @@ function ensureSpaceMetadata(spaceRoot: string): void {
 }
 
 function ensureKbMetadata(root: string): void {
-  fs.mkdirSync(path.join(root, '.stashbase'), { recursive: true });
+  const stash = path.join(root, '.stashbase');
+  fs.mkdirSync(stash, { recursive: true });
+  const ignore = path.join(stash, '.gitignore');
+  const ignoreEntries = [
+    'store/',
+    'mfs/',
+    'cache/',
+    'state.db',
+    'state.db-*',
+    'pdf-status.json',
+    'pdf-status.json.migrated',
+  ];
+  const existing = fs.existsSync(ignore) ? fs.readFileSync(ignore, 'utf8') : '';
+  const existingLines = new Set(existing.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+  const missing = ignoreEntries.filter((entry) => !existingLines.has(entry));
+  if (missing.length) {
+    const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
+    fs.writeFileSync(ignore, `${existing}${prefix}${missing.join('\n')}\n`, 'utf8');
+  }
   const rules = path.join(root, 'STASHBASE.md');
   if (!fs.existsSync(rules)) {
     fs.writeFileSync(rules, '# KB Rules\n\n', 'utf8');

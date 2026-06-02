@@ -39,6 +39,7 @@ import { ensureLibraryOverview } from './library.ts';
 import { logger } from './log.ts';
 import { startWatcher, stopWatcher } from './watcher.ts';
 import { indexer } from './state.ts';
+import { closeStateDb } from './state-db.ts';
 import { requireSpace, withWindowContext } from './http.ts';
 import { mount as mountSpaceRoutes } from './routes/space.ts';
 import { mount as mountEmbedderRoutes } from './routes/embedder.ts';
@@ -296,7 +297,8 @@ onKbRootChange(async () => {
   stopWatcher();
   stopSpaceMcpServers();
   killActiveTerminal();
-  await indexer.closeStore();
+  await indexer.close();
+  closeStateDb();
   ensureLibraryOverview();
   await bootBindAllSpaces();
   startWatcher(indexer);
@@ -353,6 +355,7 @@ async function shutdown(reason: string): Promise<void> {
   try { stopWatcher(); } catch { /* swallow */ }
   try { stopSpaceMcpServers(); } catch { /* swallow */ }
   try { killActiveTerminal(); } catch { /* swallow */ }
+  try { closeStateDb(); } catch { /* swallow */ }
   // Hard ceiling: if the indexer's close ladder can't unstick the
   // Python child in 4 s, exit anyway. The daemon's own kill ladder
   // is 1.5 s SIGTERM + 1.5 s SIGKILL + 0.5 s grace = 3.5 s; we leave

@@ -94,7 +94,7 @@ export interface IndexStatus {
   pendingConversions?: string[];
   /** Persistent failure list — PDFs whose most recent conversion
    *  attempt errored. Survives app restart (read back from
-   *  `<KB>/.stashbase/pdf-status.json`). Empty when no failures.
+   *  `<KB>/.stashbase/state.db`). Empty when no failures.
    *  Drives the failures-list UI and the per-file Retry banner in
    *  PdfPreview. */
   pdfFailures?: PdfFailure[];

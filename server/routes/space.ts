@@ -264,7 +264,7 @@ export function mount(app: express.Express): void {
     try {
       await spawnGitClone(url, dest, root);
       // Selective cleanup of the upstream `.stashbase/` directory.
-      // Per-machine internal state (`config.json`, `mfs/`, `cache/`)
+      // Per-machine internal state (`config.json`, `store/`, legacy `mfs/`, `cache/`)
       // must never travel with a clone — they'd inherit the previous
       // user's embedder provider + Milvus collection dim, blocking a
       // fresh user without a key. The **portable** pieces stay:
@@ -322,7 +322,7 @@ function walkSpace(
 /** Internal entries under `.stashbase/` that **must** be wiped after a
  *  clone — per-machine state, never portable. Everything else in the
  *  directory stays; the snapshot file lives here intentionally. */
-const STASHBASE_PER_MACHINE_ENTRIES = ['config.json', 'mfs', 'cache'];
+const STASHBASE_PER_MACHINE_ENTRIES = ['config.json', 'store', 'mfs', 'cache', 'state.db'];
 
 /** Selectively delete per-machine internal state out of a freshly-
  *  cloned space's `.stashbase/` directory, leaving portable artefacts

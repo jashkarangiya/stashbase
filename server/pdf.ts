@@ -139,7 +139,7 @@ export function convertPdf(pdfAbsPath: string): Promise<ConvertResult> {
  *  and auto-reload once the entry disappears (= the new note has
  *  landed on disk).
  *
- *  Backed by `<KB>/.stashbase/pdf-status.json` (KB-wide) — we filter
+ *  Backed by `<KB>/.stashbase/state.db` (KB-wide) — we filter
  *  to the current space here so the sidebar's space-relative view
  *  stays correct. */
 export function getInFlightPdfs(): string[] {
@@ -154,7 +154,7 @@ export function getInFlightPdfs(): string[] {
 
 /** Fire-and-forget wrapper used by the upload route. Skips silently
  *  if the target note already exists (re-drop of the same PDF). On
- *  success / failure persists the outcome to `pdf-status.json` so
+ *  success / failure persists the outcome to `state.db` so
  *  the UI can surface "Conversion failed" + a Retry button, even
  *  after app restart. `spaceRelative` is what we expose to clients
  *  via the in-flight list — same path shape the rest of the API

@@ -206,7 +206,7 @@ export function mount(app: express.Express): void {
 
   // PDF Retry: take a space-relative path, clear its status record,
   // then fire the converter again. The fire-and-forget convert path
-  // writes back to pdf-status.json with the new outcome; the client
+  // writes back to state.db with the new outcome; the client
   // polls /api/index-status or /api/pdf/status to observe the
   // result.
   app.post('/api/pdf/retry', (req, res) => {
@@ -368,8 +368,8 @@ export function mount(app: express.Express): void {
     }
   });
 
-  // Read/write one file's section of `<space>/file-metadata.md` — the
-  // agent-maintained metadata sidecar kept out of the user's file.
+  // Read/write one file's section of `<space>/.stashbase/file-metadata.md`
+  // — the agent-maintained metadata sidecar kept out of the user's file.
   // Powers MCP's `set_file_metadata`. `path` is kbRoot-relative; the
   // first segment is the space, the rest the space-relative file path.
   // Passing an empty `metadata` object removes the section.
@@ -502,10 +502,8 @@ export function mount(app: express.Express): void {
       // be a wasted scan_diff round-trip.
       noteSelfWrite(abs);
       fs.writeFileSync(abs, content);
-      if (content.trim()) {
-        try { await indexer.upsertFile(rel, content); }
-        catch (err) { log.warn(`upsert ${rel} failed after write: ${errorMessage(err)}`); }
-      }
+      try { await indexer.upsertFile(rel, content); }
+      catch (err) { log.warn(`upsert ${rel} failed after write: ${errorMessage(err)}`); }
       res.json({ path: rel });
     } catch (err: unknown) {
       sendError(res, err);

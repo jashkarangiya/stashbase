@@ -1,6 +1,6 @@
 """StashBase sidecar daemon.
 
-Owns the **single** Milvus Lite DB at ``<kb_root>/.stashbase/mfs/milvus.db``
+Owns the **single** Milvus Lite DB at ``<kb_root>/.stashbase/store/milvus.db``
 and N collections inside it — one per (provider, dimension) pair (e.g.
 ``vectors_onnx_1024``, ``vectors_openai_1536``). Each space (a folder
 directly under the KB root) is **bound** to exactly one collection, the
@@ -334,7 +334,10 @@ class StashbaseStore:
 
     def __init__(self, kb_root: str) -> None:
         self._kb_root: Path = Path(kb_root).resolve()
-        self._db_path: Path = self._kb_root / ".stashbase" / "mfs" / "milvus.db"
+        self._db_path: Path = self._kb_root / ".stashbase" / "store" / "milvus.db"
+        legacy_dir = self._kb_root / ".stashbase" / "mfs"
+        if legacy_dir.exists() and not self._db_path.parent.exists():
+            legacy_dir.rename(self._db_path.parent)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         # provider_key -> (embedder, MilvusStore)
         self._stores: dict[str, tuple[Any, Any]] = {}
@@ -874,10 +877,16 @@ def op_list(svc: StashbaseStore, args: dict) -> dict:
     return {"files": out}
 
 
-# Agent-maintained metadata files kept at the space / KB root for version
-# control (out of `.stashbase/`) but excluded from indexing — see
-# `_walk_disk` and the Node-side `metadata.ts:isReservedMetadataFile`.
-_RESERVED_METADATA_FILES = {"file-metadata.md", "space-metadata.md"}
+def _is_reserved_metadata_path(rel_local: str) -> bool:
+    """True for hidden sidecar metadata plus the legacy space-root file.
+
+    Do not match by basename alone: a user note at
+    ``research/file-metadata.md`` is normal content and should be indexed.
+    """
+    parts = [p for p in rel_local.split("/") if p]
+    if len(parts) >= 2 and parts[0] == ".stashbase" and parts[1] == "file-metadata.md":
+        return True
+    return len(parts) == 1 and parts[0] == "file-metadata.md"
 
 
 def _make_scanner():
@@ -931,11 +940,10 @@ def _walk_disk(root: Path, rel_prefix: str = "") -> dict:
     for full_rel, rel_local, f in raw:
         if _under_bundle(rel_local, note_stems):
             continue
-        # Reserved agent metadata files live at the space / KB root and are
-        # version-controlled, but must never be indexed (their YAML / 目录
-        # prose would surface as bogus hits). Mirrors the Node-side guard
-        # in `indexer.mfs.ts:upsertFile`. See build-map 02-storage.
-        if rel_local.rsplit("/", 1)[-1] in _RESERVED_METADATA_FILES:
+        # Reserved agent metadata files must never be indexed (their YAML
+        # / 目录 prose would surface as bogus hits). Mirrors the Node-side
+        # guard in `indexer.mfs.ts:upsertFile`. See build-map 02-storage.
+        if _is_reserved_metadata_path(rel_local):
             continue
         try:
             if f.path.stat().st_size == 0:
@@ -1387,7 +1395,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="StashBase MFS sidecar daemon")
     parser.add_argument("--kb-root", required=True,
                         help="Absolute path of the StashBase library root; the daemon "
-                             "owns one Milvus DB at <kb_root>/.stashbase/mfs/milvus.db")
+                             "owns one Milvus DB at <kb_root>/.stashbase/store/milvus.db")
     parsed, _unknown = parser.parse_known_args()
     try:
         svc = StashbaseStore(parsed.kb_root)

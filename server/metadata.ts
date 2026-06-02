@@ -5,13 +5,12 @@
  *   1. **In-file** (item 03) — metadata the *user* wrote inside the file:
  *      Markdown YAML front-matter, or HTML `<head>` `<meta>` / `<title>`.
  *      Authoritative, because the user typed it.
- *   2. **`<space>/file-metadata.md`** (item 02) — metadata the *agent*
+ *   2. **`<space>/.stashbase/file-metadata.md`** (item 02) — metadata the *agent*
  *      extracted or supplemented, kept out of the user's file so the
- *      agent never edits user content. Lives at the space root (NOT in
- *      `.stashbase/`) so it's **version-controllable**, a sibling of the
- *      per-space `STASHBASE.md`. One `## <space-rel-path>` section per
- *      file, each holding a fenced ```yaml block. Excluded from indexing
- *      (see `isReservedMetadataFile`) so its YAML never pollutes search.
+ *      agent never edits user content. One `## <space-rel-path>` section
+ *      per file, each holding a fenced ```yaml block. It lives in the
+ *      hidden sidecar and is excluded from indexing so its YAML never
+ *      pollutes search.
  *
  * `resolveFileMetadata()` merges the two with **in-file winning** (the
  * user is authoritative) and hands the result to the indexer, which
@@ -35,18 +34,20 @@ const log = logger('metadata');
 
 export type FileMetadata = Record<string, unknown>;
 
-/** Space-root agent metadata sidecar. */
+/** Space sidecar agent metadata file. */
 const FILE_METADATA_NAME = 'file-metadata.md';
 /** KB-root agent 目录 (kept in sync with `library.ts:FILENAME`). */
 const SPACE_METADATA_NAME = 'space-metadata.md';
 
-/** These agent-maintained metadata files live at the KB / space root (so
- *  they're version-controlled) but must never enter the index — their
- *  YAML / 目录 prose would surface as bogus search hits. The indexer
- *  (`indexer.mfs.ts:upsertFile`) and the daemon scanner both skip them. */
+/** These agent-maintained metadata files must never enter the index —
+ *  their YAML / 目录 prose would surface as bogus search hits. The exact
+ *  sidecar paths are skipped, plus legacy top-level `file-metadata.md`
+ *  while old spaces migrate. */
 export function isReservedMetadataFile(kbRelPath: string): boolean {
-  const base = kbRelPath.split('/').pop() ?? '';
-  return base === FILE_METADATA_NAME || base === SPACE_METADATA_NAME;
+  const parts = kbRelPath.split('/').filter(Boolean);
+  if (parts.length >= 3 && parts[1] === '.stashbase' && parts[2] === FILE_METADATA_NAME) return true;
+  if (parts.length >= 2 && parts[0] === '.stashbase' && parts[1] === SPACE_METADATA_NAME) return true;
+  return parts.length === 2 && parts[1] === FILE_METADATA_NAME;
 }
 
 function isPlainObject(v: unknown): v is FileMetadata {
@@ -109,9 +110,25 @@ function extractHtmlMeta(html: string): FileMetadata {
 
 // ── Agent metadata sidecar (item 02) ────────────────────────────────
 
-/** `<kbRoot>/<space>/file-metadata.md` (space root, version-controlled). */
+/** `<kbRoot>/<space>/.stashbase/file-metadata.md`. */
 function fileMetadataPath(spaceName: string): string {
+  return path.join(getKbRoot(), spaceName, '.stashbase', FILE_METADATA_NAME);
+}
+
+function legacyFileMetadataPath(spaceName: string): string {
   return path.join(getKbRoot(), spaceName, FILE_METADATA_NAME);
+}
+
+function migrateLegacyFileMetadata(spaceName: string): void {
+  const target = fileMetadataPath(spaceName);
+  const legacy = legacyFileMetadataPath(spaceName);
+  if (fs.existsSync(target) || !fs.existsSync(legacy)) return;
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.renameSync(legacy, target);
+  } catch (err: unknown) {
+    log.warn(`failed to migrate ${legacy} → ${target}: ${errorMessage(err)}`);
+  }
 }
 
 const DOC_HEADER = `# File metadata
@@ -129,6 +146,7 @@ export function readFileMetadataDoc(spaceName: string): Map<string, FileMetadata
   const out = new Map<string, FileMetadata>();
   let text: string;
   try {
+    migrateLegacyFileMetadata(spaceName);
     text = fs.readFileSync(fileMetadataPath(spaceName), 'utf8');
   } catch {
     return out;

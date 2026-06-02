@@ -1,16 +1,15 @@
 /**
- * Library-level metadata: `<kbRoot>/space-metadata.md` — a single
+ * Library-level metadata: `<kbRoot>/.stashbase/space-metadata.md` — a single
  * markdown file the agent maintains as its working "目录" of the library
- * (what each space is about, what changed recently). Lives at the KB root
- * (NOT in `.stashbase/`) so it's **version-controllable** — it sits
- * alongside the KB-level `STASHBASE.md` rules book. It's outside every
- * space, so the daemon (which walks per-space dirs) never indexes it; the
+ * (what each space is about, what changed recently). Lives in the KB
+ * sidecar because it is agent-maintained derived metadata, not user
+ * source content. It's outside every space, so the daemon never indexes it; the
  * UI surfaces it via the LibraryPanel as a special library-kind tab.
  *
  * Renamed from the legacy `<kbRoot>/AGENT.md` (which historically mixed
  * "rules" and "目录" roles): STASHBASE.md is now the rules book, and this
- * file is the 目录. `ensureLibraryOverview()` migrates an old AGENT.md to
- * the new name once on boot.
+ * file is the 目录. `ensureLibraryOverview()` migrates old root-level
+ * AGENT.md / space-metadata.md files to the new sidecar path once on boot.
  *
  * The agent updates the file via MCP's `update_space_metadata`; users
  * are expected to ask the agent to make changes rather than edit
@@ -37,9 +36,10 @@ import { indexer } from './state.ts';
 
 const log = logger('library');
 
-/** `<kbRoot>/space-metadata.md` — the agent-maintained 目录 (version-
- *  controlled, sibling of the KB-level STASHBASE.md). */
+/** `<kbRoot>/.stashbase/space-metadata.md` — the agent-maintained 目录. */
 const FILENAME = 'space-metadata.md';
+/** Transitional root-level name from the first rename implementation. */
+const ROOT_FILENAME = 'space-metadata.md';
 /** Legacy name migrated away from on boot (see `ensureLibraryOverview`). */
 const LEGACY_FILENAME = 'AGENT.md';
 const RULES_FILENAME = 'STASHBASE.md';
@@ -53,7 +53,11 @@ intelligently.)
 `;
 
 function spaceMetadataPath(): string {
-  return path.join(getKbRoot(), FILENAME);
+  return path.join(getKbRoot(), '.stashbase', FILENAME);
+}
+
+function rootSpaceMetadataPath(): string {
+  return path.join(getKbRoot(), ROOT_FILENAME);
 }
 
 function legacyOverviewPath(): string {
@@ -70,7 +74,7 @@ function spaceRulesPath(spaceName: string): string {
   return path.join(getKbRoot(), spaceName, RULES_FILENAME);
 }
 
-/** Read `<kbRoot>/space-metadata.md`. Returns empty string if missing
+/** Read `<kbRoot>/.stashbase/space-metadata.md`. Returns empty string if missing
  *  (callers decide whether to treat that as "no 目录 yet" or render a
  *  placeholder). */
 export function getLibraryOverview(): string {
@@ -81,29 +85,32 @@ export function getLibraryOverview(): string {
   }
 }
 
-/** Overwrite `<kbRoot>/space-metadata.md`. Atomic via `.tmp` + rename so
+/** Overwrite `<kbRoot>/.stashbase/space-metadata.md`. Atomic via `.tmp` + rename so
  *  a partial write doesn't leave the file half-baked if the process dies
  *  mid-write. */
 export function setLibraryOverview(content: string): void {
   const target = spaceMetadataPath();
   const tmp = target + '.tmp';
+  fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(tmp, content, 'utf8');
   fs.renameSync(tmp, target);
 }
 
 /** Idempotent boot hook. (1) One-time migration: if the legacy
- *  `<kbRoot>/AGENT.md` still exists and `space-metadata.md` doesn't, move
- *  it (filename realigns with the design; content unchanged). (2) Writes
+ *  `<kbRoot>/AGENT.md` or transitional `<kbRoot>/space-metadata.md` still
+ *  exists and sidecar `space-metadata.md` doesn't, move it (filename /
+ *  location realigns with the design; content unchanged). (2) Writes
  *  a placeholder so the agent has something to extend on its first read,
  *  and users opening the library tab see a "(Empty)" message instead of a
  *  404. */
 export function ensureLibraryOverview(): void {
   const target = spaceMetadataPath();
-  const legacy = legacyOverviewPath();
-  if (!fs.existsSync(target) && fs.existsSync(legacy)) {
+  const legacy = [rootSpaceMetadataPath(), legacyOverviewPath()].find((candidate) => fs.existsSync(candidate));
+  if (!fs.existsSync(target) && legacy) {
     try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.renameSync(legacy, target);
-      log.info(`migrated ${LEGACY_FILENAME} → ${FILENAME}`);
+      log.info(`migrated ${path.basename(legacy)} → .stashbase/${FILENAME}`);
       return;
     } catch (err: unknown) {
       log.warn(`failed to migrate ${legacy} → ${target}: ${errorMessage(err)}`);
@@ -159,7 +166,7 @@ export interface SpaceInfo {
 }
 
 export interface LibraryInfo {
-  /** `<kbRoot>/space-metadata.md` content (agent-maintained 目录). */
+  /** `<kbRoot>/.stashbase/space-metadata.md` content (agent-maintained 目录). */
   overview: string;
   /** KB-level maintenance rules from `<kbRoot>/STASHBASE.md`. */
   rules: string;
@@ -171,7 +178,7 @@ export interface LibraryInfo {
  *  space. Returned by the `space_info` MCP tool so an agent can dig into
  *  one space without re-reading the whole library payload. */
 export interface SpaceInfoFull extends SpaceInfo {
-  /** The `## <spaceName>` section of `<kbRoot>/space-metadata.md`
+  /** The `## <spaceName>` section of `<kbRoot>/.stashbase/space-metadata.md`
    *  (heading line + body, up to the next `##`), or empty string when
    *  the 目录 has no section for this space. */
   overview_section: string;
