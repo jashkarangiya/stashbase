@@ -426,10 +426,13 @@ function ImportFolderModal({
   const sourceDisplay = prettifyHome(source, homeDir);
   const destinationDisplay = preview ? prettifyHome(preview.destination, homeDir) : '';
   const importActionMessage = mode === 'move'
-    ? 'Importing moves this existing folder into your StashBase library and removes the original.'
+    ? 'The original folder will be removed after the move.'
     : 'Importing copies this existing folder into your StashBase library.';
   const serverWarnings = (preview?.warnings ?? []).filter((w) =>
-    w !== 'Importing copies this existing folder into your StashBase library.',
+    w !== 'Importing copies this existing folder into your StashBase library.' &&
+    // Destination is already shown (prettified) above — drop the server's
+    // duplicate absolute-path "Destination will be …" line.
+    !w.startsWith('Destination will be'),
   );
 
   return (
@@ -464,10 +467,12 @@ function ImportFolderModal({
         <span>Move folder into StashBase instead of copying</span>
       </label>
       {preview && (
-        <div className="modal-hint">
+        <div className="modal-hint modal-import-preview">
           <div>Destination: <code>{destinationDisplay}</code></div>
-          <div>{preview.entryCount} item{preview.entryCount === 1 ? '' : 's'} · {formatBytes(preview.totalBytes)}</div>
-          {preview.exists && <div>{importActionMessage}</div>}
+          <div className="modal-import-stat">
+            {preview.entryCount} item{preview.entryCount === 1 ? '' : 's'} · {formatBytes(preview.totalBytes)}
+          </div>
+          {preview.exists && mode === 'move' && <div>{importActionMessage}</div>}
           {preview.hasSnapshot && <div>Snapshot found; StashBase will import it when the space opens.</div>}
           {serverWarnings.map((w) => <div key={w}>{w}</div>)}
         </div>

@@ -283,6 +283,24 @@
 
     .modal-check input {
       margin: 0;
+      accent-color: var(--accent);
+    }
+
+    /* Import folder preview: read as a grouped "what will happen"
+     * summary, separated from the input above. */
+    .modal-import-preview {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    /* The item count + size is the scannable anchor of the preview. */
+    .modal-import-stat {
+      color: var(--fg);
+      font-weight: 600;
     }
 
     .modal-error {
