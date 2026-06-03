@@ -13,12 +13,6 @@ const MCP_ENTRY = fs.existsSync(path.join(APP_ROOT, 'dist', 'mcp', 'server.mjs')
   ? path.join(APP_ROOT, 'dist', 'mcp', 'server.mjs')
   : path.join(APP_ROOT, 'mcp', 'server.ts');
 
-const JSON_MCP_CONFIG_FILES: Record<string, () => string> = {
-  'gemini-cli': () => path.join(os.homedir(), '.gemini', 'settings.json'),
-  'qwen-code': () => path.join(os.homedir(), '.qwen', 'settings.json'),
-  cursor: () => path.join(os.homedir(), '.cursor', 'mcp.json'),
-};
-
 export function mount(app: express.Express): void {
   app.get('/api/mcp/tools', async (_req, res) => {
     try {
@@ -45,11 +39,15 @@ export function mount(app: express.Express): void {
 
   app.get('/api/mcp/status', (_req, res) => {
     try {
-      const wrapper = currentMcpWrapper();
+      // Ensure the launcher exists so the inline config we hand back actually
+      // works when pasted, then report it alongside the auto-connect states.
+      const wrapper = fs.existsSync(MCP_ENTRY) ? writeMcpWrapper() : currentMcpWrapper();
       res.json({
         clients: Object.fromEntries(
           MCP_CLIENT_IDS.map((client) => [client, isMcpClientConnected(client, wrapper)]),
         ),
+        command: wrapper,
+        config: getStandardMcpJson(wrapper),
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -78,12 +76,13 @@ export function mount(app: express.Express): void {
   });
 }
 
+// Only these three clients support one-click auto-connect: each has a stable
+// local config file StashBase can safely write. Every other client (ChatGPT,
+// Cursor, Gemini, VS Code, Cline, …) gets the standard config to paste, since
+// their config lives in remote connectors or per-workspace/extension storage.
 const MCP_CLIENT_IDS = [
   'claude-code',
   'codex-cli',
-  'gemini-cli',
-  'qwen-code',
-  'cursor',
   'claude-desktop',
 ];
 
@@ -104,28 +103,21 @@ function configureMcpClient(client: string): Record<string, unknown> {
       'Claude',
       'claude_desktop_config.json',
     );
-    configureJsonMcp(file, getMcpServerConfig(wrapper));
-    return { client, file, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'file' };
+    configureJsonMcp(file, { command: wrapper });
+    return { client, file, command: wrapper, manual: getStandardMcpJson(wrapper), mode: 'file' };
   }
   if (client === 'claude-code') {
     const file = path.join(os.homedir(), '.claude.json');
     configureJsonMcp(file, { type: 'stdio', command: wrapper });
-    return { client, file, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'file' };
+    return { client, file, command: wrapper, manual: getStandardMcpJson(wrapper), mode: 'file' };
   }
   if (client === 'codex-cli') {
     const file = path.join(os.homedir(), '.codex', 'config.toml');
     configureCodex(file, wrapper);
-    return { client, file, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'file' };
+    return { client, file, command: wrapper, manual: getStandardMcpJson(wrapper), mode: 'file' };
   }
-  if (client in JSON_MCP_CONFIG_FILES) {
-    const file = JSON_MCP_CONFIG_FILES[client]();
-    configureJsonMcp(file, getMcpServerConfig(wrapper));
-    return { client, file, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'file' };
-  }
-  if (clipboardOnlyClient(client)) {
-    return { client, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'clipboard' };
-  }
-  throw new Error(`Unknown MCP client: ${client}`);
+  // Everything else: hand back the standard stdio config to paste manually.
+  return { client, command: wrapper, manual: getStandardMcpJson(wrapper), mode: 'clipboard' };
 }
 
 function disconnectMcpClient(client: string): Record<string, unknown> {
@@ -153,15 +145,7 @@ function disconnectMcpClient(client: string): Record<string, unknown> {
     removeCodex(file);
     return { client, file, mode: 'file' };
   }
-  if (client in JSON_MCP_CONFIG_FILES) {
-    const file = JSON_MCP_CONFIG_FILES[client]();
-    removeJsonMcp(file);
-    return { client, file, mode: 'file' };
-  }
-  if (clipboardOnlyClient(client)) {
-    throw new Error(`${client} configuration is managed outside StashBase. Remove the pasted stashbase server from that client.`);
-  }
-  throw new Error(`Unknown MCP client: ${client}`);
+  throw new Error(`${client} configuration is managed outside StashBase. Remove the pasted stashbase server from that client.`);
 }
 
 function currentMcpWrapper(): string {
@@ -200,9 +184,6 @@ function isMcpClientConnected(client: string, wrapper: string): boolean {
     const raw = fs.readFileSync(file, 'utf8');
     return raw.includes('[mcp_servers.stashbase]') && raw.includes(`command = ${JSON.stringify(wrapper)}`);
   }
-  if (client in JSON_MCP_CONFIG_FILES) {
-    return jsonHasStashbaseCommand(JSON_MCP_CONFIG_FILES[client](), wrapper);
-  }
   return false;
 }
 
@@ -218,22 +199,6 @@ function jsonHasStashbaseCommand(file: string, wrapper: string): boolean {
     !Array.isArray(stashbase) &&
     (stashbase as Record<string, unknown>).command === wrapper
   );
-}
-
-function clipboardOnlyClient(client: string): boolean {
-  return [
-    'chatgpt',
-    'void',
-    'windsurf',
-    'vscode',
-    'cherry-studio',
-    'cline',
-    'augment',
-    'roo-code',
-    'zencoder',
-    'langchain-langgraph',
-    'other',
-  ].includes(client);
 }
 
 function shellQuote(value: string): string {
@@ -376,10 +341,6 @@ function removeTomlTable(raw: string, tableName: string): string {
   return trimmed ? `${trimmed}\n` : '';
 }
 
-function getMcpServerConfig(wrapper: string): Record<string, unknown> {
-  return { command: wrapper };
-}
-
 function getStandardMcpJson(wrapper: string): Record<string, unknown> {
   return {
     mcpServers: {
@@ -388,35 +349,4 @@ function getStandardMcpJson(wrapper: string): Record<string, unknown> {
       },
     },
   };
-}
-
-function getMcpManualConfig(client: string, wrapper: string): Record<string, unknown> {
-  if (client === 'cherry-studio') {
-    return {
-      kind: 'gui',
-      name: 'stashbase',
-      type: 'STDIO',
-      command: wrapper,
-      arguments: [],
-    };
-  }
-  if (client === 'augment') {
-    return {
-      'augment.advanced': {
-        mcpServers: [
-          {
-            name: 'stashbase',
-            command: wrapper,
-          },
-        ],
-      },
-    };
-  }
-  if (client === 'zencoder') {
-    return {
-      command: wrapper,
-      args: [],
-    };
-  }
-  return getStandardMcpJson(wrapper);
 }

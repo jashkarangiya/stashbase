@@ -187,16 +187,6 @@ function configureCodex(wrapper) {
   return true;
 }
 
-function getMcpServerConfig(wrapper) {
-  return { command: wrapper };
-}
-
-const JSON_MCP_CONFIG_FILES = {
-  'gemini-cli': () => path.join(os.homedir(), '.gemini', 'settings.json'),
-  'qwen-code': () => path.join(os.homedir(), '.qwen', 'settings.json'),
-  cursor: () => path.join(os.homedir(), '.cursor', 'mcp.json'),
-};
-
 function getStandardMcpJson(wrapper) {
   return {
     mcpServers: {
@@ -207,37 +197,8 @@ function getStandardMcpJson(wrapper) {
   };
 }
 
-function getMcpManualConfig(client, wrapper) {
-  if (client === 'cherry-studio') {
-    return {
-      kind: 'gui',
-      name: 'stashbase',
-      type: 'STDIO',
-      command: wrapper,
-      arguments: [],
-    };
-  }
-  if (client === 'augment') {
-    return {
-      'augment.advanced': {
-        mcpServers: [
-          {
-            name: 'stashbase',
-            command: wrapper,
-          },
-        ],
-      },
-    };
-  }
-  if (client === 'zencoder') {
-    return {
-      command: wrapper,
-      args: [],
-    };
-  }
-  return getStandardMcpJson(wrapper);
-}
-
+// Only these three clients support one-click auto-connect; every other client
+// gets the standard config to paste. Mirror of server/routes/mcp.ts.
 function configureMcpClient(client) {
   if (!fs.existsSync(MCP_ENTRY)) {
     throw new Error(`MCP entry missing: ${MCP_ENTRY}`);
@@ -255,40 +216,21 @@ function configureMcpClient(client) {
       'Claude',
       'claude_desktop_config.json',
     );
-    configureJsonMcp(file, getMcpServerConfig(wrapper));
-    return { client, file, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'file' };
+    configureJsonMcp(file, { command: wrapper });
+    return { client, file, command: wrapper, manual: getStandardMcpJson(wrapper), mode: 'file' };
   }
   if (client === 'claude-code') {
     const file = path.join(os.homedir(), '.claude.json');
     configureJsonMcp(file, { type: 'stdio', command: wrapper });
-    return { client, file, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'file' };
+    return { client, file, command: wrapper, manual: getStandardMcpJson(wrapper), mode: 'file' };
   }
   if (client === 'codex-cli') {
     const file = path.join(os.homedir(), '.codex', 'config.toml');
     configureCodex(wrapper);
-    return { client, file, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'file' };
+    return { client, file, command: wrapper, manual: getStandardMcpJson(wrapper), mode: 'file' };
   }
-  if (client in JSON_MCP_CONFIG_FILES) {
-    const file = JSON_MCP_CONFIG_FILES[client]();
-    configureJsonMcp(file, getMcpServerConfig(wrapper));
-    return { client, file, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'file' };
-  }
-  if (
-    client === 'chatgpt' ||
-    client === 'void' ||
-    client === 'windsurf' ||
-    client === 'vscode' ||
-    client === 'cherry-studio' ||
-    client === 'cline' ||
-    client === 'augment' ||
-    client === 'roo-code' ||
-    client === 'zencoder' ||
-    client === 'langchain-langgraph' ||
-    client === 'other'
-  ) {
-    return { client, command: wrapper, manual: getMcpManualConfig(client, wrapper), mode: 'clipboard' };
-  }
-  throw new Error(`Unknown MCP client: ${client}`);
+  // Everything else: hand back the standard stdio config to paste manually.
+  return { client, command: wrapper, manual: getStandardMcpJson(wrapper), mode: 'clipboard' };
 }
 
 /** Spawn the Express server as a child. If something else is already on

@@ -372,6 +372,15 @@
       padding-right: 12px;
     }
 
+    /* Connecting is the primary action of each row — give the idle
+     * button an accent-tinted hover instead of the neutral grey. The
+     * connected state keeps its own (red, "disconnect") hover below. */
+    .mcp-connector-btn:not(.connected):hover:not(:disabled) {
+      color: var(--accent);
+      border-color: rgba(8, 145, 178, 0.32);
+      background: rgba(8, 145, 178, 0.08);
+    }
+
     .mcp-connector-btn.connected {
       color: var(--accent);
       border-color: rgba(8, 145, 178, 0.32);
@@ -394,6 +403,13 @@
       line-height: 1.45;
     }
 
+    .mcp-other {
+      margin-top: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
     .mcp-config-preview {
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -402,6 +418,9 @@
     }
 
     .mcp-config-preview-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       padding: 8px 12px;
       border-bottom: 1px solid var(--border);
       font-size: 11px;
@@ -409,6 +428,25 @@
       color: var(--muted);
       text-transform: uppercase;
       letter-spacing: 0.04em;
+    }
+
+    .mcp-config-copy {
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--fg);
+      border-radius: 5px;
+      padding: 2px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0;
+      text-transform: none;
+      cursor: pointer;
+    }
+
+    .mcp-config-copy:hover {
+      background: var(--hover);
+      border-color: var(--accent);
+      color: var(--accent);
     }
 
     .mcp-config-preview pre {
@@ -469,6 +507,7 @@
       cursor: pointer;
       font: inherit;
       font-size: 13px;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
     }
 
     .modal-btn:hover:not(:disabled) {

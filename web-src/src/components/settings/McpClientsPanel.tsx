@@ -1,39 +1,18 @@
 /**
- * Settings → MCP panel. The body of the old MCP Settings modal,
- * lifted into the unified Settings shell. The "Copied configuration"
- * confirmation still pops as a secondary modal because it carries the
- * full JSON the user just put on their clipboard.
+ * Settings → MCP panel. Three clients auto-connect (StashBase writes their
+ * config file); every other client just gets the standard MCP config shown
+ * inline below, with their names listed for reference.
  */
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
-import { ModalShell } from '../ModalShell';
 
-type McpClientId =
-  | 'claude-code'
-  | 'codex-cli'
-  | 'gemini-cli'
-  | 'qwen-code'
-  | 'cursor'
-  | 'void'
-  | 'claude-desktop'
-  | 'windsurf'
-  | 'vscode'
-  | 'cherry-studio'
-  | 'cline'
-  | 'augment'
-  | 'roo-code'
-  | 'zencoder'
-  | 'langchain-langgraph'
-  | 'chatgpt'
-  | 'other';
+type McpClientId = 'claude-code' | 'codex-cli' | 'claude-desktop';
 
 interface McpConfigureResult {
   ok: boolean;
   client?: McpClientId;
   file?: string;
   command?: string;
-  manual?: unknown;
-  mode?: 'file' | 'clipboard';
   error?: string;
 }
 
@@ -55,33 +34,9 @@ const MCP_CLIENTS: {
   },
   {
     id: 'codex-cli',
-    name: 'OpenAI Codex CLI',
+    name: 'Codex CLI',
     detail: 'Adds stashbase to ~/.codex/config.toml.',
     restart: 'Restart Codex CLI after connecting.',
-  },
-  {
-    id: 'gemini-cli',
-    name: 'Gemini CLI',
-    detail: 'Adds stashbase to ~/.gemini/settings.json.',
-    restart: 'Restart Gemini CLI after connecting.',
-  },
-  {
-    id: 'qwen-code',
-    name: 'Qwen Code',
-    detail: 'Adds stashbase to ~/.qwen/settings.json.',
-    restart: 'Restart Qwen Code after connecting.',
-  },
-  {
-    id: 'cursor',
-    name: 'Cursor',
-    detail: 'Adds stashbase to ~/.cursor/mcp.json.',
-    restart: 'Restart Cursor after connecting.',
-  },
-  {
-    id: 'void',
-    name: 'Void',
-    detail: 'Copies a standard MCP JSON config for Void settings.',
-    restart: 'Paste it into Settings -> MCP -> Add MCP Server.',
   },
   {
     id: 'claude-desktop',
@@ -89,82 +44,30 @@ const MCP_CLIENTS: {
     detail: 'Adds @stashbase to Claude Desktop config.',
     restart: 'Restart Claude Desktop after connecting.',
   },
-  {
-    id: 'windsurf',
-    name: 'Windsurf',
-    detail: 'Copies a standard MCP JSON config for Windsurf settings.',
-    restart: 'Paste it into Windsurf MCP settings.',
-  },
-  {
-    id: 'vscode',
-    name: 'VS Code',
-    detail: 'Copies a standard MCP JSON config for VS Code MCP settings.',
-    restart: 'Reload VS Code after connecting.',
-  },
-  {
-    id: 'cherry-studio',
-    name: 'Cherry Studio',
-    detail: 'Copies STDIO server fields for the Cherry Studio GUI.',
-    restart: 'Paste the fields in Settings -> MCP Servers -> Add Server.',
-  },
-  {
-    id: 'cline',
-    name: 'Cline',
-    detail: 'Copies a standard MCP JSON config for Cline advanced settings.',
-    restart: 'Paste it into cline_mcp_settings.json.',
-  },
-  {
-    id: 'augment',
-    name: 'Augment',
-    detail: 'Copies the Augment advanced settings snippet.',
-    restart: 'Paste it into Augment advanced settings.',
-  },
-  {
-    id: 'roo-code',
-    name: 'Roo Code',
-    detail: 'Copies a standard MCP JSON config for Roo Code.',
-    restart: 'Paste it into Roo Code MCP global config.',
-  },
-  {
-    id: 'zencoder',
-    name: 'Zencoder',
-    detail: 'Copies the custom MCP server config for Zencoder.',
-    restart: 'Paste it into Add Custom MCP.',
-  },
-  {
-    id: 'langchain-langgraph',
-    name: 'LangChain/LangGraph',
-    detail: 'Copies the stdio MCP server config for framework integrations.',
-    restart: 'Use it in your MCP client or adapter code.',
-  },
-  {
-    id: 'chatgpt',
-    name: 'ChatGPT',
-    detail: 'Copies a generic stdio MCP config for ChatGPT connector setup.',
-    restart: 'Paste it into ChatGPT connector settings.',
-  },
-  {
-    id: 'other',
-    name: 'Other MCP clients',
-    detail: 'Copies a generic stdio MCP config for clients with manual connector setup.',
-    restart: 'Paste it into your client connector settings.',
-  },
+];
+
+// Other clients that can't be auto-connected — listed by name only; users
+// paste the config below into whatever each one's MCP settings happen to be.
+const OTHER_CLIENTS = [
+  'ChatGPT', 'Cursor', 'Gemini CLI', 'VS Code', 'Cline',
+  'Windsurf', 'Qwen Code', 'Roo Code', 'Cherry Studio', 'Void',
 ];
 
 export function McpClientsPanel() {
   const [busy, setBusy] = useState<McpClientId | null>(null);
   const [connected, setConnected] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
-  const [copyNotice, setCopyNotice] = useState<{
-    title: string;
-    usage: string;
-    config: string;
-  } | null>(null);
+  const [config, setConfig] = useState<string>('');
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     api.mcpStatus()
-      .then((res) => { if (!cancelled) setConnected(res.clients); })
+      .then((res) => {
+        if (cancelled) return;
+        setConnected(res.clients);
+        setConfig(JSON.stringify(res.config ?? {}, null, 2));
+      })
       .catch(() => { /* status is best-effort */ });
     return () => { cancelled = true; };
   }, []);
@@ -177,18 +80,6 @@ export function McpClientsPanel() {
       const result = await configureMcp(client, bridge);
       if (!result.ok) {
         setStatus({ kind: 'error', text: result.error || 'Unable to configure MCP.' });
-        return;
-      }
-      if (result.mode === 'clipboard') {
-        const text = typeof result.manual === 'string'
-          ? result.manual
-          : JSON.stringify(result.manual ?? {}, null, 2);
-        await navigator.clipboard.writeText(text);
-        setCopyNotice({
-          title: `${clientLabel(client)} Connector`,
-          usage: clientUsage(client),
-          config: text,
-        });
         return;
       }
       const file = result.file ? ` (${result.file})` : '';
@@ -222,60 +113,64 @@ export function McpClientsPanel() {
     }
   }
 
-  return (
-    <>
-      <div className="settings-section">
-        <div className="settings-section-title">MCP clients</div>
-        <div className="settings-section-hint">
-          Connect StashBase as <code>@stashbase</code> for the AI tools below.
-        </div>
-        <div className="mcp-client-list">
-          {MCP_CLIENTS.map((client) => (
-            <div className="mcp-client-row" key={client.id}>
-              <span className="mcp-client-text">
-                <span className="mcp-client-name">{client.name}</span>
-                <span className="mcp-client-detail">{client.detail}</span>
-                <span className="mcp-client-restart">{client.restart}</span>
-              </span>
-              <button
-                type="button"
-                className={'modal-btn mcp-connector-btn' + (connected[client.id] ? ' connected' : '')}
-                disabled={busy != null}
-                onClick={() => void (connected[client.id] ? disconnect(client.id) : connect(client.id))}
-                title={connected[client.id] ? `Disconnect ${client.name}` : `Connect ${client.name}`}
-              >
-                {busy === client.id
-                  ? (connected[client.id] ? 'Disconnecting…' : 'Connecting…')
-                  : connected[client.id] ? 'Disconnect' : 'Connector'}
-              </button>
-            </div>
-          ))}
-        </div>
-        {status && (
-          <div className={status.kind === 'error' ? 'modal-error' : 'mcp-success'}>
-            {status.text}
-          </div>
-        )}
-      </div>
+  async function copyConfig() {
+    try {
+      await navigator.clipboard.writeText(config);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard may be denied; the config is selectable inline */ }
+  }
 
-      {copyNotice && (
-        <ModalShell wide onCancel={() => setCopyNotice(null)}>
-          <h3>{copyNotice.title}</h3>
-          <p className="modal-hint">{copyNotice.usage}</p>
-          <div className="mcp-config-preview">
-            <div className="mcp-config-preview-head">Copied configuration</div>
-            <pre>{copyNotice.config}</pre>
-          </div>
-          <div className="modal-actions">
+  return (
+    <div className="settings-section">
+      <div className="settings-section-title">MCP clients</div>
+      <div className="settings-section-hint">
+        Connect StashBase as <code>@stashbase</code> for the AI tools below.
+      </div>
+      <div className="mcp-client-list">
+        {MCP_CLIENTS.map((client) => (
+          <div className="mcp-client-row" key={client.id}>
+            <span className="mcp-client-text">
+              <span className="mcp-client-name">{client.name}</span>
+              <span className="mcp-client-detail">{client.detail}</span>
+              <span className="mcp-client-restart">{client.restart}</span>
+            </span>
             <button
               type="button"
-              className="modal-btn primary"
-              onClick={() => setCopyNotice(null)}
-            >OK</button>
+              className={'modal-btn mcp-connector-btn' + (connected[client.id] ? ' connected' : '')}
+              disabled={busy != null}
+              onClick={() => void (connected[client.id] ? disconnect(client.id) : connect(client.id))}
+              title={connected[client.id] ? `Disconnect ${client.name}` : `Connect ${client.name}`}
+            >
+              {busy === client.id
+                ? (connected[client.id] ? 'Disconnecting…' : 'Connecting…')
+                : connected[client.id] ? 'Disconnect' : 'Connect'}
+            </button>
           </div>
-        </ModalShell>
+        ))}
+      </div>
+      {status && (
+        <div className={status.kind === 'error' ? 'modal-error' : 'mcp-success'}>
+          {status.text}
+        </div>
       )}
-    </>
+
+      <div className="mcp-other">
+        <div className="settings-section-hint">
+          For any other MCP client ({OTHER_CLIENTS.join(', ')}, …), paste this
+          configuration into its MCP settings:
+        </div>
+        <div className="mcp-config-preview">
+          <div className="mcp-config-preview-head">
+            MCP configuration
+            <button type="button" className="mcp-config-copy" onClick={() => void copyConfig()}>
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <pre>{config}</pre>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -296,33 +191,4 @@ async function configureMcp(
 
 function clientLabel(id: McpClientId): string {
   return MCP_CLIENTS.find((c) => c.id === id)?.name ?? id;
-}
-
-function clientUsage(id: McpClientId): string {
-  switch (id) {
-    case 'void':
-      return 'Copied. In Void, open Settings -> MCP -> Add MCP Server, then paste this JSON configuration.';
-    case 'windsurf':
-      return 'Copied. Open Windsurf MCP settings and paste this JSON configuration.';
-    case 'vscode':
-      return 'Copied. Open your VS Code MCP-compatible extension settings and paste this JSON configuration.';
-    case 'cherry-studio':
-      return 'Copied. In Cherry Studio, go to Settings -> MCP Servers -> Add Server, choose STDIO, then use these fields.';
-    case 'cline':
-      return 'Copied. In Cline, open MCP Servers -> Installed -> Advanced MCP Settings, then paste this into cline_mcp_settings.json.';
-    case 'augment':
-      return 'Copied. In Augment, open Advanced settings.json and merge this snippet into your settings.';
-    case 'roo-code':
-      return 'Copied. In Roo Code, open Settings -> MCP Servers -> Edit Global Config, then paste this JSON configuration.';
-    case 'zencoder':
-      return 'Copied. In Zencoder, open Tools -> Add Custom MCP, paste this custom server config, then install/save it.';
-    case 'langchain-langgraph':
-      return 'Copied. Use this stdio server config with your LangChain/LangGraph MCP adapter or client setup.';
-    case 'chatgpt':
-      return 'Copied. Paste this stdio server config into ChatGPT connector settings.';
-    case 'other':
-      return 'Copied. Paste this standard stdio MCP server configuration into your client connector settings.';
-    default:
-      return 'Copied. Paste this MCP connector configuration into the client settings.';
-  }
 }
