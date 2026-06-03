@@ -307,8 +307,25 @@ export const api = {
    *  children; the renderer uses this to display the home-relative
    *  form (`~/Documents/StashBase`) in copy. */
   getKbRoot: () => getJson<{ path: string; needsPicker?: boolean }>('/api/kb-root'),
-  setKbRoot: (path: string, confirmNonEmpty = false) =>
-    send<{ path: string }>('PUT', '/api/kb-root', { path, confirmNonEmpty }),
+  /** Pre-flight for the "move my spaces over" flow when changing the KB
+   *  root: which spaces would move and which collide with same-named
+   *  spaces already in the target. */
+  kbRootMigrationPreview: (target: string) =>
+    getJson<{ spaces: string[]; collisions: string[]; sameRoot: boolean }>(
+      '/api/kb-root/migration-preview?target=' + encodeURIComponent(target),
+    ),
+  setKbRoot: (
+    path: string,
+    opts: {
+      confirmNonEmpty?: boolean;
+      migrate?: { name: string; action: 'move' | 'overwrite' | 'rename' }[];
+    } = {},
+  ) =>
+    send<{ path: string; warnings?: string[] }>('PUT', '/api/kb-root', {
+      path,
+      confirmNonEmpty: opts.confirmNonEmpty ?? false,
+      migrate: opts.migrate,
+    }),
   /** Direct-child directory names under kbRoot — every entry is a
    *  candidate the server will accept as a space name. Powers the
    *  "Open space" dropdown. */

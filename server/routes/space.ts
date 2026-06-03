@@ -22,6 +22,7 @@ import {
   requireSpaceExistsByName,
   listAvailableSpaceNames,
   needsKbRootPicker,
+  previewKbRootMigration,
   readSpaceConfig,
   replaceCurrentSpacePath,
   resolveSpaceConfig,
@@ -29,6 +30,7 @@ import {
   setKbRoot,
   validateSpaceName,
   writeSpaceConfig,
+  type MigrateEntry,
 } from '../space.ts';
 import { errorMessage } from '../log.ts';
 import { sendError } from '../http.ts';
@@ -85,12 +87,31 @@ export function mount(app: express.Express): void {
     res.json({ path: getKbRoot(), needsPicker: needsKbRootPicker() });
   });
 
+  // Pre-flight for the "move my spaces over" flow: which spaces would
+  // move, and which collide with same-named spaces in the target. Read
+  // only — touches nothing.
+  app.get('/api/kb-root/migration-preview', (req, res) => {
+    const target = typeof req.query.target === 'string' ? req.query.target.trim() : '';
+    if (!target) return res.status(400).json({ error: 'target required' });
+    try {
+      res.json(previewKbRootMigration(target));
+    } catch (err: unknown) {
+      res.status(400).json({ error: errorMessage(err) });
+    }
+  });
+
   app.put('/api/kb-root', async (req, res) => {
     const rawPath = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
     if (!rawPath) return res.status(400).json({ error: 'path required' });
+    const migrate = Array.isArray(req.body?.migrate)
+      ? (req.body.migrate as MigrateEntry[])
+      : undefined;
     try {
-      await setKbRoot(rawPath, { allowNonEmpty: req.body?.confirmNonEmpty === true });
-      res.json({ path: getKbRoot() });
+      const { warnings } = await setKbRoot(rawPath, {
+        allowNonEmpty: req.body?.confirmNonEmpty === true,
+        migrate,
+      });
+      res.json({ path: getKbRoot(), warnings });
     } catch (err: unknown) {
       if ((err as any)?.code === 'NON_EMPTY') {
         return res.status(409).json({ error: 'directory is not empty', code: 'NON_EMPTY' });

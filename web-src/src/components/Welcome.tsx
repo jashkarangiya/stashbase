@@ -217,8 +217,8 @@ function KbRootPickerModal({
   async function browse() {
     const bridge = (window as { electron?: ElectronBridge }).electron;
     const picked = await bridge?.openFolderDialog?.({
-      title: 'Choose KB root',
-      buttonLabel: 'Use as KB Root',
+      title: 'Choose root folder',
+      buttonLabel: 'Use as Root folder',
       defaultPath: path || undefined,
     });
     if (picked) setPath(picked);
@@ -230,12 +230,12 @@ function KbRootPickerModal({
     setBusy(true);
     setError(null);
     try {
-      const r = await api.setKbRoot(p, confirmNonEmpty);
+      const r = await api.setKbRoot(p, { confirmNonEmpty });
       onSaved(r.path);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !confirmNonEmpty) {
         setBusy(false);
-        const ok = await actions.confirm('That directory is not empty. Use it as the KB root anyway?');
+        const ok = await actions.confirm('That directory is not empty. Use it as the root folder anyway?');
         if (ok) void submit(true);
         return;
       }
@@ -246,7 +246,7 @@ function KbRootPickerModal({
 
   return (
     <ModalShell onCancel={() => { /* first-run picker is required */ }}>
-      <h3>Choose KB root</h3>
+      <h3>Choose root folder</h3>
       <p className="modal-hint">
         Spaces will live as folders inside <code>{display}</code>.
       </p>

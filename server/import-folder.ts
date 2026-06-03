@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { validateSpaceName, pruneStashbasePerMachineState } from './space.ts';
+import { copyDirectoryDereferenced } from './fs-move.ts';
 
 export type ImportFolderMode = 'copy' | 'move';
 
@@ -182,38 +183,6 @@ function scanFolder(source: string): { entryCount: number; totalBytes: number; t
     }
   }
   return { entryCount, totalBytes, truncated: false };
-}
-
-function copyDirectoryDereferenced(source: string, destination: string): void {
-  if (fs.existsSync(destination)) throw new Error(`destination already exists: ${destination}`);
-  fs.mkdirSync(destination, { recursive: false });
-  const seen = new Set([fs.realpathSync(source)]);
-  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
-    const src = path.join(source, entry.name);
-    const dest = path.join(destination, entry.name);
-    copyEntryDereferenced(src, dest, seen);
-  }
-}
-
-function copyEntryDereferenced(source: string, destination: string, seenDirectories: Set<string>): void {
-  const stat = fs.statSync(source);
-  if (stat.isDirectory()) {
-    const real = fs.realpathSync(source);
-    if (seenDirectories.has(real)) throw new Error(`cyclic symlink detected: ${source}`);
-    seenDirectories.add(real);
-    fs.mkdirSync(destination, { mode: stat.mode });
-    for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
-      copyEntryDereferenced(path.join(source, entry.name), path.join(destination, entry.name), seenDirectories);
-    }
-    seenDirectories.delete(real);
-    return;
-  }
-  if (stat.isFile()) {
-    fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
-    fs.chmodSync(destination, stat.mode);
-    return;
-  }
-  throw new Error(`unsupported filesystem entry: ${source}`);
 }
 
 function buildWarnings(

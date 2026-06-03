@@ -19,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { logger, errorMessage } from './log.ts';
+import { moveDirectory } from './fs-move.ts';
 
 const log = logger('space');
 
@@ -113,15 +114,67 @@ export function needsKbRootPicker(): boolean {
   return listAvailableSpaceNames().length === 0;
 }
 
-export async function setKbRoot(absPath: string, opts: { allowNonEmpty?: boolean } = {}): Promise<void> {
+/** Expand `~`, require absolute, and resolve. Shared by `setKbRoot`
+ *  and the migration preview so they agree on what a path means. */
+function resolveRootPath(absPath: string): string {
   if (typeof absPath !== 'string' || !absPath.trim()) throw new Error('path required');
   let expanded = absPath.trim();
   if (expanded === '~' || expanded.startsWith('~/')) {
     expanded = path.join(os.homedir(), expanded.slice(1));
   }
   if (!path.isAbsolute(expanded)) throw new Error('path must be absolute');
-  const root = path.resolve(expanded);
-  if (fs.existsSync(root) && !opts.allowNonEmpty) {
+  return path.resolve(expanded);
+}
+
+/** Per-space resolution for a KB-root migration. `move` = no collision
+ *  (or the caller decided to just move it), `overwrite` = replace the
+ *  same-named space already in the target, `rename` = move under a
+ *  free `"<name> N"`. Spaces absent from the list stay in the old root. */
+export type MigrateAction = 'move' | 'overwrite' | 'rename';
+export interface MigrateEntry { name: string; action: MigrateAction; }
+
+export interface KbRootMigrationPreview {
+  /** Space folders under the *current* root that could be moved. */
+  spaces: string[];
+  /** Of those, the names that already exist in the target root. */
+  collisions: string[];
+  /** Target resolves to the current root — nothing to migrate. */
+  sameRoot: boolean;
+}
+
+/** Look before the leap: what would moving spaces into `targetPath`
+ *  involve? Drives the migration dialog without touching anything. */
+export function previewKbRootMigration(targetPath: string): KbRootMigrationPreview {
+  const oldRoot = getKbRoot();
+  const target = resolveRootPath(targetPath);
+  if (target === oldRoot) return { spaces: [], collisions: [], sameRoot: true };
+  const spaces = listSpaceNamesUnder(oldRoot);
+  const existing = new Set(listSpaceNamesUnder(target));
+  return { spaces, collisions: spaces.filter((s) => existing.has(s)), sameRoot: false };
+}
+
+/** First free `"<base> N"` under `root` (N starts at 2), matching the
+ *  duplicate-naming convention used elsewhere. Assumes `base` itself
+ *  is taken. */
+function freeSpaceName(root: string, base: string): string {
+  for (let n = 2; ; n++) {
+    const cand = `${base} ${n}`;
+    if (!fs.existsSync(path.join(root, cand))) return cand;
+  }
+}
+
+export async function setKbRoot(
+  absPath: string,
+  opts: { allowNonEmpty?: boolean; migrate?: MigrateEntry[] } = {},
+): Promise<{ warnings: string[] }> {
+  const root = resolveRootPath(absPath);
+  const oldRoot = getKbRoot();
+  const migrate = opts.migrate ?? [];
+  const migrating = migrate.length > 0;
+
+  // Non-empty guard — skipped when migrating, since the whole point is
+  // to move spaces *into* a populated target.
+  if (fs.existsSync(root) && !opts.allowNonEmpty && !migrating) {
     if (!fs.statSync(root).isDirectory()) throw new Error('path is not a directory');
     const entries = fs.readdirSync(root);
     const selfEntries = new Set(['.DS_Store', '.stashbase', 'STASHBASE.md', 'AGENT.md', 'space-metadata.md']);
@@ -133,15 +186,39 @@ export async function setKbRoot(absPath: string, opts: { allowNonEmpty?: boolean
   }
   fs.mkdirSync(root, { recursive: true });
   if (!fs.statSync(root).isDirectory()) throw new Error('path is not a directory');
+
+  // Move spaces from the old root into the new one *before* switching —
+  // `getKbRoot()` still points at the old root here, and each move is a
+  // safe copy + delete (cross-filesystem safe; see fs-move.ts).
+  const warnings: string[] = [];
+  if (migrating) {
+    if (root === oldRoot) throw new Error('cannot migrate into the same root');
+    for (const { name, action } of migrate) {
+      const src = path.join(oldRoot, name);
+      let isDir = false;
+      try { isDir = fs.statSync(src).isDirectory(); } catch { /* gone since preview */ }
+      if (!isDir) continue;
+      let destName = name;
+      if (action === 'overwrite') {
+        const dest = path.join(root, name);
+        if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true });
+      } else if (action === 'rename' && fs.existsSync(path.join(root, name))) {
+        destName = freeSpaceName(root, name);
+      }
+      const { warning } = moveDirectory(src, path.join(root, destName));
+      if (warning) warnings.push(warning);
+    }
+  }
+
   ensureKbMetadata(root);
   const cfg = readConfig();
   cfg.kbRoot = root;
   cfg.recentSpaces = [];
   delete cfg.recentVaults;
   writeConfig(cfg);
-  for (const [windowId, oldRoot] of currentSpaces.entries()) {
+  for (const [windowId, prevRoot] of currentSpaces.entries()) {
     for (const fn of closeListeners) {
-      try { fn(oldRoot, windowId); } catch (err) {
+      try { fn(prevRoot, windowId); } catch (err) {
         log.warn(`close listener threw: ${(err as any)?.message ?? err}`);
       }
     }
@@ -152,6 +229,7 @@ export async function setKbRoot(absPath: string, opts: { allowNonEmpty?: boolean
       log.warn(`kbRoot listener threw: ${(err as any)?.message ?? err}`);
     }
   }));
+  return { warnings };
 }
 
 /** True if `absPath` is a **direct child** of the KB root. Spaces are
@@ -221,8 +299,9 @@ export function pruneStashbasePerMachineState(stashbaseDir: string): void {
  *  Powers the "Open space" dropdown — every entry is a candidate the
  *  server will accept as a space name. Dot-dirs are skipped (`.git`,
  *  `.stashbase`, etc.). Errors (root missing, permission) return []. */
-export function listAvailableSpaceNames(): string[] {
-  const root = getKbRoot();
+/** Direct-child directory names under `root` that count as spaces
+ *  (skips dotfiles like `.stashbase`). Sorted. */
+function listSpaceNamesUnder(root: string): string[] {
   let entries: fs.Dirent[];
   try { entries = fs.readdirSync(root, { withFileTypes: true }); }
   catch { return []; }
@@ -230,6 +309,10 @@ export function listAvailableSpaceNames(): string[] {
     .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
     .map((e) => e.name)
     .sort();
+}
+
+export function listAvailableSpaceNames(): string[] {
+  return listSpaceNamesUnder(getKbRoot());
 }
 
 /** Current space's name, expressed as a kbRoot-relative POSIX path.
