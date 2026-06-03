@@ -5,6 +5,7 @@
  */
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
+import { CopyIcon, CheckIcon } from '../../icons';
 
 type McpClientId = 'claude-code' | 'codex-cli' | 'claude-desktop';
 
@@ -87,11 +88,30 @@ export function McpClientsPanel() {
   }
 
   async function copyConfig() {
+    let ok = false;
     try {
       await navigator.clipboard.writeText(config);
+      ok = true;
+    } catch {
+      // navigator.clipboard can reject in an unfocused / restricted
+      // Electron webview — fall back to the legacy execCommand path.
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = config;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch { ok = false; }
+    }
+    if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch { /* clipboard may be denied; the config is selectable inline */ }
+    } else {
+      setStatus({ kind: 'error', text: 'Couldn’t copy — select the text and copy manually.' });
+    }
   }
 
   return (
@@ -134,8 +154,14 @@ export function McpClientsPanel() {
         <div className="mcp-config-preview">
           <div className="mcp-config-preview-head">
             MCP configuration
-            <button type="button" className="mcp-config-copy" onClick={() => void copyConfig()}>
-              {copied ? 'Copied' : 'Copy'}
+            <button
+              type="button"
+              className={'mcp-config-copy' + (copied ? ' copied' : '')}
+              onClick={() => void copyConfig()}
+              title={copied ? 'Copied' : 'Copy configuration'}
+              aria-label={copied ? 'Copied' : 'Copy configuration'}
+            >
+              {copied ? <CheckIcon className="mcp-config-copy-icon" /> : <CopyIcon className="mcp-config-copy-icon" />}
             </button>
           </div>
           <pre>{config}</pre>

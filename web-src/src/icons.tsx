@@ -152,6 +152,17 @@ export function CheckIcon({ className }: IconProps) {
   );
 }
 
+/** Two overlapping sheets — the conventional "copy to clipboard" glyph
+ *  (Lucide proportions: front sheet + back sheet peeking top-left). */
+export function CopyIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" strokeWidth={2} {...stroke}>
+      <rect x="8" y="8" width="14" height="14" rx="2" />
+      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+    </svg>
+  );
+}
+
 /** Chat bubble — toggle for the right-side AI assistant panel. The
  *  panel runs whatever CLI the user picked (Claude / Codex / …), so
  *  the icon stays brand-neutral. `currentColor` lets it pick up the

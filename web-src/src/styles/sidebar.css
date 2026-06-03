@@ -380,11 +380,17 @@
     /* Compact connect/disconnect — smaller than a default modal button
      * so it doesn't dominate an otherwise-sparse row. Sized via padding
      * (not an explicit height) so the label stays vertically centred. */
-    .mcp-connector-btn {
+    /* `.modal-btn.mcp-connector-btn` (not bare `.mcp-connector-btn`) so
+     * these win over `.modal-btn` — which is defined later in the file
+     * and would otherwise override the smaller font/padding. min-width
+     * fits the longer "Disconnect" so it and "Connect" share a width and
+     * the column stays aligned. */
+    .modal-btn.mcp-connector-btn {
       flex-shrink: 0;
-      min-width: 84px;
+      min-width: 96px;
       padding: 5px 12px;
       font-size: 12px;
+      text-align: center;
     }
 
     /* Connecting is the primary action of each row — give the idle
@@ -445,23 +451,38 @@
       letter-spacing: 0.04em;
     }
 
+    /* Icon-only copy button (clipboard ↔ check). */
     .mcp-config-copy {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
       border: 1px solid var(--border);
       background: var(--bg);
-      color: var(--fg);
+      color: var(--muted);
       border-radius: 5px;
-      padding: 2px 10px;
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0;
-      text-transform: none;
       cursor: pointer;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
     }
 
     .mcp-config-copy:hover {
       background: var(--hover);
       border-color: var(--accent);
       color: var(--accent);
+    }
+
+    /* Confirmation: accent check (palette is cyan/amber/red, no green). */
+    .mcp-config-copy.copied,
+    .mcp-config-copy.copied:hover {
+      color: var(--accent);
+      border-color: rgba(8, 145, 178, 0.4);
+      background: rgba(8, 145, 178, 0.08);
+    }
+
+    .mcp-config-copy-icon {
+      width: 14px;
+      height: 14px;
     }
 
     .mcp-config-preview pre {
