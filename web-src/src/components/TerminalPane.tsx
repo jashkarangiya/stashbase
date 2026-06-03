@@ -3,8 +3,10 @@
  * `state.terminalTabs` owns its own PTY + xterm; all tabs render at
  * once so switching preserves scrollback (inactive tabs are
  * absolutely-positioned + `visibility: hidden`). New tabs are spawned
- * from the `+` button in the strip against the default CLI configured
- * in Settings → Chat CLI.
+ * from the split button in the strip: the main half opens a tab with
+ * the last-used agent, the caret picks a specific one. Whichever agent
+ * you start becomes the remembered default (also used by the chrome
+ * toggle's first-open auto-spawn).
  *
  * Per tab the lifecycle is:
  *   1. CLI binary detected → connect WS, shell opens, runs the binary
@@ -16,6 +18,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { api, getWindowId, type TerminalCli, type TerminalClisResponse } from '../api';
+import { ChevronDownIcon, CheckIcon } from '../icons';
 import { useApp } from '../store/AppContext';
 import type { TerminalTab } from '../store/state';
 
@@ -32,17 +35,42 @@ export function TerminalPane() {
   const tabs = state.terminalTabs;
   const activeId = state.activeTerminalTabId;
 
-  function newTab() {
-    const cliId = state.terminalCli || 'claude';
-    // Title disambiguates duplicates of the same CLI — first tab gets
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
+  const agentMenuRef = useRef<HTMLDivElement>(null);
+
+  // The agent the main button defaults to — the last one started, or
+  // Claude Code on a fresh install.
+  const currentCliId = state.terminalCli || 'claude';
+  const currentLabel =
+    state.terminalClis.find((c) => c.id === currentCliId)?.label ?? 'Claude Code';
+
+  // Close the agent menu on any outside click.
+  useEffect(() => {
+    if (!agentMenuOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (!agentMenuRef.current?.contains(e.target as Node)) setAgentMenuOpen(false);
+    }
+    window.addEventListener('mousedown', onDocClick);
+    return () => window.removeEventListener('mousedown', onDocClick);
+  }, [agentMenuOpen]);
+
+  function newTab(cliId?: string) {
+    const id = cliId ?? currentCliId;
+    // Title disambiguates duplicates of the same agent — first tab gets
     // the bare label, copies append " 2", " 3", … the way browsers
     // name duplicate windows.
-    const cliInfo = state.terminalClis.find((c) => c.id === cliId);
-    const baseLabel = cliInfo?.label ?? cliId;
-    const sameCli = tabs.filter((t) => t.cli === cliId);
+    const cliInfo = state.terminalClis.find((c) => c.id === id);
+    const baseLabel = cliInfo?.label ?? id;
+    const sameCli = tabs.filter((t) => t.cli === id);
     const title = sameCli.length === 0 ? baseLabel : `${baseLabel} ${sameCli.length + 1}`;
-    const tab: TerminalTab = { id: crypto.randomUUID(), cli: cliId, title };
+    const tab: TerminalTab = { id: crypto.randomUUID(), cli: id, title };
     dispatch({ type: 'TERMINAL_TAB_NEW', tab });
+    // Remember which agent we just started so the main button and the
+    // chrome toggle default to it next time. Persisted best-effort.
+    if (id !== state.terminalCli) {
+      dispatch({ type: 'TERMINAL_CLI', id });
+      api.setCli(id).catch(() => { /* best-effort */ });
+    }
   }
 
   if (!space) return null;
@@ -75,12 +103,45 @@ export function TerminalPane() {
           ))}
         </div>
         <div className="terminal-tabs-actions">
-          <button
-            type="button"
-            className="terminal-tab-new"
-            title="New chat"
-            onClick={newTab}
-          >+</button>
+          <div className="agent-new" ref={agentMenuRef}>
+            <button
+              type="button"
+              className="agent-new-main"
+              title={`New ${currentLabel} chat`}
+              onClick={() => newTab()}
+            >
+              <span className="agent-new-plus">+</span>
+              <span className="agent-new-label">{currentLabel}</span>
+            </button>
+            <button
+              type="button"
+              className="agent-new-caret"
+              title="Choose agent"
+              aria-haspopup="menu"
+              aria-expanded={agentMenuOpen}
+              onClick={() => setAgentMenuOpen((o) => !o)}
+            >
+              <ChevronDownIcon className="agent-new-caret-icon" />
+            </button>
+            {agentMenuOpen && (
+              <div className="agent-new-menu" role="menu">
+                {state.terminalClis.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    role="menuitem"
+                    className={'agent-new-item' + (c.id === currentCliId ? ' current' : '')}
+                    onClick={() => { setAgentMenuOpen(false); newTab(c.id); }}
+                  >
+                    <span className="agent-new-item-label">
+                      {c.label}{c.installed ? '' : ' · not installed'}
+                    </span>
+                    {c.id === currentCliId && <CheckIcon className="agent-new-item-check" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
       <div className="terminal-tabs-body">

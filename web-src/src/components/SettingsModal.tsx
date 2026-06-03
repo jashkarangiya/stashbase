@@ -1,8 +1,9 @@
 /**
  * Unified Settings modal — left nav (sections) + right content panel.
  * Replaces the old standalone MCP modal and the chrome-row dropdowns
- * for Embedder + Chat CLI. Sections are imported as panels so each
- * one keeps its own state / auxiliary modals independent.
+ * for Embedder. Sections are imported as panels so each one keeps its
+ * own state / auxiliary modals independent. (Agent selection moved out
+ * to the chat panel's split button — see TerminalPane.)
  *
  * Open from anywhere via the `openSettings(section?)` helper or by
  * dispatching the `stashbase-open-settings` event with an optional
@@ -12,18 +13,16 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { EmbeddingPanel } from './settings/EmbeddingPanel';
 import { McpClientsPanel } from './settings/McpClientsPanel';
-import { ChatCliPanel } from './settings/ChatCliPanel';
 import { LibraryPanel } from './settings/LibraryPanel';
 import { CapturePanel } from './settings/CapturePanel';
 
-export type SettingsSection = 'library' | 'embedding' | 'mcp' | 'chat-cli' | 'capture';
+export type SettingsSection = 'library' | 'embedding' | 'mcp' | 'capture';
 
 const SECTIONS: { id: SettingsSection; label: string; render: () => ReactNode }[] = [
   { id: 'library', label: 'Library', render: () => <LibraryPanel /> },
   { id: 'capture', label: 'Capture', render: () => <CapturePanel /> },
   { id: 'embedding', label: 'Embedding', render: () => <EmbeddingPanel /> },
   { id: 'mcp', label: 'MCP', render: () => <McpClientsPanel /> },
-  { id: 'chat-cli', label: 'Chat CLI', render: () => <ChatCliPanel /> },
 ];
 
 interface OpenDetail {

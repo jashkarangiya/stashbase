@@ -28,8 +28,8 @@ export interface SaveStatus {
 }
 
 /** One chat tab in the right-side terminal panel. The tab's `cli` is
- *  locked at creation time so changing the global default in
- *  Settings → Chat CLI doesn't restart open conversations. */
+ *  locked at creation time so starting a new tab with a different agent
+ *  doesn't restart open conversations. */
 export interface TerminalTab {
   id: string;
   /** CLI id the PTY runs (`claude` / `codex` / …). */
@@ -202,13 +202,13 @@ export interface State {
   terminalOpen: boolean;
   /** Terminal panel width in pixels — user-resizable via drag handle. */
   terminalWidth: number;
-  /** **Default** AI CLI id used when the user clicks `+` to open a
-   *  new chat tab. Mirrors the server-side preference so the
-   *  Settings → Chat CLI radio reflects the right choice without an
-   *  API hop on every render. Existing tabs keep running their own
-   *  CLI — switching this only affects future tabs. */
+  /** **Last-used** agent id — the agent the chat panel's split button
+   *  and the chrome toggle default to for a new tab. Updated (and
+   *  persisted server-side) each time a tab is started, so it follows
+   *  the user's latest pick. Existing tabs keep running their own
+   *  agent — this only affects future tabs. */
   terminalCli: string;
-  /** Catalog of available CLIs from the server, populated on demand. */
+  /** Catalog of available agents from the server, populated on demand. */
   terminalClis: TerminalCli[];
   /** Active chat tabs. Each tab owns its own PTY + xterm instance so
    *  switching tabs preserves scrollback. Cursor-style — a `+` button

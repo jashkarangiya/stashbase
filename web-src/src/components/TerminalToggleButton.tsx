@@ -1,8 +1,8 @@
 /**
  * Chrome-row terminal toggle — icon-only. Opens / closes the right-side
  * chat panel; on the first open (when no tabs exist) it spawns one tab
- * against the user's default CLI from Settings → Chat CLI so the panel
- * doesn't sit empty staring at the user.
+ * against the last-used agent (`state.terminalCli`, defaulting to
+ * Claude Code) so the panel doesn't sit empty staring at the user.
  */
 import { useEffect, useRef } from 'react';
 import { api, type TerminalClisResponse } from '../api';
@@ -14,8 +14,8 @@ export function TerminalToggleButton() {
   const { state, dispatch } = useApp();
   const refreshedRef = useRef(false);
 
-  // Pull the CLI registry once per session so the hover title reflects
-  // the user's pick. Settings → Chat CLI re-fetches on open for accuracy.
+  // Pull the agent registry once per session so the hover title and the
+  // chat panel's agent picker reflect what's installed.
   useEffect(() => {
     if (refreshedRef.current) return;
     refreshedRef.current = true;

@@ -123,20 +123,92 @@
       color: var(--fg);
     }
 
-    .terminal-tab-new {
-      width: 24px;
-      height: 24px;
+    /* New-chat split button: main half spawns a tab with the last-used
+     * agent; the caret opens a menu to pick a specific one. */
+    .agent-new {
+      position: relative;
+      display: inline-flex;
+      align-items: stretch;
+      border-radius: 6px;
+    }
+    .agent-new-main,
+    .agent-new-caret {
       border: 0;
       background: transparent;
       color: var(--muted);
-      font-size: 16px;
-      line-height: 1;
-      border-radius: 4px;
       cursor: pointer;
+      font: inherit;
+      display: inline-flex;
+      align-items: center;
+      transition: background 0.12s, color 0.12s;
     }
-    .terminal-tab-new:hover {
+    .agent-new-main {
+      gap: 4px;
+      padding: 4px 6px 4px 8px;
+      font-size: 12px;
+      border-radius: 6px 0 0 6px;
+    }
+    .agent-new-plus {
+      font-size: 14px;
+      line-height: 1;
+    }
+    .agent-new-caret {
+      padding: 0 5px;
+      border-radius: 0 6px 6px 0;
+      box-shadow: inset 1px 0 0 var(--border);
+    }
+    .agent-new-caret-icon {
+      width: 12px;
+      height: 12px;
+    }
+    .agent-new-main:hover,
+    .agent-new-caret:hover {
       background: var(--hover);
       color: var(--fg);
+    }
+
+    .agent-new-menu {
+      position: absolute;
+      top: calc(100% + 4px);
+      right: 0;
+      z-index: 20;
+      min-width: 168px;
+      padding: 4px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .agent-new-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 10px;
+      border: 0;
+      background: transparent;
+      color: var(--fg);
+      font: inherit;
+      font-size: 12.5px;
+      border-radius: 6px;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.1s;
+    }
+    .agent-new-item:hover {
+      background: rgba(8, 145, 178, 0.08);
+    }
+    .agent-new-item.current {
+      color: var(--accent);
+    }
+    .agent-new-item-check {
+      width: 14px;
+      height: 14px;
+      color: var(--accent);
+      flex-shrink: 0;
     }
 
     /* Body — relative anchor for the absolutely-positioned tab panes
@@ -275,27 +347,14 @@
 
     /* Chrome-row terminal toggle — icon-only, sits next to the gear.
      * Inherits everything from `.icon-btn`; `.active` tints it when
-     * the right-side panel is open. The CLI selection lives in
-     * Settings → Chat CLI (see SettingsModal). */
+     * the right-side panel is open. Agent selection lives in the chat
+     * panel's split button (see TerminalPane). */
     .icon-btn.terminal-toggle.active {
       background: rgba(8, 145, 178, 0.08);
       color: var(--accent);
     }
 
-    /* Each row in the picker is its own flex container so the
-     * Uninstall affordance (right side) and checkmark have a stable
-     * column independent of the label length. */
-    .cli-row {
-      cursor: pointer;
-      gap: 12px;
-    }
-    .cli-row-actions {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      flex-shrink: 0;
-    }
-    /* Uninstall surfaces on row hover only — keeps the dropdown quiet
+    /* Uninstall surfaces on card hover only — keeps the picker quiet
      * when the user is just browsing, but the action is one click
      * away when they want it. */
     .cli-uninstall {
@@ -309,7 +368,7 @@
       border-radius: 4px;
       cursor: pointer;
     }
-    .cli-row:hover .cli-uninstall,
+    .agent-choice:hover .cli-uninstall,
     .cli-uninstall:disabled {
       visibility: visible;
     }

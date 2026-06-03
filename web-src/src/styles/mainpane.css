@@ -1373,8 +1373,10 @@
      * panel) doesn't crowd. */
     .modal-card.settings-card {
       width: min(760px, 94vw);
+      /* Fixed height — the modal must NOT resize when switching tabs.
+       * Each panel scrolls inside .settings-content instead. */
+      height: min(78vh, 640px);
       padding: 0;
-      max-height: min(78vh, 720px);
       display: flex;
       flex-direction: column;
     }
@@ -1402,6 +1404,7 @@
       line-height: 1;
       border-radius: 6px;
       cursor: pointer;
+      transition: background 0.12s, color 0.12s;
     }
 
     .settings-close:hover {
@@ -1435,6 +1438,7 @@
       font-size: 13px;
       border-radius: 6px;
       cursor: pointer;
+      transition: background 0.12s, color 0.12s;
     }
 
     .settings-nav-item:hover {
@@ -1476,13 +1480,11 @@
     .settings-section-hint code {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 11.5px;
-      background: var(--hover);
-      padding: 1px 5px;
-      border-radius: 3px;
+      color: var(--accent);
     }
 
-    /* Radio-style list (used by Embedding provider + Chat CLI). Each
-     * row is button-shaped, full-width, with the check rendered on the
+    /* Radio-style list (used by the Capture panel). Each row is
+     * button-shaped, full-width, with the check rendered on the
      * right for the current item. */
     .settings-radio-list {
       display: flex;
@@ -1542,6 +1544,71 @@
       height: 14px;
       color: var(--accent);
       flex-shrink: 0;
+    }
+
+    /* Chat agent picker: a compact card row that replaces the stacked
+     * radio list — a binary / few-way choice reads better side by side.
+     * Robust to a third option later (cards just wrap). */
+    .agent-choice-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .agent-choice {
+      flex: 1 1 150px;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+      cursor: pointer;
+      text-align: left;
+      box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+      transition: border-color 0.12s, box-shadow 0.12s, background 0.12s;
+    }
+
+    .agent-choice:hover {
+      border-color: #b9bdc4;
+      box-shadow: 0 4px 12px rgba(16, 24, 40, 0.08);
+    }
+
+    .agent-choice.current {
+      border-color: var(--accent);
+      background: rgba(8, 145, 178, 0.05);
+    }
+
+    .agent-choice-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .agent-choice-name {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--fg);
+    }
+
+    .agent-choice-check {
+      width: 15px;
+      height: 15px;
+      color: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .agent-choice-vendor {
+      font-size: 11.5px;
+      color: var(--muted);
+    }
+
+    .agent-choice-uninstall {
+      align-self: flex-start;
+      margin-top: 6px;
     }
 
     .settings-actions-row {
