@@ -79,8 +79,7 @@ export function Welcome() {
           </div>
           <div className="welcome-title">StashBase</div>
           <div className="welcome-sub">
-            Local knowledge base for you and your AI. Continuously indexed,{' '}
-            <span style={{ whiteSpace: 'nowrap' }}>MCP-compatible</span>.
+            Turn what you save into persistent memory.
           </div>
         </div>
 
@@ -114,7 +113,7 @@ export function Welcome() {
           <div className="welcome-mcp-text">
             <div className="welcome-mcp-title">Connect AI tools</div>
             <div className="welcome-mcp-sub">
-              Searchable from Claude, Codex, ChatGPT, and more.
+              Use your memory from Claude, ChatGPT, and more.
             </div>
           </div>
           <button
@@ -538,8 +537,11 @@ function NewSpaceModal({
     <ModalShell onCancel={busy ? () => { /* swallow during create */ } : onClose}>
       <h3>New space</h3>
       <p className="modal-hint">
-        Creates <code>{rootDisplay}/&lt;name&gt;</code> and opens it. The
-        folder is created if it doesn't exist yet.
+        Creates{' '}
+        <code>
+          {rootDisplay}/{name.trim() || '<name>'}
+        </code>{' '}
+        and opens it. The folder is created if it doesn't exist yet.
       </p>
       <input
         type="text"
@@ -673,7 +675,8 @@ function OpenSpaceModal({
               disabled={busy}
               onClick={() => { void pick(n); }}
             >
-              {n}
+              <FolderIcon className="welcome-open-row-icon" />
+              <span className="welcome-open-row-name">{n}</span>
             </button>
           ))}
         </div>

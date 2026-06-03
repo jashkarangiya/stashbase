@@ -245,9 +245,7 @@
     .modal-hint code {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 12px;
-      background: var(--hover);
-      padding: 1px 5px;
-      border-radius: 3px;
+      color: var(--accent);
     }
 
     .modal-input {
@@ -266,6 +264,11 @@
     .modal-input:focus {
       outline: 2px solid var(--accent);
       outline-offset: -1px;
+    }
+
+    .modal-input::placeholder {
+      color: #b8bcc2;
+      font-weight: 400;
     }
 
     .modal-check {

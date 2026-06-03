@@ -2,6 +2,7 @@ import {
   ChevronDownIcon,
   CollapseAllIcon,
   ExpandAllIcon,
+  FolderIcon,
   NewFileIcon,
   NewFolderIcon,
   SyncIcon,
@@ -277,7 +278,10 @@ function SpaceMenu() {
                     className="welcome-open-row"
                     disabled={busy || name === current}
                     onClick={() => { void switchTo(name); }}
-                  >{name}</button>
+                  >
+                    <FolderIcon className="welcome-open-row-icon" />
+                    <span className="welcome-open-row-name">{name}</span>
+                  </button>
                 ))}
               </div>
             )
