@@ -1,12 +1,12 @@
 import {
-  BotIcon,
-  CatalogIcon,
   ChevronDownIcon,
   CollapseAllIcon,
   ExpandAllIcon,
   FolderIcon,
+  InfoIcon,
   NewFileIcon,
   NewFolderIcon,
+  StashBaseIcon,
   SyncIcon,
 } from '../icons';
 import { useApp } from '../store/AppContext';
@@ -70,7 +70,7 @@ function KbSection() {
           onClick={() => { void actions.openKbRules(); }}
           title="KB-level maintenance rules (STASHBASE.md)"
         >
-          <span className="kb-file-icon"><BotIcon /></span>
+          <span className="kb-file-icon"><StashBaseIcon /></span>
           <span className="kb-file-label">STASHBASE.md</span>
         </button>
         <button
@@ -79,7 +79,7 @@ function KbSection() {
           onClick={() => { void actions.openKbOverview(); }}
           title="Agent-maintained KB 目录 (.stashbase/space-metadata.md)"
         >
-          <span className="kb-file-icon"><CatalogIcon /></span>
+          <span className="kb-file-icon"><InfoIcon /></span>
           <span className="kb-file-label">space-metadata.md</span>
         </button>
       </div>
