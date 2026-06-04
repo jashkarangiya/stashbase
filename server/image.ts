@@ -23,14 +23,10 @@ import path from 'node:path';
 import { isImageFile } from './format.ts';
 import { logger } from './log.ts';
 import { hasRecord, markDone, markFailed, markInFlight } from './pdf-status.ts';
-import { pythonBin, pythonScript } from './python-host.ts';
+import { extractorSpawn } from './python-host.ts';
 import { toKbRel } from './space.ts';
 
 const log = logger('image');
-
-function extractorScript(): string {
-  return pythonScript('ocr_extract.py');
-}
 
 /** Dot-prefixed derived note path (`.<stem>.md`) for an image — same
  *  hidden-sibling layout PDFs use, minus the image bundle. */
@@ -46,11 +42,8 @@ export function derivedNotePathForImage(imageAbsPath: string): string {
 export function convertImage(imageAbsPath: string): Promise<{ notePath: string }> {
   const notePath = derivedNotePathForImage(imageAbsPath);
   return new Promise((resolve, reject) => {
-    const proc = spawn(
-      pythonBin(),
-      [extractorScript(), imageAbsPath, notePath],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
-    );
+    const { cmd, args } = extractorSpawn('ocr', 'ocr_extract.py', [imageAbsPath, notePath]);
+    const proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
     proc.stderr.on('data', (b) => { stderr += String(b); });
     proc.on('error', (err) => reject(new Error(`spawn failed: ${err.message}`)));

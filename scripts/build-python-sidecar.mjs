@@ -96,3 +96,55 @@ if (!fs.existsSync(outBin)) {
 }
 fs.chmodSync(outBin, 0o755);
 console.log('[build:python-sidecar] done ->', outBin);
+
+// Second sidecar: the one-shot extractors (`python/extract_main.py`,
+// dispatching pdf_extract / ocr_extract). Unlike the daemon this DOES need
+// the heavy CV/ML deps, so it bundles onnxruntime + opencv (rapidocr) and
+// the pymupdf data files. `--collect-all` is load-bearing: rapidocr ships
+// its ONNX models as package data and pymupdf ships layout resources that
+// PyInstaller's static analysis misses, so the frozen binary errors at
+// runtime ("No such file or directory: .../models/*.onnx" / pymupdf
+// resources) without them. Both bundles share `python/sidecar/` and ride
+// to the app via electron-builder's `extraResources` (`sidecar/**/*`).
+const extractEntry = path.join(root, 'python', 'extract_main.py');
+execFileSync(
+  python,
+  [
+    '-m',
+    'PyInstaller',
+    '--clean',
+    '--noconfirm',
+    '--name',
+    'stashbase-extract',
+    // pdf_extract.py / ocr_extract.py are sibling modules imported lazily
+    // by extract_main; put `python/` on the analysis path and pin them as
+    // hidden imports so PyInstaller bundles both branches.
+    '--paths',
+    path.join(root, 'python'),
+    '--hidden-import',
+    'pdf_extract',
+    '--hidden-import',
+    'ocr_extract',
+    '--collect-all',
+    'rapidocr_onnxruntime',
+    '--collect-all',
+    'pymupdf4llm',
+    '--collect-all',
+    'pymupdf',
+    '--distpath',
+    distPath,
+    '--workpath',
+    buildPath,
+    '--specpath',
+    specPath,
+    extractEntry,
+  ],
+  { cwd: root, stdio: 'inherit' },
+);
+
+const extractBin = path.join(distPath, 'stashbase-extract', 'stashbase-extract');
+if (!fs.existsSync(extractBin)) {
+  throw new Error(`PyInstaller did not produce ${extractBin}`);
+}
+fs.chmodSync(extractBin, 0o755);
+console.log('[build:python-sidecar] done ->', extractBin);

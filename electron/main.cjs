@@ -258,12 +258,25 @@ async function ensureServer() {
     try { return require('node:fs').statSync(candidate).isFile(); } catch { return false; }
   });
   const hasPackagedDaemon = Boolean(packagedDaemon);
+  // The PDF / OCR extractors ship as a second PyInstaller --onedir bundle
+  // (`sidecar/stashbase-extract/stashbase-extract`) so the packaged app can
+  // run them without a Python interpreter — there's no bundled venv. The
+  // server (pdf.ts / image.ts) spawns this binary with a `pdf` / `ocr`
+  // subcommand when STASHBASE_EXTRACT_BIN is set; in dev it spawns the
+  // scripts via the local venv instead.
+  const packagedExtract = path.join(
+    process.resourcesPath, 'python', 'sidecar', 'stashbase-extract', 'stashbase-extract',
+  );
+  const hasPackagedExtract = (() => {
+    try { return require('node:fs').statSync(packagedExtract).isFile(); } catch { return false; }
+  })();
   const packagedEnv = app.isPackaged
     ? {
         ELECTRON_RUN_AS_NODE: '1',
         STASHBASE_APP_ROOT: PROJECT_ROOT,
         STASHBASE_RESOURCES_PATH: process.resourcesPath,
         ...(hasPackagedDaemon ? { STASHBASE_DAEMON_BIN: packagedDaemon } : {}),
+        ...(hasPackagedExtract ? { STASHBASE_EXTRACT_BIN: packagedExtract } : {}),
         ...(packagedPython ? { STASHBASE_PYTHON: packagedPython } : {}),
       }
     : { STASHBASE_APP_ROOT: PROJECT_ROOT };

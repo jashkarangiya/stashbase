@@ -42,3 +42,22 @@ export function pythonBin(): string {
 export function pythonScript(name: string): string {
   return path.join(PROJECT_ROOT, 'python', name);
 }
+
+/** Resolve how to spawn a one-shot extractor.
+ *
+ *  Packaged builds have no Python interpreter — the extractors ship as a
+ *  single self-contained PyInstaller binary (`stashbase-extract`) that
+ *  dispatches on a `pdf` / `ocr` mode arg (see `python/extract_main.py`).
+ *  When `STASHBASE_EXTRACT_BIN` points at it we spawn `<bin> <mode> …`.
+ *  In dev there's no binary, so we spawn `<venv python> <script.py> …`.
+ *
+ *  Returns the command + full arg list ready for `child_process.spawn`. */
+export function extractorSpawn(
+  mode: 'pdf' | 'ocr',
+  scriptName: string,
+  args: string[],
+): { cmd: string; args: string[] } {
+  const bin = process.env.STASHBASE_EXTRACT_BIN;
+  if (bin) return { cmd: bin, args: [mode, ...args] };
+  return { cmd: pythonBin(), args: [pythonScript(scriptName), ...args] };
+}

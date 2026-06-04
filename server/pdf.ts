@@ -35,14 +35,10 @@ import {
   markInFlight,
 } from './pdf-status.ts';
 import { DERIVED_SOURCE_EXTS } from './format.ts';
-import { pythonBin, pythonScript } from './python-host.ts';
+import { extractorSpawn } from './python-host.ts';
 import { fromKbRel, toKbRel } from './space.ts';
 
 const log = logger('pdf');
-
-function extractorScript(): string {
-  return pythonScript('pdf_extract.py');
-}
 
 export interface ConvertResult {
   /** Absolute path of the written `.<stem>.md` (dot-prefixed app-
@@ -98,11 +94,10 @@ export function convertPdf(pdfAbsPath: string): Promise<ConvertResult> {
   const converter = process.env.STASHBASE_PDF_CONVERTER === 'marker' ? 'marker' : 'pymupdf';
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(
-      pythonBin(),
-      [extractorScript(), pdfAbsPath, notePath, bundleDir, '--converter', converter],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
-    );
+    const { cmd, args } = extractorSpawn('pdf', 'pdf_extract.py', [
+      pdfAbsPath, notePath, bundleDir, '--converter', converter,
+    ]);
+    const proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
     proc.stderr.on('data', (b) => { stderr += String(b); });
     proc.on('error', (err) => reject(new Error(`spawn failed: ${err.message}`)));
