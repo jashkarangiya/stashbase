@@ -48,9 +48,10 @@ export interface ChatTab {
 
 export interface OpenFile {
   name: string;
-  format: 'md' | 'html' | 'pdf';
+  format: 'md' | 'html' | 'pdf' | 'image';
   /** Last on-disk content — diff target for the autosave path. Empty
-   *  string for PDF (binary file; PdfPreview loads it directly). */
+   *  string for binary files (PDF / image; the viewer loads them
+   *  directly from `/asset/*`). */
   content: string;
   /** `'kb'` for the `<kbRoot>/STASHBASE.md` special tab — read-only,
    *  no edit button, no save path. Default (omitted) means a regular

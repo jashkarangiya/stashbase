@@ -3,6 +3,7 @@ import { useApp } from '../store/AppContext';
 import { EmptyTabLanding } from './EmptyTabLanding';
 import { FindBar } from './FindBar';
 import { HtmlPreview } from './HtmlPreview';
+import { ImagePreview } from './ImagePreview';
 import { MarkdownPreview } from './MarkdownPreview';
 import { PathBreadcrumb } from './PathBreadcrumb';
 import { PdfPreview } from './PdfPreview';
@@ -58,7 +59,11 @@ export function MainPane() {
           // "preview" and "edit" states.
           <PdfPreview name={cur.name} />
         )}
-        {cur && editMode && cur.format !== 'pdf' && (
+        {cur && cur.format === 'image' && (
+          // Images, like PDFs, are binary — no edit mode.
+          <ImagePreview name={cur.name} />
+        )}
+        {cur && editMode && cur.format !== 'pdf' && cur.format !== 'image' && (
           <Split name={cur.name} format={cur.format} initialContent={cur.content} />
         )}
       </div>
@@ -91,7 +96,7 @@ export function MainPane() {
         </div>
       )}
       <FindBar />
-      {cur && cur.kind !== 'kb' && cur.format !== 'pdf' && (
+      {cur && cur.kind !== 'kb' && cur.format !== 'pdf' && cur.format !== 'image' && (
         <div className={'main-floating-actions' + (editMode ? ' editing' : '')}>
           {editMode && saveStatus.text && (
             <span className={'save-status' + (saveStatus.cls ? ' ' + saveStatus.cls : '')}>

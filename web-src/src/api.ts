@@ -9,12 +9,13 @@
  */
 
 /** Viewer format the renderer uses for tab routing. `md` / `html` are
- *  indexed note formats (text loaded from `/api/files/*`); `pdf` is a
- *  binary-only viewer (PDF.js renders the file straight from
- *  `/asset/*`). The server's `detectFormat()` still excludes `pdf`
- *  because PDFs aren't indexed — this type is wider than the server's
- *  on purpose. */
-export type FileFormat = 'md' | 'html' | 'pdf';
+ *  indexed note formats (text loaded from `/api/files/*`); `pdf` and
+ *  `image` are binary-only viewers (rendered straight from `/asset/*`
+ *  — PDF.js for pdf, a plain `<img>` for image). The server's
+ *  `detectFormat()` still excludes both because the binaries aren't
+ *  indexed (their hidden derived `.md` notes are) — this type is wider
+ *  than the server's on purpose. */
+export type FileFormat = 'md' | 'html' | 'pdf' | 'image';
 
 export interface FileMeta {
   name: string;

@@ -20,7 +20,8 @@ import {
   setFileMetadataEntry,
   type FileMetadata,
 } from '../metadata.ts';
-import { derivedPathsForPdf, getInFlightPdfs, maybeConvertPdf, pdfPathForDerivedRel } from '../pdf.ts';
+import { derivedPathsForPdf, getInFlightPdfs, maybeConvertPdf, originalForDerivedNote } from '../pdf.ts';
+import { isImageFile } from '../format.ts';
 import { clearRecord, listByStatus, readAll as readPdfStatus } from '../pdf-status.ts';
 import { getFsChangeCounter } from '../watcher.ts';
 import { getDaemon } from '../mfs-daemon.ts';
@@ -85,7 +86,7 @@ export function mount(app: express.Express): void {
             .map((h) => {
               const rel = fromKbRel(h.fileName);
               if (rel == null) return null;
-              const remapped = spaceRoot ? pdfPathForDerivedRel(rel, spaceRoot) : null;
+              const remapped = spaceRoot ? originalForDerivedNote(rel, spaceRoot) : null;
               return { ...h, fileName: remapped ?? rel };
             })
             .filter((h): h is NonNullable<typeof h> => h !== null)
@@ -144,14 +145,15 @@ export function mount(app: express.Express): void {
       const space = getCurrentSpaceName();
       const status = await indexer.status(space ?? undefined);
       // Convert kbRoot-relative paths back to space-relative for the UI.
-      // Drop `.pdf` from `pending`: PDFs are visible in the sidebar
-      // (listFiles surfaces them) but never enter the index — keeping
-      // them in `pending` would mean the sidebar permanently pulses
-      // "indexing…" on every PDF row, since they'd never clear.
+      // Drop `.pdf` and image files from `pending`: like PDFs, images are
+      // visible in the sidebar (listFiles surfaces them) but never enter
+      // the index themselves — only their hidden `.<stem>.md` OCR note
+      // does. Keeping them in `pending` would make the sidebar
+      // permanently pulse "indexing…" on every PDF / image row.
       const pending = status.pending
         .map((p) => fromKbRel(p))
         .filter((p): p is string => p != null)
-        .filter((p) => !/\.pdf$/i.test(p));
+        .filter((p) => !/\.pdf$/i.test(p) && !isImageFile(p));
       const orphaned = status.orphaned
         .map((p) => fromKbRel(p))
         .filter((p): p is string => p != null);
@@ -159,12 +161,17 @@ export function mount(app: express.Express): void {
       // shape (in-flight only) for backwards compatibility with the
       // sidebar "Converting…" indicator. `pdfFailures` surfaces the
       // persistent failure list so the UI can render Retry entries.
+      // Scope to PDFs: the conversion-status DB is shared with image OCR
+      // (image.ts), but the failure list drives the PDF-only Retry banner
+      // / `/api/pdf/retry`. Surfacing an image failure here would offer a
+      // PDF retry that re-runs pdf_extract on a `.png` and fails again.
       const pdfFailures = listByStatus('failed')
         .map(({ path: kbRel, entry }) => {
           const rel = fromKbRel(kbRel);
           return rel == null ? null : { path: rel, lastError: entry.lastError ?? '', attempts: entry.attempts };
         })
-        .filter((x): x is { path: string; lastError: string; attempts: number } => x !== null);
+        .filter((x): x is { path: string; lastError: string; attempts: number } => x !== null)
+        .filter((x) => /\.pdf$/i.test(x.path));
       res.json({
         ...status,
         pending,
@@ -268,7 +275,7 @@ export function mount(app: express.Express): void {
       // paths and operate KB-wide.
       const kbRoot = getKbRoot();
       const hits = (await indexer.search(query, topK, space, pathPrefix)).map((h) => {
-        const remapped = pdfPathForDerivedRel(h.fileName, kbRoot);
+        const remapped = originalForDerivedNote(h.fileName, kbRoot);
         return { ...h, fileName: remapped ?? h.fileName };
       });
       res.json({ hits });

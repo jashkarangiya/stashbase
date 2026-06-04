@@ -654,6 +654,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // the tab / nav / save-status machinery treats it like any
       // other open file.
       body = { name, format: 'pdf' as const, content: '' };
+    } else if (/\.(png|jpe?g|webp)$/i.test(name)) {
+      // Images, same story as PDFs — ImagePreview loads the binary from
+      // `/asset/*`. The searchable text lives in the hidden `.<stem>.md`
+      // OCR note, never opened directly.
+      body = { name, format: 'image' as const, content: '' };
     } else {
       try {
         body = await api.getFile(name);
@@ -1228,7 +1233,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   ): Promise<boolean> => {
     if (dir) dispatch({ type: 'EXPAND_FOLDER', path: dir });
     try {
-      const j = await api.upload(items, dir);
+      let j = await api.upload(items, dir);
+      // Self-heal a lost server-side space binding. The server tracks the
+      // open space per window *in memory*; a server restart (e.g. tsx
+      // watch in dev) drops it while the renderer still shows a space
+      // open, so every upload comes back "no space open". If we still
+      // believe a space is open, re-bind it and retry once.
+      const lostBinding = (j.files || []).some((x) => /no space open/i.test(x.error || ''));
+      if (lostBinding && stateRef.current.space) {
+        try {
+          await api.openSpaceByName(stateRef.current.space);
+          j = await api.upload(items, dir);
+        } catch (e: unknown) {
+          console.warn('[upload] rebind failed:', e);
+        }
+      }
       await loadFiles();
       // Now the server has fired any PDF conversions and updated its
       // `pendingConversions` set. Poll immediately so the sidebar

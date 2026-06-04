@@ -26,7 +26,6 @@
 import { spawn } from 'node:child_process';
 import fs, { existsSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { logger } from './log.ts';
 import {
   hasRecord,
@@ -35,32 +34,14 @@ import {
   markFailed,
   markInFlight,
 } from './pdf-status.ts';
+import { DERIVED_SOURCE_EXTS } from './format.ts';
+import { pythonBin, pythonScript } from './python-host.ts';
 import { fromKbRel, toKbRel } from './space.ts';
 
 const log = logger('pdf');
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = process.env.STASHBASE_APP_ROOT
-  ? path.resolve(process.env.STASHBASE_APP_ROOT)
-  : path.resolve(__dirname, '..');
-const RESOURCES_ROOT = process.env.STASHBASE_RESOURCES_PATH
-  ? path.resolve(process.env.STASHBASE_RESOURCES_PATH)
-  : PROJECT_ROOT;
-
-function pythonBin(): string {
-  if (process.env.STASHBASE_PYTHON) return process.env.STASHBASE_PYTHON;
-  for (const candidate of [
-    path.join(RESOURCES_ROOT, 'python', 'runtime', 'bin', 'python'),
-    path.join(RESOURCES_ROOT, 'python', '.venv', 'bin', 'python'),
-    path.join(PROJECT_ROOT, 'python', '.venv', 'bin', 'python'),
-  ]) {
-    if (existsSync(candidate)) return candidate;
-  }
-  return 'python3';
-}
-
 function extractorScript(): string {
-  return path.join(PROJECT_ROOT, 'python', 'pdf_extract.py');
+  return pythonScript('pdf_extract.py');
 }
 
 export interface ConvertResult {
@@ -86,23 +67,26 @@ export function derivedPathsForPdf(pdfAbsPath: string): { notePath: string; bund
   };
 }
 
-/** Given a POSIX-relative path that points at a dot-prefixed PDF-
- *  derived note (`.paper.md` / `.paper.html`), return the relative
- *  path of the parent PDF when it exists on disk — or null if the
- *  shape doesn't match or the PDF isn't there. Used by the search
- *  routes to rewrite hits so users see the PDF row rather than the
- *  app-derived note (which they can't open anyway because it's
- *  hidden in the sidebar). `baseAbs` is the root the relative path
- *  resolves against (space root for /api/search, kb root for
- *  /api/kb/search). */
-export function pdfPathForDerivedRel(noteRel: string, baseAbs: string): string | null {
+/** Given a POSIX-relative path that points at a dot-prefixed app-
+ *  derived note (`.paper.md` / `.paper.html`, or an image's `.shot.md`),
+ *  return the relative path of the parent binary source (PDF or image)
+ *  when it exists on disk — or null if the shape doesn't match or no
+ *  source is there. Used by the search routes to rewrite hits so users
+ *  see the PDF / image row rather than the app-derived note (which they
+ *  can't open anyway because it's hidden in the sidebar). `baseAbs` is
+ *  the root the relative path resolves against (space root for
+ *  /api/search, kb root for /api/kb/search). Probes `DERIVED_SOURCE_EXTS`
+ *  in order and returns the first source present. */
+export function originalForDerivedNote(noteRel: string, baseAbs: string): string | null {
   const m = noteRel.match(/^(.*\/)?\.([^/]+)\.(md|markdown|html|htm)$/i);
   if (!m) return null;
   const dir = m[1] ?? '';
   const stem = m[2];
-  const candidateRel = `${dir}${stem}.pdf`;
-  const candidateAbs = path.join(baseAbs, candidateRel);
-  return existsSync(candidateAbs) ? candidateRel : null;
+  for (const ext of DERIVED_SOURCE_EXTS) {
+    const candidateRel = `${dir}${stem}.${ext}`;
+    if (existsSync(path.join(baseAbs, candidateRel))) return candidateRel;
+  }
+  return null;
 }
 
 /** Run the extractor on a single PDF. Resolves with paths on success;

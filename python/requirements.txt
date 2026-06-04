@@ -12,6 +12,11 @@
 #   - pymupdf4llm:  PDF → markdown for the pdf_extract pipeline
 #                   (heading detection, table extraction, figure
 #                   region screenshots). Brings pymupdf transitively.
+#   - rapidocr-onnxruntime:
+#                   image → text for the ocr_extract pipeline. ONNX
+#                   models (Chinese+English) bundled, no system binary
+#                   like tesseract. Brings opencv-python + onnxruntime
+#                   transitively.
 #   - blake3:       content + chunk-id hashing (faster + streaming-
 #                   friendly than SHA256; mfs's Scanner is patched to
 #                   match — see stashbase_daemon.py:_patch_scanner_blake3).
@@ -19,4 +24,5 @@ mfs-cli>=0.1.0
 openai>=1.0
 numpy>=1.26
 pymupdf4llm>=0.0.17
+rapidocr-onnxruntime>=1.2.3
 blake3>=1.0

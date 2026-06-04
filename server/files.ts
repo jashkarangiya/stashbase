@@ -20,7 +20,7 @@ import { decodeEntities } from './html.ts';
 import { errorCode, errorMessage, logger } from './log.ts';
 
 const log = logger('files');
-import { detectFormat, detectViewerFormat, type FileFormat, type ViewerFormat } from './format.ts';
+import { detectFormat, detectViewerFormat, isImageFile, type FileFormat, type ViewerFormat } from './format.ts';
 
 export { detectFormat, type FileFormat } from './format.ts';
 
@@ -206,6 +206,9 @@ export function deleteFile(relPath: string): boolean {
     // would re-appear in the sidebar (the sibling-bound hide rule in
     // `walk()` depends on the parent PDF still being there).
     if (/\.pdf$/i.test(relPath)) deletePdfDerivedSiblings(relPath);
+    // Same story for an image's OCR sibling note (`.shot.md`) — no
+    // bundle, just the single derived note.
+    else if (isImageFile(relPath)) deleteImageDerivedNote(relPath);
   }
   return removed;
 }
@@ -282,6 +285,28 @@ function deletePdfDerivedSiblings(pdfRel: string): void {
       fs.rmSync(bundleAbs, { recursive: true, force: true });
     }
   } catch { /* no bundle — fine */ }
+}
+
+/** Tear down an image's app-derived OCR note (`.<stem>.md`). Called
+ *  from `deleteFile` whenever an image goes away — otherwise the
+ *  orphaned dot-prefixed note would un-hide in the sidebar (the
+ *  sibling-bound hide rule depends on the parent image still being
+ *  there). Images have no `_files/` bundle, so this is note-only.
+ *  Best-effort: a missing note is fine. */
+function deleteImageDerivedNote(imageRel: string): void {
+  const base = path.posix.basename(imageRel);
+  const m = base.match(/^(.+)\.[^.]+$/);
+  if (!m) return;
+  const stem = m[1];
+  const parent = path.posix.dirname(imageRel);
+  const rel = parent === '.' ? `.${stem}.md` : `${parent}/.${stem}.md`;
+  let abs: string;
+  try { abs = resolveSafe(rel); } catch { return; }
+  try { fs.unlinkSync(abs); } catch (err: any) {
+    if (errorCode(err) !== 'ENOENT') {
+      log.warn(`failed to unlink derived ${rel}: ${errorMessage(err)}`);
+    }
+  }
 }
 
 /** Create a (possibly nested) folder inside the space. Returns false if
@@ -386,12 +411,11 @@ export function listFiles(): FileEntry[] {
     let entry: Pick<FileEntry, 'heading' | 'snippet' | 'imported_at'>;
     if (cached && cached.mtimeMs === st.mtimeMs) {
       entry = { heading: cached.heading, snippet: cached.snippet, imported_at: cached.imported_at };
-    } else if (format === 'pdf') {
-      // No cheap server-side preview for PDF — the file is binary;
-      // generating a heading/snippet would require running pdfjs in
-      // the server process (heavy) or shelling out (slow). The
-      // sidebar already has the filename to render; leave heading
-      // empty + snippet empty.
+    } else if (format === 'pdf' || format === 'image') {
+      // No cheap server-side preview for binary files (PDF / image) —
+      // generating a heading/snippet would require running pdfjs / OCR
+      // in the server process (heavy). The sidebar already has the
+      // filename to render; leave heading + snippet empty.
       const imported_at = st.mtime.toISOString();
       previewCache.set(full, { mtimeMs: st.mtimeMs, heading: '', snippet: '', imported_at });
       entry = { heading: '', snippet: '', imported_at };

@@ -77,6 +77,8 @@
         "to": "python",
         "filter": [
           "stashbase_daemon.py",
+          "pdf_extract.py",
+          "ocr_extract.py",
           "requirements.txt",
           "runtime/**/*",
           "sidecar/**/*"
