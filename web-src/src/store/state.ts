@@ -39,11 +39,15 @@ export const SIDEBAR_COLLAPSE_AT = 100;
  *  doesn't restart open conversations. */
 export interface ChatTab {
   id: string;
-  /** Agent id the PTY runs (`claude` / `codex` / …). */
+  /** Agent id the tab runs (`claude` / `codex` / …). */
   agent: string;
   /** Display name in the tab strip. Default: `"<CLI label>"` (plus a
    *  `" N"` suffix on duplicates). */
   title: string;
+  /** How the tab is rendered. `'terminal'` is the raw PTY + xterm;
+   *  `'agent'` is the structured SDK-backed chat panel. V1: Claude →
+   *  `'agent'`, Codex → `'terminal'`. */
+  mode: 'terminal' | 'agent';
 }
 
 export interface OpenFile {
@@ -661,7 +665,14 @@ export function reducer(s: State, a: Action): State {
       if (s.activeChatTabId === a.id) {
         nextActive = nextTabs[idx]?.id ?? nextTabs[idx - 1]?.id ?? null;
       }
-      return { ...s, chatTabs: nextTabs, activeChatTabId: nextActive };
+      return {
+        ...s,
+        chatTabs: nextTabs,
+        activeChatTabId: nextActive,
+        // Closing the last chat window folds the panel — the launchers
+        // are the only way back in, and an empty panel is just dead space.
+        chatOpen: nextTabs.length === 0 ? false : s.chatOpen,
+      };
     }
     case 'CHAT_TAB_ACTIVATE':
       if (!s.chatTabs.some((t) => t.id === a.id)) return s;

@@ -25,6 +25,10 @@ import {
   attachTerminalWebSocket,
   killActiveTerminal,
 } from './terminal.ts';
+import {
+  attachAgentWebSocket,
+  killActiveAgent,
+} from './agent.ts';
 import { stopSpaceMcpServers, switchSpaceMcpServers } from './mcp-host.ts';
 import {
   onClose,
@@ -272,31 +276,43 @@ server.on('error', (err: NodeJS.ErrnoException) => {
 // because we share the existing http.Server with Vite's HMR proxy.
 const termWss = new WebSocketServer({ noServer: true });
 termWss.on('connection', (ws, req) => {
-  let windowId = 'default';
+  attachTerminalWebSocket(ws, windowIdOf(req));
+});
+
+// Parallel bridge for the structured chat panel — same noServer sharing,
+// but the SDK-backed agent session (see server/agent.ts) instead of a PTY.
+const agentWss = new WebSocketServer({ noServer: true });
+agentWss.on('connection', (ws, req) => {
+  attachAgentWebSocket(ws, windowIdOf(req));
+});
+
+function windowIdOf(req: import('node:http').IncomingMessage): string {
   try {
     const u = new URL(req.url ?? '', `http://${req.headers.host ?? '127.0.0.1'}`);
-    windowId = u.searchParams.get('windowId') || 'default';
+    return u.searchParams.get('windowId') || 'default';
   } catch {
-    windowId = 'default';
+    return 'default';
   }
-  attachTerminalWebSocket(ws, windowId);
-});
+}
 
 // Tear the terminal down when the user switches spaces — that session
 // was bound to the old cwd; the renderer will reconnect for the new
 // space when the user opens the panel again.
 onSwitch((newRoot, windowId) => {
   killActiveTerminal(windowId);
+  killActiveAgent(windowId);
   switchSpaceMcpServers(windowId, newRoot);
 });
 onClose((_oldRoot, windowId) => {
   killActiveTerminal(windowId);
+  killActiveAgent(windowId);
   stopSpaceMcpServers(windowId);
 });
 onKbRootChange(async () => {
   stopWatcher();
   stopSpaceMcpServers();
   killActiveTerminal();
+  killActiveAgent();
   await indexer.close();
   closeStateDb();
   ensureKbOverview();
@@ -321,6 +337,12 @@ server.on('upgrade', (req, socket, head) => {
   if (url.startsWith('/ws/terminal')) {
     termWss.handleUpgrade(req, socket, head, (ws) => {
       termWss.emit('connection', ws, req);
+    });
+    return;
+  }
+  if (url.startsWith('/ws/agent')) {
+    agentWss.handleUpgrade(req, socket, head, (ws) => {
+      agentWss.emit('connection', ws, req);
     });
     return;
   }

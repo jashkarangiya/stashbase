@@ -17,6 +17,14 @@ import { marked } from 'marked';
 // uncommon enough in this app's audience to make it the right trade.
 marked.use({ gfm: true, breaks: true });
 
+/** Markdown → HTML *fragment* (no `<html>`/`<style>` wrapper), for
+ *  rendering inline inside the app's own DOM — chat bubbles use this so
+ *  assistant prose, code blocks, and lists render in place rather than
+ *  in a sandboxed iframe. Styling comes from the host page's CSS. */
+export function renderMarkdownInline(md: string): string {
+  return marked.parse(md ?? '', { async: false }) as string;
+}
+
 export function renderMarkdown(md: string): string {
   let html = marked.parse(md ?? '', { async: false }) as string;
   const taken = new Map<string, number>();

@@ -46,7 +46,7 @@ import { CascadePromptModal } from './components/CascadePromptModal';
 import { AlertConfirmModal } from './components/AlertConfirmModal';
 import { Toasts } from './components/Toasts';
 import { ChatPane } from './components/ChatPane';
-import { ChatToggleButton } from './components/ChatToggleButton';
+import { ChatLaunchButtons } from './components/ChatLaunchButtons';
 import { SettingsPortal, openSettings } from './components/SettingsModal';
 import { HomeIcon } from './icons';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -257,7 +257,7 @@ function AppBody() {
           <div className="app-chrome-title">{state.space}</div>
         )}
         <div className="app-chrome-right">
-          {!state.welcomeVisible && <ChatToggleButton />}
+          {!state.welcomeVisible && <ChatLaunchButtons />}
         </div>
       </div>
       <div

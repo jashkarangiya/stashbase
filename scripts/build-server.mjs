@@ -19,6 +19,10 @@ await esbuild.build({
     // Native module rebuilt by electron-builder and loaded from packaged node_modules.
     'node-pty',
     'better-sqlite3',
+    // Ships its own `cli.js` that it locates relative to its own package
+    // dir at runtime — bundling it into one file breaks that resolution,
+    // so load it from packaged node_modules like the native modules above.
+    '@anthropic-ai/claude-agent-sdk',
   ],
   banner: {
     js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",

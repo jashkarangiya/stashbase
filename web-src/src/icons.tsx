@@ -30,6 +30,27 @@ export function ChevronDownIcon({ className }: IconProps) {
   );
 }
 
+/** Clock with a counter-clockwise hint — "history" / past sessions. */
+export function HistoryIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" strokeWidth={2} {...stroke}>
+      <path d="M3 3v5h5" />
+      <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" />
+      <path d="M12 7v5l3 2" />
+    </svg>
+  );
+}
+
+/** Plain plus — new chat / add. */
+export function PlusIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" strokeWidth={2} {...stroke}>
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  );
+}
+
 export function NewFileIcon({ className }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" strokeWidth={1.6} {...stroke}>
@@ -225,17 +246,6 @@ export function CopyIcon({ className }: IconProps) {
   );
 }
 
-/** Chat bubble — toggle for the right-side AI assistant panel. The
- *  panel runs whatever CLI the user picked (Claude / Codex / …), so
- *  the icon stays brand-neutral. `currentColor` lets it pick up the
- *  chip's state color (muted at rest, accent when active). */
-export function ChatIcon({ className }: IconProps) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" strokeWidth={1.6} {...stroke}>
-      <path d="M4 5 H20 A2 2 0 0 1 22 7 V15 A2 2 0 0 1 20 17 H12 L7 21 V17 H4 A2 2 0 0 1 2 15 V7 A2 2 0 0 1 4 5 Z" />
-    </svg>
-  );
-}
 
 export function SettingsIcon({ className }: IconProps) {
   return (

@@ -3,10 +3,8 @@
  * `state.chatTabs` owns its own PTY + xterm; all tabs render at
  * once so switching preserves scrollback (inactive tabs are
  * absolutely-positioned + `visibility: hidden`). New tabs are spawned
- * from the split button in the strip: the main half opens a tab with
- * the last-used agent, the caret picks a specific one. Whichever agent
- * you start becomes the remembered default (also used by the chrome
- * toggle's first-open auto-spawn).
+ * from the chrome-row agent launchers (see ChatLaunchButtons) — this
+ * panel just renders + switches between the tabs they create.
  *
  * Per tab the lifecycle is:
  *   1. agent binary detected → connect WS, shell opens, runs the binary
@@ -19,9 +17,8 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { api, getWindowId, type Agent, type AgentsResponse } from '../api';
 import { FILE_MIME } from '../dragMime';
-import { ChevronDownIcon, CheckIcon } from '../icons';
+import { AgentView } from './AgentView';
 import { useApp } from '../store/AppContext';
-import type { ChatTab } from '../store/state';
 
 type DetectState =
   | { kind: 'loading' }
@@ -35,44 +32,6 @@ export function ChatPane() {
   const space = state.space;
   const tabs = state.chatTabs;
   const activeId = state.activeChatTabId;
-
-  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
-  const agentMenuRef = useRef<HTMLDivElement>(null);
-
-  // The agent the main button defaults to — the last one started, or
-  // Claude Code on a fresh install.
-  const currentAgentId = state.agent || 'claude';
-  const currentLabel =
-    state.agents.find((c) => c.id === currentAgentId)?.label ?? 'Claude Code';
-
-  // Close the agent menu on any outside click.
-  useEffect(() => {
-    if (!agentMenuOpen) return;
-    function onDocClick(e: MouseEvent) {
-      if (!agentMenuRef.current?.contains(e.target as Node)) setAgentMenuOpen(false);
-    }
-    window.addEventListener('mousedown', onDocClick);
-    return () => window.removeEventListener('mousedown', onDocClick);
-  }, [agentMenuOpen]);
-
-  function newTab(agentId?: string) {
-    const id = agentId ?? currentAgentId;
-    // Title disambiguates duplicates of the same agent — first tab gets
-    // the bare label, copies append " 2", " 3", … the way browsers
-    // name duplicate windows.
-    const agentInfo = state.agents.find((c) => c.id === id);
-    const baseLabel = agentInfo?.label ?? id;
-    const sameAgent = tabs.filter((t) => t.agent === id);
-    const title = sameAgent.length === 0 ? baseLabel : `${baseLabel} ${sameAgent.length + 1}`;
-    const tab: ChatTab = { id: crypto.randomUUID(), agent: id, title };
-    dispatch({ type: 'CHAT_TAB_NEW', tab });
-    // Remember which agent we just started so the main button and the
-    // chrome toggle default to it next time. Persisted best-effort.
-    if (id !== state.agent) {
-      dispatch({ type: 'AGENT_SET', id });
-      api.setAgent(id).catch(() => { /* best-effort */ });
-    }
-  }
 
   if (!space) return null;
 
@@ -103,47 +62,6 @@ export function ChatPane() {
             </div>
           ))}
         </div>
-        <div className="chat-tabs-actions">
-          <div className="agent-new" ref={agentMenuRef}>
-            <button
-              type="button"
-              className="agent-new-main"
-              title={`New ${currentLabel} chat`}
-              onClick={() => newTab()}
-            >
-              <span className="agent-new-plus">+</span>
-              <span className="agent-new-label">{currentLabel}</span>
-            </button>
-            <button
-              type="button"
-              className="agent-new-caret"
-              title="Choose agent"
-              aria-haspopup="menu"
-              aria-expanded={agentMenuOpen}
-              onClick={() => setAgentMenuOpen((o) => !o)}
-            >
-              <ChevronDownIcon className="agent-new-caret-icon" />
-            </button>
-            {agentMenuOpen && (
-              <div className="agent-new-menu" role="menu">
-                {state.agents.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    role="menuitem"
-                    className={'agent-new-item' + (c.id === currentAgentId ? ' current' : '')}
-                    onClick={() => { setAgentMenuOpen(false); newTab(c.id); }}
-                  >
-                    <span className="agent-new-item-label">
-                      {c.label}{c.installed ? '' : ' · not installed'}
-                    </span>
-                    {c.id === currentAgentId && <CheckIcon className="agent-new-item-check" />}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
       </div>
       <div className="chat-tabs-body">
         {tabs.map((tab) => (
@@ -153,12 +71,15 @@ export function ChatPane() {
             role="tabpanel"
             aria-hidden={tab.id !== activeId}
           >
-            <ChatTabBody space={space} agentId={tab.agent} active={tab.id === activeId} />
+            {tab.mode === 'agent'
+              ? <AgentView active={tab.id === activeId} title={tab.title} />
+              : <ChatTabBody space={space} agentId={tab.agent} active={tab.id === activeId} />}
           </div>
         ))}
         {tabs.length === 0 && (
           <div className="chat-pane status">
-            No active chat. Click <code>+</code> above to start one.
+            No active chat. Click the <strong>Claude</strong> or
+            {' '}<strong>Codex</strong> button in the top bar to start one.
           </div>
         )}
       </div>
