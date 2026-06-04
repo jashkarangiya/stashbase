@@ -17,15 +17,18 @@ export function ImageLightbox({ src, alt = '', onClose }: ImageLightboxProps) {
   }, [src]);
 
   useEffect(() => {
+    // Inline the zoom/reset logic off the stable state setters so the
+    // listener binds once per `onClose` rather than re-binding on every
+    // render (each zoom/pan tick re-renders).
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose();
-      if (e.key === '0') reset();
-      if (e.key === '+' || e.key === '=') zoomBy(1.2);
-      if (e.key === '-') zoomBy(1 / 1.2);
+      else if (e.key === '0') { setScale(1); setOffset({ x: 0, y: 0 }); }
+      else if (e.key === '+' || e.key === '=') setScale((v) => clamp(v * 1.2));
+      else if (e.key === '-') setScale((v) => clamp(v / 1.2));
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  });
+  }, [onClose]);
 
   function zoomBy(factor: number) {
     setScale((v) => clamp(v * factor));

@@ -7,9 +7,14 @@ import { type ReactNode } from 'react';
  * accidentally closing). `wide` opts into the larger card style used
  * by the re-embed confirmation (which has cost stats to lay out).
  *
- * Each modal still owns its own header / body / buttons — this only
- * collapses the otherwise-identical outer two divs that used to live
- * in `EmbedderControl` (×3) and `CascadePromptModal`.
+ * NOTE: Esc-to-dismiss is deliberately NOT owned here. A window-level
+ * keydown on every mounted ModalShell would fire for ALL stacked
+ * instances at once (e.g. a confirm dialog over the migration modal),
+ * closing more than the topmost. Until there's a modal-stack that can
+ * target only the top layer, modals keep their own input-focused Esc
+ * handler (which only fires for the focused, topmost modal).
+ *
+ * Each modal still owns its own header / body / buttons.
  */
 export function ModalShell({
   onCancel,

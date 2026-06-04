@@ -48,6 +48,69 @@ const pdfWorker = PDFWorker.create({ port: new PdfWorker() });
  *      file co-opens the PDF, we call into the find controller with
  *      the chunk text so the PDF jumps to the same passage.
  */
+/** Fold the unicode variants pdfjs emits (curly quotes, en/em dashes,
+ *  thin / zero-width spaces) to ASCII so a needle built from chunk text
+ *  or a find query matches the page's flattened string. */
+function foldPdfText(s: string): string {
+  return s
+    .replace(/[‐-―−]/g, '-')
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[  ​]/g, ' ');
+}
+
+interface FlatPage {
+  flat: string;
+  items: { str: string; transform: number[] }[];
+  itemStarts: number[];
+  viewport1x: { width: number; height: number };
+}
+
+/** Flatten a pdfjs page's text items into one folded string, tracking
+ *  where each item starts so a match index maps back to a y-position.
+ *  Shared by the chunk-highlight scroll and the FindBar controller — both
+ *  used to inline this same ~30-line pass. */
+async function flattenPageText(page: PDFPageProxy): Promise<FlatPage> {
+  const tc = await page.getTextContent();
+  type StrItem = { str: string; transform: number[] };
+  const items: StrItem[] = [];
+  const itemStarts: number[] = [];
+  const segments: string[] = [];
+  let pos = 0;
+  let lastEnd = '';
+  for (const it of tc.items) {
+    if (!('str' in it) || typeof it.str !== 'string') continue;
+    const raw = it.str;
+    if (raw === '') continue;
+    if (lastEnd && !/\s/.test(lastEnd) && !/^\s/.test(raw)) { segments.push(' '); pos += 1; }
+    const piece = raw.replace(/\s+/g, ' ');
+    itemStarts.push(pos);
+    items.push(it as StrItem);
+    segments.push(piece);
+    pos += piece.length;
+    lastEnd = piece.slice(-1);
+  }
+  return {
+    flat: foldPdfText(segments.join('')),
+    items,
+    itemStarts,
+    viewport1x: page.getViewport({ scale: 1 }),
+  };
+}
+
+/** y-ratio (0 = page top, 1 = bottom) of the text item covering the
+ *  flat-string index `idx` — for scroll-to-match positioning. */
+function yRatioForIndex(p: FlatPage, idx: number): number {
+  let itemIdx = 0;
+  for (let k = 0; k < p.itemStarts.length; k++) {
+    if (p.itemStarts[k] > idx) break;
+    itemIdx = k;
+  }
+  const m = p.items[itemIdx];
+  const yFromTop = p.viewport1x.height - (m.transform[5] ?? 0);
+  return Math.max(0, Math.min(1, yFromTop / p.viewport1x.height));
+}
+
 export function PdfPreview({ name }: { name: string }) {
   const { state, actions } = useApp();
   const activeTab = state.tabs.find((t) => t.id === state.activeTabId) ?? null;
@@ -176,50 +239,14 @@ export function PdfPreview({ name }: { name: string }) {
         if (cancelled) return;
         try {
           const page = await doc.getPage(i + 1);
-          const tc = await page.getTextContent();
-          type StrItem = { str: string; transform: number[] };
-          const items: StrItem[] = [];
-          const itemStarts: number[] = [];
-          const segments: string[] = [];
-          let pos = 0;
-          let lastEnd = '';
-          for (const it of tc.items) {
-            if (!('str' in it) || typeof it.str !== 'string') continue;
-            const raw = it.str;
-            if (raw === '') continue;
-            if (lastEnd && !/\s/.test(lastEnd) && !/^\s/.test(raw)) {
-              segments.push(' ');
-              pos += 1;
-            }
-            const piece = raw.replace(/\s+/g, ' ');
-            itemStarts.push(pos);
-            items.push(it as StrItem);
-            segments.push(piece);
-            pos += piece.length;
-            lastEnd = piece.slice(-1);
-          }
-          // Same Unicode-folding pass as the needle. Cheaper than per-
-          // anchor, since the page's flat string is shared.
-          const flat = segments.join('')
-            .replace(/[‐-―−]/g, '-')
-            .replace(/[‘’]/g, "'")
-            .replace(/[“”]/g, '"')
-            .replace(/[  ​]/g, ' ');
+          const fp = await flattenPageText(page);
           let idx = -1;
           for (const a of anchors) {
-            const found = flat.indexOf(a);
+            const found = fp.flat.indexOf(a);
             if (found >= 0) { idx = found; break; }
           }
           if (idx < 0) continue;
-          let itemIdx = 0;
-          for (let k = 0; k < itemStarts.length; k++) {
-            if (itemStarts[k] > idx) break;
-            itemIdx = k;
-          }
-          const match = items[itemIdx];
-          const viewport1x = page.getViewport({ scale: 1 });
-          const yFromTopPdf = viewport1x.height - (match.transform[5] ?? 0);
-          const yRatio = Math.max(0, Math.min(1, yFromTopPdf / viewport1x.height));
+          const yRatio = yRatioForIndex(fp, idx);
           const root = containerRef.current;
           const target = root?.querySelector(`[data-page="${i + 1}"]`) as HTMLElement | null;
           if (!root || !target) break;
@@ -250,13 +277,6 @@ export function PdfPreview({ name }: { name: string }) {
     type PdfMatch = { page: number; yRatio: number };
     const state: { matches: PdfMatch[]; current: number } = { matches: [], current: 0 };
 
-    function fold(s: string): string {
-      return s
-        .replace(/[‐-―−]/g, '-')
-        .replace(/[‘’]/g, "'")
-        .replace(/[“”]/g, '"')
-        .replace(/[  ​]/g, ' ');
-    }
     function escapeRegExp(s: string): string {
       return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
@@ -271,7 +291,7 @@ export function PdfPreview({ name }: { name: string }) {
     async function rebuild(query: string, wholeWord: boolean): Promise<void> {
       state.matches = [];
       state.current = 0;
-      const needle = fold(query).trim();
+      const needle = foldPdfText(query).trim();
       if (!needle) return;
       const re = wholeWord
         ? new RegExp(`\\b${escapeRegExp(needle)}\\b`, 'gi')
@@ -280,40 +300,10 @@ export function PdfPreview({ name }: { name: string }) {
         if (cancelled) return;
         try {
           const page = await doc!.getPage(i + 1);
-          const tc = await page.getTextContent();
-          type StrItem = { str: string; transform: number[] };
-          const items: StrItem[] = [];
-          const itemStarts: number[] = [];
-          const segments: string[] = [];
-          let pos = 0;
-          let lastEnd = '';
-          for (const it of tc.items) {
-            if (!('str' in it) || typeof it.str !== 'string') continue;
-            const raw = it.str;
-            if (raw === '') continue;
-            if (lastEnd && !/\s/.test(lastEnd) && !/^\s/.test(raw)) {
-              segments.push(' ');
-              pos += 1;
-            }
-            const piece = raw.replace(/\s+/g, ' ');
-            itemStarts.push(pos);
-            items.push(it as StrItem);
-            segments.push(piece);
-            pos += piece.length;
-            lastEnd = piece.slice(-1);
-          }
-          const flat = fold(segments.join(''));
-          const viewport1x = page.getViewport({ scale: 1 });
+          const fp = await flattenPageText(page);
+          const flat = fp.flat;
           function emit(idx: number) {
-            let itemIdx = 0;
-            for (let k = 0; k < itemStarts.length; k++) {
-              if (itemStarts[k] > idx) break;
-              itemIdx = k;
-            }
-            const m = items[itemIdx];
-            const yFromTop = viewport1x.height - (m.transform[5] ?? 0);
-            const yRatio = Math.max(0, Math.min(1, yFromTop / viewport1x.height));
-            state.matches.push({ page: i + 1, yRatio });
+            state.matches.push({ page: i + 1, yRatio: yRatioForIndex(fp, idx) });
           }
           if (re) {
             re.lastIndex = 0;
@@ -433,9 +423,13 @@ function PdfChromePortal({
   onZoomIn: () => void;
 }) {
   const [slot, setSlot] = useState<HTMLElement | null>(null);
+  // Resolve the portal target once on mount — MainPane renders the
+  // `#pdf-chrome-slot` div alongside this viewer, so it's present by the
+  // time this effect runs. (No deps: a per-render getElementById is
+  // wasteful and the slot doesn't move.)
   useEffect(() => {
     setSlot(document.getElementById('pdf-chrome-slot'));
-  });
+  }, []);
   const chrome = (
     <div className="pdf-chrome">
       <button type="button" className="icon-btn" title="Zoom out" onClick={onZoomOut}>−</button>

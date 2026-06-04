@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { assetBaseUrl } from '../api';
 import { renderMarkdown, withScrollBootstrap } from '../markdown';
 import { useApp } from '../store/AppContext';
+import { injectAssetBase, previewClickHandler } from '../lib/previewIframe';
 import { CodeEditor } from './CodeEditor';
 
 type SplitOrientation = 'horizontal' | 'vertical';
@@ -72,8 +73,8 @@ export function Split({
   }, []);
 
   const previewHtml = useMemo(() => {
-    if (format === 'md') return withHtmlAssetBase(renderMarkdown(previewSource), assetBaseUrl(name));
-    return withHtmlAssetBase(withScrollBootstrap(previewSource), assetBaseUrl(name));
+    if (format === 'md') return injectAssetBase(renderMarkdown(previewSource), assetBaseUrl(name));
+    return injectAssetBase(withScrollBootstrap(previewSource), assetBaseUrl(name));
   }, [previewSource, format, name]);
 
   // HTML preview is driven by a blob URL so the live buffer can render
@@ -131,26 +132,6 @@ export function Split({
     if (!iframe) return;
     let installedDoc: Document | null = null;
 
-    function clickHandler(e: Event) {
-      // Cross-realm duck-typing (see MarkdownPreview for context).
-      const target = e.target as (Element & { closest?: typeof Element.prototype.closest }) | null;
-      if (!target || typeof target.closest !== 'function') return;
-      const img = target.closest('img') as HTMLImageElement | null;
-      if (img) {
-        const src = img.currentSrc || img.src;
-        if (!src) return;
-        e.preventDefault();
-        window.postMessage({
-          type: 'stashbase-preview-image',
-          src,
-          alt: img.alt || '',
-        }, window.location.origin);
-        return;
-      }
-      const anchor = target.closest('a') as HTMLAnchorElement | null;
-      if (anchor) forwardAnchorClick(anchor, e);
-    }
-
     function attach() {
       const doc = iframe?.contentDocument;
       if (!doc || installedDoc === doc) return;
@@ -158,7 +139,7 @@ export function Split({
       for (const img of Array.from(doc.images)) {
         img.dataset.stashbasePreviewable = 'true';
       }
-      doc.addEventListener('click', clickHandler);
+      doc.addEventListener('click', previewClickHandler);
       loadedHtmlRef.current = previewHtml;
       applyPendingScroll();
     }
@@ -167,7 +148,7 @@ export function Split({
     if (iframe.contentDocument?.readyState === 'complete') attach();
     return () => {
       iframe.removeEventListener('load', attach);
-      installedDoc?.removeEventListener('click', clickHandler);
+      installedDoc?.removeEventListener('click', previewClickHandler);
     };
   }, [previewHtml, format, applyPendingScroll]);
 
@@ -274,49 +255,3 @@ export function Split({
 /** Mirror of MarkdownPreview's click handler for the edit-mode MD
  *  preview: forward cross-file `.md/.html` links + external links to
  *  the parent, leave `#anchor` to the same-origin browser. */
-function forwardAnchorClick(anchor: HTMLAnchorElement, e: Event) {
-  const raw = anchor.getAttribute('href');
-  if (!raw || raw.startsWith('#')) return;
-  let url: URL;
-  try { url = new URL(anchor.href, window.location.href); } catch { return; }
-  if (url.origin === window.location.origin && url.pathname.startsWith('/asset/')) {
-    const encoded = url.pathname.slice('/asset/'.length);
-    let decoded: string;
-    try {
-      decoded = encoded.split('/').map(decodeURIComponent).join('/');
-    } catch { return; }
-    if (!/\.(md|markdown|html|htm)$/i.test(decoded)) return;
-    e.preventDefault();
-    const hash = url.hash.startsWith('#') ? url.hash.slice(1) : '';
-    window.postMessage({
-      type: 'stashbase-nav',
-      path: decoded,
-      anchor: hash || undefined,
-    }, window.location.origin);
-    return;
-  }
-  if (url.protocol === 'http:' || url.protocol === 'https:') {
-    e.preventDefault();
-    window.postMessage({ type: 'stashbase-open-external', href: url.href }, window.location.origin);
-  }
-}
-
-function withHtmlAssetBase(html: string, baseHref: string): string {
-  if (/<base\b/i.test(html)) return html;
-  const tag = `<base href="${escapeAttr(baseHref)}">`;
-  if (/<head\b[^>]*>/i.test(html)) {
-    return html.replace(/<head\b[^>]*>/i, (m) => m + tag);
-  }
-  if (/^\s*<!doctype\b[^>]*>/i.test(html)) {
-    return html.replace(/^(\s*<!doctype\b[^>]*>)/i, `$1<head>${tag}</head>`);
-  }
-  return `<head>${tag}</head>` + html;
-}
-
-function escapeAttr(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}

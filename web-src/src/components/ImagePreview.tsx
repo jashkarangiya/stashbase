@@ -40,6 +40,7 @@ export function ImagePreview({ name }: { name: string }) {
   const [scale, setScale] = useState(1);
   const [retryBusy, setRetryBusy] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
   const alt = name.split('/').pop() ?? name;
   const failure = state.conversionFailures.find((f) => f.path === name);
   // Device pixel ratio: the baseline (100%) maps one image pixel to one
@@ -50,6 +51,7 @@ export function ImagePreview({ name }: { name: string }) {
   useEffect(() => {
     setNatural(null);
     setScale(1);
+    setLoadError(false);
   }, [src]);
 
   // Native wheel listener (passive:false) so ⌘/Ctrl-scroll — and trackpad
@@ -113,20 +115,27 @@ export function ImagePreview({ name }: { name: string }) {
         </div>
       )}
       <div className="image-preview-scroll" ref={scrollRef}>
-        <div className="image-preview-stage">
-          <img
-            className="image-preview-img"
-            src={src}
-            alt={alt}
-            draggable={false}
-            style={displayW != null ? { width: displayW } : undefined}
-            onLoad={(e) =>
-              setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })
-            }
-          />
-        </div>
+        {loadError ? (
+          <div className="empty-list">
+            Couldn’t load this image — the file may have moved or been deleted.
+          </div>
+        ) : (
+          <div className="image-preview-stage">
+            <img
+              className="image-preview-img"
+              src={src}
+              alt={alt}
+              draggable={false}
+              style={displayW != null ? { width: displayW } : undefined}
+              onLoad={(e) =>
+                setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })
+              }
+              onError={() => setLoadError(true)}
+            />
+          </div>
+        )}
       </div>
-      {natural && (
+      {natural && !loadError && (
         <div className="image-zoom-bar">
           <button type="button" title="Zoom out" onClick={() => setScale((s) => clampScale(s / 1.25))}>−</button>
           <button type="button" className="image-zoom-pct" title="Actual size (100%)" onClick={() => setScale(1)}>
