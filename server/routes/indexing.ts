@@ -20,7 +20,7 @@ import {
   setFileMetadataEntry,
   type FileMetadata,
 } from '../metadata.ts';
-import { derivedPathsForPdf, getInFlightPdfs, isAppDerivedNotePath, maybeConvertPdf, originalForDerivedNote } from '../pdf.ts';
+import { derivedPathsForPdf, displayPathForHit, getInFlightPdfs, maybeConvertPdf } from '../pdf.ts';
 import { derivedNotePathForImage, maybeConvertImage } from '../image.ts';
 import { isImageFile } from '../format.ts';
 import { clearRecord, listByStatus, readAll as readPdfStatus } from '../pdf-status.ts';
@@ -74,25 +74,17 @@ export function mount(app: express.Express): void {
       const spaceRoot = getCurrentSpace();
       // Daemon hits arrive kbRoot-relative; translate fileName back to
       // space-relative for the sidebar (which only knows the current
-      // space). Hits outside the current space (shouldn't happen with
-      // the space filter, defensive) get dropped.
-      //
-      // Then rewrite any PDF-derived dot-prefixed note (`.paper.md`) to
-      // point at its parent PDF — the derived file is hidden from the
-      // sidebar so leaving it as the click target gives a dead row.
-      // PdfPreview picks up the chunk text from pendingHighlight and
-      // jumps the pdfjs find controller to the matching passage.
+      // space). Then `displayPathForHit` rewrites a derived note to its
+      // source PDF/image (or drops an orphan) so a hidden `.md` never
+      // shows — PdfPreview/ImagePreview pick up the chunk text from
+      // pendingHighlight and jump to the matching passage.
       const out = space
         ? hits
             .map((h) => {
               const rel = fromKbRel(h.fileName);
               if (rel == null) return null;
-              const remapped = spaceRoot ? originalForDerivedNote(rel, spaceRoot) : null;
-              if (remapped) return { ...h, fileName: remapped };
-              // Orphaned hidden derived note (source PDF/image gone) →
-              // drop it; never surface the `.md` itself as a hit.
-              if (isAppDerivedNotePath(rel)) return null;
-              return { ...h, fileName: rel };
+              const display = spaceRoot ? displayPathForHit(rel, spaceRoot) : rel;
+              return display == null ? null : { ...h, fileName: display };
             })
             .filter((h): h is NonNullable<typeof h> => h !== null)
         : hits;
@@ -131,17 +123,17 @@ export function mount(app: express.Express): void {
       const caseStrict = req.query.case_strict === '1' || req.query.case_strict === 'true';
       const wholeWord = req.query.whole_word === '1' || req.query.whole_word === 'true';
       const result = await runRipgrep(query, spaceDir, { caseStrict, wholeWord });
-      // Rewrite hits in a hidden derived note (`.paper.md` / `.shot.md`)
-      // back to their source PDF / image — same remap `/api/search` does.
-      // ripgrep matches these dot-prefixed notes (the `*.md` glob pulls
-      // them in), but they're hidden from the sidebar, so leaving the
-      // note as the row's path gives an unopenable dead row. The matched
-      // snippet (the OCR / converted text) stays; only the file the row
-      // points at changes to the openable original.
-      const files = result.files.map((f) => {
-        const orig = originalForDerivedNote(f.path, spaceDir);
-        return orig ? { ...f, path: orig } : f;
-      });
+      // ripgrep's `*.md` glob also matches the hidden dot-prefixed
+      // derived notes (`.paper.md` / `.shot.md`). Apply the same
+      // remap-or-drop rule as the semantic routes so a hit's row points
+      // at the openable source PDF / image (the matched OCR / converted
+      // snippet stays) and an orphan note never surfaces.
+      const files = result.files
+        .map((f) => {
+          const display = displayPathForHit(f.path, spaceDir);
+          return display == null ? null : { ...f, path: display };
+        })
+        .filter((f): f is NonNullable<typeof f> => f !== null);
       res.json({ query, space: spaceName, ...result, files });
     } catch (err: unknown) {
       sendError(res, err);
@@ -293,18 +285,15 @@ export function mount(app: express.Express): void {
       const pathPrefix = typeof req.body?.path_prefix === 'string' && req.body.path_prefix.trim()
         ? req.body.path_prefix.trim() : undefined;
       if (!query) return res.status(400).json({ error: 'query required' });
-      // Same PDF-derived rewrite as /api/search, but against kb-root
+      // Same remap-or-drop rule as /api/search, but against KB root
       // since MCP callers (external AI clients) receive kbRoot-relative
-      // paths and operate KB-wide.
+      // paths and operate KB-wide — a hidden `.md` must never reach an
+      // external client either.
       const kbRoot = getKbRoot();
       const hits = (await indexer.search(query, topK, space, pathPrefix))
         .map((h) => {
-          const remapped = originalForDerivedNote(h.fileName, kbRoot);
-          if (remapped) return { ...h, fileName: remapped };
-          // Orphaned hidden derived note (source gone) → drop it so an
-          // external MCP client never receives a hidden `.md` path.
-          if (isAppDerivedNotePath(h.fileName)) return null;
-          return h;
+          const display = displayPathForHit(h.fileName, kbRoot);
+          return display == null ? null : { ...h, fileName: display };
         })
         .filter((h): h is NonNullable<typeof h> => h !== null);
       res.json({ hits });

@@ -73,8 +73,19 @@ export function derivedPathsForPdf(pdfAbsPath: string): { notePath: string; bund
  *  the root the relative path resolves against (space root for
  *  /api/search, kb root for /api/kb/search). Probes `DERIVED_SOURCE_EXTS`
  *  in order and returns the first source present. */
+/** Shape of an app-derived hidden note: `<dir>/.<stem>.md|markdown|html|htm`. */
+const DERIVED_NOTE_RE = /^(.*\/)?\.([^/]+)\.(md|markdown|html|htm)$/i;
+
+/** True when a relative path has the app-derived hidden-note shape. The
+ *  search routes use it to DROP an orphaned derived note from results
+ *  when its source binary is gone (`originalForDerivedNote` → null) — a
+ *  hidden `.md` must never surface as a clickable hit. */
+export function isAppDerivedNotePath(rel: string): boolean {
+  return DERIVED_NOTE_RE.test(rel);
+}
+
 export function originalForDerivedNote(noteRel: string, baseAbs: string): string | null {
-  const m = noteRel.match(/^(.*\/)?\.([^/]+)\.(md|markdown|html|htm)$/i);
+  const m = noteRel.match(DERIVED_NOTE_RE);
   if (!m) return null;
   const dir = m[1] ?? '';
   const stem = m[2];
@@ -83,6 +94,26 @@ export function originalForDerivedNote(noteRel: string, baseAbs: string): string
     if (existsSync(path.join(baseAbs, candidateRel))) return candidateRel;
   }
   return null;
+}
+
+/** The single remap-or-drop rule every search route applies to a hit's
+ *  path so a hidden derived note is never shown to the user:
+ *
+ *    • app-derived note (`.paper.md` / `.shot.md`) with a live source
+ *        → the source PDF / image (the clickable, openable original);
+ *    • derived note whose source is gone (orphan)
+ *        → `null`, i.e. drop the hit — the bare `.md` is hidden in the
+ *          sidebar and must never surface as an unopenable row;
+ *    • any normal file → unchanged.
+ *
+ *  `rel` is relative to `baseAbs` (space root for the GUI routes, KB root
+ *  for MCP). Centralised here so `/api/search`, `/api/keyword-search`,
+ *  and `/api/kb/search` can't drift apart. */
+export function displayPathForHit(rel: string, baseAbs: string): string | null {
+  const source = originalForDerivedNote(rel, baseAbs);
+  if (source) return source;
+  if (isAppDerivedNotePath(rel)) return null;
+  return rel;
 }
 
 /** Run the extractor on a single PDF. Resolves with paths on success;
