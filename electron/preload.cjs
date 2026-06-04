@@ -63,6 +63,21 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.on('capture:error', wrapped);
     return () => ipcRenderer.removeListener('capture:error', wrapped);
   },
+  /** Subscribe to "an image is on the clipboard, offer to import it"
+   *  pushes fired when a main window regains focus. The renderer shows a
+   *  confirm modal and, on accept, imports via the normal upload path. */
+  onClipboardImage: (handler) => {
+    const wrapped = (_event, payload) => {
+      if (payload && typeof payload === 'object') handler(payload);
+    };
+    ipcRenderer.on('clipboard:image-available', wrapped);
+    return () => ipcRenderer.removeListener('clipboard:image-available', wrapped);
+  },
+  /** Enable / disable clipboard-image watching (privacy toggle). */
+  setClipboardWatch: (enabled) => ipcRenderer.invoke('clipboard:setWatch', enabled),
+  /** Tell main an offered clipboard image was handled so it isn't
+   *  re-offered on the next focus. */
+  markClipboardHandled: (hash) => ipcRenderer.send('clipboard:markHandled', hash),
   showCaptureMenu: () => ipcRenderer.send('floating:captureMenu'),
   getFloatingBounds: () => ipcRenderer.invoke('floating:getBounds'),
   setFloatingPosition: (point) => ipcRenderer.invoke('floating:setPosition', point),

@@ -12,6 +12,8 @@ interface ElectronBridge {
   configureMcp?: (client: string) => Promise<unknown>;
   onCaptureCreated?: (handler: (capture: CapturePayload) => void) => (() => void);
   onCaptureError?: (handler: (error: CaptureErrorPayload) => void) => (() => void);
+  onClipboardImage?: (handler: (offer: ClipboardOffer) => void) => (() => void);
+  markClipboardHandled?: (hash: string) => void;
   onFullscreenChange?: (handler: (isFullScreen: boolean) => void) => (() => void);
 }
 
@@ -39,6 +41,7 @@ import { ContextMenu, DropVeil } from './components/Overlays';
 import { EmbedderRequireKeyGate } from './components/EmbedderRequireKeyGate';
 import { Hotkeys } from './components/Hotkeys';
 import { ImageLightbox } from './components/ImageLightbox';
+import { ClipboardImportModal, type ClipboardOffer } from './components/ClipboardImportModal';
 import { CascadePromptModal } from './components/CascadePromptModal';
 import { AlertConfirmModal } from './components/AlertConfirmModal';
 import { Toasts } from './components/Toasts';
@@ -73,6 +76,7 @@ function AppBody() {
   const veilHot = useGlobalDragDrop();
   const { state, actions } = useApp();
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
+  const [clipboardOffer, setClipboardOffer] = useState<ClipboardOffer | null>(null);
   // Mount the chat panel lazily on first open and then NEVER
   // unmount it — collapsing the panel just hides the column via CSS,
   // the underlying xterm + WebSocket + PTY stay alive. Killing the
@@ -132,6 +136,16 @@ function AppBody() {
       }
     }
   }, [actions, state.activeFolder, state.space, state.welcomeVisible]);
+  useEffect(() => {
+    const bridge = (window as { electron?: ElectronBridge }).electron;
+    return bridge?.onClipboardImage?.((offer) => {
+      if (!offer.dataUrl || !offer.mime?.startsWith('image/')) return;
+      // No place to put it — skip silently rather than nag (main already
+      // recorded the hash, so it won't re-offer the same image).
+      if (state.welcomeVisible || !state.space) return;
+      setClipboardOffer(offer);
+    });
+  }, [state.space, state.welcomeVisible]);
   useEffect(() => {
     const bridge = (window as { electron?: ElectronBridge }).electron;
     return bridge?.onCaptureError?.((error) => {
@@ -200,6 +214,22 @@ function AppBody() {
     return () => window.removeEventListener('message', onMessage);
   }, [actions]);
 
+  async function handleClipboardAdd(offer: ClipboardOffer) {
+    const bridge = (window as { electron?: ElectronBridge }).electron;
+    bridge?.markClipboardHandled?.(offer.hash);
+    setClipboardOffer(null);
+    try {
+      const file = await dataUrlToFile(offer.dataUrl, offer.filename, offer.mime);
+      const saved = await actions.upload([{ file, relPath: file.name }], state.activeFolder);
+      if (!saved) return;
+      const suffix = state.activeFolder ? ` to ${state.activeFolder}` : '';
+      actions.toast(`Saved ${file.name}${suffix}.`, { level: 'success' });
+    } catch (err) {
+      console.warn('[clipboard] save failed:', err);
+      actions.toast('Could not save the clipboard image.', { level: 'error' });
+    }
+  }
+
   return (
     <>
       <Welcome />
@@ -255,6 +285,17 @@ function AppBody() {
           src={previewImage.src}
           alt={previewImage.alt}
           onClose={() => setPreviewImage(null)}
+        />
+      )}
+      {clipboardOffer && (
+        <ClipboardImportModal
+          offer={clipboardOffer}
+          onClose={() => {
+            const bridge = (window as { electron?: ElectronBridge }).electron;
+            bridge?.markClipboardHandled?.(clipboardOffer.hash);
+            setClipboardOffer(null);
+          }}
+          onAdd={() => { void handleClipboardAdd(clipboardOffer); }}
         />
       )}
       <CascadePromptModal />

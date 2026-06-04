@@ -9,8 +9,9 @@
  * The renderer is sandboxed; all main → renderer surfaces are exposed
  * through the narrow IPC bridge in preload.cjs.
  */
-const { app, BrowserWindow, Menu, desktopCapturer, dialog, ipcMain, screen, session, shell, systemPreferences } = require('electron');
+const { app, BrowserWindow, Menu, clipboard, desktopCapturer, dialog, ipcMain, screen, session, shell, systemPreferences } = require('electron');
 const { spawn } = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -380,6 +381,55 @@ function emitCaptureError(error) {
   if (!target) return false;
   target.webContents.send('capture:error', error);
   return true;
+}
+
+// --- Clipboard image offer ---------------------------------------------
+// When a main window regains focus we peek at the clipboard: if it holds
+// an image we haven't offered yet (e.g. the user just took a screenshot
+// with Cmd+Ctrl+Shift+4, which copies to the clipboard, then switched
+// back), we ping the renderer to ask "add this to the library?". Reading
+// the clipboard is cheap; we hash the PNG bytes so the same image is only
+// offered once — dismiss is final until the clipboard content changes.
+// Default-on; toggleable from the renderer via `clipboard:setWatch`.
+let clipboardWatchEnabled = true;
+let lastClipboardOfferHash = null;
+
+function clipboardImageFilename() {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `clipboard-${stamp}.png`;
+}
+
+function offerClipboardImage(win) {
+  if (!clipboardWatchEnabled) return;
+  if (!win || win.isDestroyed()) return;
+  let img;
+  try {
+    img = clipboard.readImage();
+  } catch {
+    return;
+  }
+  if (!img || img.isEmpty()) return;
+  let png;
+  try {
+    png = img.toPNG();
+  } catch {
+    return;
+  }
+  if (!png || !png.length) return;
+  const hash = crypto.createHash('sha1').update(png).digest('hex');
+  // Same image we've already offered (or one the renderer just imported,
+  // which calls clipboard:markHandled). Don't re-prompt on every focus.
+  if (hash === lastClipboardOfferHash) return;
+  lastClipboardOfferHash = hash;
+  const size = img.getSize();
+  win.webContents.send('clipboard:image-available', {
+    dataUrl: img.toDataURL(),
+    mime: 'image/png',
+    width: size.width,
+    height: size.height,
+    hash,
+    filename: clipboardImageFilename(),
+  });
 }
 
 function getScreenPermission() {
@@ -919,6 +969,7 @@ async function createWindow(initialSpace) {
   lastMainWindow = win;
   win.on('focus', () => {
     lastMainWindow = win;
+    offerClipboardImage(win);
   });
   win.on('closed', () => {
     mainWindows.delete(win);
@@ -1039,6 +1090,21 @@ ipcMain.handle('capture:capture', async (event, request = {}) => {
 ipcMain.handle('capture:getSettings', async () => getCaptureSettings());
 
 ipcMain.handle('capture:openScreenPermissionSettings', async () => openScreenPermissionSettings());
+
+// Renderer toggles clipboard-image watching (privacy switch). When
+// turning it back on we clear the last-offered hash so the current
+// clipboard image becomes eligible again.
+ipcMain.handle('clipboard:setWatch', (_event, enabled) => {
+  clipboardWatchEnabled = enabled !== false;
+  if (clipboardWatchEnabled) lastClipboardOfferHash = null;
+  return clipboardWatchEnabled;
+});
+
+// Renderer confirms it imported (or chose to keep ignoring) a clipboard
+// image; remember the hash so re-focus doesn't re-offer the same one.
+ipcMain.on('clipboard:markHandled', (_event, hash) => {
+  if (typeof hash === 'string' && hash) lastClipboardOfferHash = hash;
+});
 
 ipcMain.handle('floating:getBounds', () => {
   if (!floatingBallWindow || floatingBallWindow.isDestroyed()) return null;

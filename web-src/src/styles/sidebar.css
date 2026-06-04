@@ -164,6 +164,23 @@
       color: var(--accent);
     }
 
+    /* Thumbnail of a clipboard image we're offering to import. Capped
+     * so a large screenshot doesn't blow out the modal; checkerboard-ish
+     * neutral frame so transparent PNGs stay legible. */
+    .clipboard-offer-preview {
+      display: flex;
+      justify-content: center;
+      margin: 0 0 14px;
+    }
+    .clipboard-offer-preview img {
+      max-width: 100%;
+      max-height: 260px;
+      object-fit: contain;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg);
+    }
+
     .modal-input {
       width: 100%;
       border: 1px solid var(--border);
@@ -985,20 +1002,14 @@
       color: var(--muted);
     }
 
-    /* MD = warm amber (notes you're writing); HTML = cyan (code-shaped
-     captures). Two accent tints keep the palette deliberate without
-     becoming brand-color soup. */
-    .tree-row.file.format-md .icon svg {
-      color: #d9a000;
-    }
-
-    .tree-row.file.format-html .icon svg {
-      color: #0891b2;
-    }
+    /* Format glyphs (md / html / pdf) come from the Material Icon Theme and
+     * carry their own brand `fill` — no `currentColor` tint here. The old
+     * `.format-md` / `.format-html` colour rules were dropped: they only
+     * affected `currentColor`, which the filled Material SVGs don't use. */
 
     /* Agent-maintained meta files (STASHBASE.md, *-metadata.md) carry a
-     * bot / 目录 glyph and stay neutral muted — they're system files, not
-     * amber notes. Placed after `.format-md` so it wins on equal specificity. */
+     * bot / 目录 glyph (still `currentColor`) and stay neutral muted — they're
+     * system files, not notes. */
     .tree-row.file.meta-file .icon svg {
       color: var(--muted);
     }
