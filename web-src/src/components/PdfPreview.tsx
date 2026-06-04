@@ -18,9 +18,18 @@ import { useApp } from '../store/AppContext';
 // synchronously before it ever talks to the worker.
 import '../lib/pdfPolyfill';
 
-// One shared worker for the viewer. `workerPort` (vs `workerSrc`) lets us
-// hand pdfjs our polyfill-wrapped worker instance.
-GlobalWorkerOptions.workerPort = new PdfWorker();
+// One shared worker for the viewer, owned by US (a PDFWorker we construct)
+// rather than handed to pdfjs via `GlobalWorkerOptions.workerPort`. The
+// distinction is load-bearing: a `workerPort` worker is owned by whichever
+// loadingTask is created over it, so `loadingTask.destroy()` — fired by the
+// load effect's cleanup on tab close AND on React StrictMode's dev
+// mount→unmount→mount — terminates the shared worker thread. The next
+// getDocument then hits "PDFWorker.create - the worker is being destroyed".
+// A worker passed explicitly to getDocument is NOT owned by the task, so
+// destroy() tears down only the document and the thread survives every reopen.
+// (PDFWorker.create over `new PDFWorker({ port })` only because the latter's
+// generated d.ts mistypes `port` as null; both wrap the same port instance.)
+const pdfWorker = PDFWorker.create({ port: new PdfWorker() });
 
 /**
  * PDF viewer built on pdfjs-dist's programmatic API. Renders every
@@ -70,7 +79,7 @@ export function PdfPreview({ name }: { name: string }) {
     setError(null);
     setDoc(null);
     setNumPages(0);
-    loadingTask = getDocument(fileUrl);
+    loadingTask = getDocument({ url: fileUrl, worker: pdfWorker });
     loadingTask.promise.then(
       (pdf) => {
         if (cancelled) { void pdf.destroy(); return; }
