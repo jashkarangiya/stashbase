@@ -3,7 +3,7 @@
  * Replaces the old standalone MCP modal and the chrome-row dropdowns
  * for Embedder. Sections are imported as panels so each one keeps its
  * own state / auxiliary modals independent. (Agent selection moved out
- * to the chat panel's split button — see TerminalPane.)
+ * to the chat panel's split button — see ChatPane.)
  *
  * Open from anywhere via the `openSettings(section?)` helper or by
  * dispatching the `stashbase-open-settings` event with an optional

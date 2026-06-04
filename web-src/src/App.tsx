@@ -42,8 +42,8 @@ import { ImageLightbox } from './components/ImageLightbox';
 import { CascadePromptModal } from './components/CascadePromptModal';
 import { AlertConfirmModal } from './components/AlertConfirmModal';
 import { Toasts } from './components/Toasts';
-import { TerminalPane } from './components/TerminalPane';
-import { TerminalToggleButton } from './components/TerminalToggleButton';
+import { ChatPane } from './components/ChatPane';
+import { ChatToggleButton } from './components/ChatToggleButton';
 import { SettingsPortal, openSettings } from './components/SettingsModal';
 import { HomeIcon } from './icons';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -73,18 +73,18 @@ function AppBody() {
   const veilHot = useGlobalDragDrop();
   const { state, actions } = useApp();
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
-  // Mount the terminal panel lazily on first open and then NEVER
+  // Mount the chat panel lazily on first open and then NEVER
   // unmount it — collapsing the panel just hides the column via CSS,
   // the underlying xterm + WebSocket + PTY stay alive. Killing the
   // session on every collapse would lose Claude Code's chat history,
   // any in-flight agent run, the shell's cwd / aliases, etc. The
-  // explicit "Start new session" item in the CLI picker dropdown is
-  // how the user restarts (it bumps `terminalSessionId`, which makes
-  // `XtermView`'s effect re-run + tear down the old session cleanly).
-  const [terminalMounted, setTerminalMounted] = useState(state.terminalOpen);
+  // explicit "Start new session" item in the agent picker dropdown is
+  // how the user restarts (it makes `XtermView`'s effect re-run + tear
+  // down the old session cleanly).
+  const [chatMounted, setChatMounted] = useState(state.chatOpen);
   useEffect(() => {
-    if (state.terminalOpen) setTerminalMounted(true);
-  }, [state.terminalOpen]);
+    if (state.chatOpen) setChatMounted(true);
+  }, [state.chatOpen]);
   // Tag the body as Electron for the chrome-region CSS, only when the
   // preload bridge is exposed.
   useEffect(() => {
@@ -227,25 +227,25 @@ function AppBody() {
           <div className="app-chrome-title">{state.space}</div>
         )}
         <div className="app-chrome-right">
-          {!state.welcomeVisible && <TerminalToggleButton />}
+          {!state.welcomeVisible && <ChatToggleButton />}
         </div>
       </div>
       <div
         className={
           'app'
           + (state.sidebarCollapsed ? ' sidebar-collapsed' : '')
-          + (state.terminalOpen ? ' terminal-open' : '')
+          + (state.chatOpen ? ' chat-open' : '')
         }
         style={{
-          '--terminal-width': `${state.terminalWidth}px`,
+          '--chat-width': `${state.chatWidth}px`,
           '--sidebar-width': `${state.sidebarWidth}px`,
         } as CSSProperties}
       >
         <Sidebar />
         {!state.welcomeVisible && !state.sidebarCollapsed && <SidebarSplitter />}
         <MainPane />
-        {terminalMounted && <TerminalSplitter />}
-        {terminalMounted && <TerminalPane />}
+        {chatMounted && <ChatSplitter />}
+        {chatMounted && <ChatPane />}
       </div>
       <DropVeil hot={veilHot} />
       <ContextMenu />
@@ -319,30 +319,30 @@ function SidebarSplitter() {
   );
 }
 
-/** Vertical drag handle between the main pane and the terminal panel.
- *  Drags the terminal width; lifecycle is pointer-capture style so the
+/** Vertical drag handle between the main pane and the chat panel.
+ *  Drags the chat-panel width; lifecycle is pointer-capture style so the
  *  drag survives even if the cursor briefly leaves the handle. */
-function TerminalSplitter() {
+function ChatSplitter() {
   const { state, dispatch } = useApp();
   const startRef = useRef<{ x: number; w: number } | null>(null);
 
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
-    startRef.current = { x: e.clientX, w: state.terminalWidth };
+    startRef.current = { x: e.clientX, w: state.chatWidth };
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
   }
   function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
     const start = startRef.current;
     if (!start) return;
-    // Dragging left grows the terminal (it sits on the right). The
+    // Dragging left grows the panel (it sits on the right). The
     // reducer clamps to [280, 1200] so we don't need to validate here.
     const next = start.w - (e.clientX - start.x);
-    dispatch({ type: 'TERMINAL_WIDTH', width: next });
+    dispatch({ type: 'CHAT_WIDTH', width: next });
   }
   function onPointerUp() { startRef.current = null; }
 
   return (
     <div
-      className="terminal-splitter"
+      className="chat-splitter"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

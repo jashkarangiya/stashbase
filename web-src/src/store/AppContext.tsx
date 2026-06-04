@@ -501,7 +501,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       if (pendingChanged || convChanged || treeChanged) void loadFiles();
       // Tree changed = someone else wrote to disk (Claude Code in the
-      // terminal panel is the common case). Re-read the active tab's
+      // chat panel is the common case). Re-read the active tab's
       // body so the preview / read-only editor doesn't keep showing
       // stale content. Skipped while the user is editing — clobbering
       // their unsaved buffer is worse than showing slightly old text;
@@ -1279,11 +1279,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // by finishOpenSpace (switching *in*) and goHome (switching *out*) so
   // the two can't drift. Each action targets a disjoint state slice, so
   // call order doesn't matter. Note the server kills every PTY on a
-  // space switch (onSwitch → killActiveTerminal); TERMINAL_TABS_RESET
+  // space switch (onSwitch → killActiveTerminal); CHAT_TABS_RESET
   // drops our tab list to match so we don't render orphan xterms.
   const resetSpaceScopedState = useCallback(() => {
     dispatch({ type: 'TABS_RESET' });
-    dispatch({ type: 'TERMINAL_TABS_RESET' });
+    dispatch({ type: 'CHAT_TABS_RESET' });
     dispatch({ type: 'FILTER', q: '' });
     dispatch({ type: 'SEARCH_CLEAR' });
     dispatch({ type: 'FILE_ORDER_LOADED', order: {} });

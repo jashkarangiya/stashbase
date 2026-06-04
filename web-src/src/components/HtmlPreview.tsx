@@ -14,7 +14,7 @@ import { useApp, type MatchInfo } from '../store/AppContext';
  * link forwarding).
  *
  * Auto-reload on external edits (Claude Code edits the file from the
- * terminal panel) is the reason for the cache-buster query string on
+ * chat panel) is the reason for the cache-buster query string on
  * the iframe src — the URL would otherwise be identical between
  * versions and React would never re-set it, leaving the iframe
  * stuck on whatever the asset route served first. See the `src`
@@ -38,7 +38,7 @@ export function HtmlPreview({ name }: { name: string }) {
 
   // Cheap content fingerprint used to bust the iframe cache when the
   // file changes on disk (e.g. Claude Code wrote to it via the
-  // terminal panel; `refreshActiveTabFromDisk` patched our local
+  // chat panel; `refreshActiveTabFromDisk` patched our local
   // state but the iframe is fed by `assetUrl(name)` which the server
   // re-reads from disk on every request — without a query-string
   // change React keeps the same `src`, so the iframe never refetches).

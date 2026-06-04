@@ -7,13 +7,13 @@
  * `./styles/`; never add new rules here.
  *
  *   globals.css   — design tokens, body / #root, .app grid, common reset
- *   terminal.css  — right-side terminal panel + CLI picker
+ *   chat.css      — right-side chat panel (agent tabs) + agent picker
  *   sidebar.css   — left rail: tree, search, library row, banners,
  *                   space-menu, snapshot warning
  *   mainpane.css  — main viewer / tabs / split / PDF + HTML + MD
  *                   previews / modals / settings / error boundary
  */
 @import './styles/globals.css';
-@import './styles/terminal.css';
+@import './styles/chat.css';
 @import './styles/sidebar.css';
 @import './styles/mainpane.css';

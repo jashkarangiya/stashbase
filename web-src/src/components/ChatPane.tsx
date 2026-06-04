@@ -1,6 +1,6 @@
 /**
- * Right-side terminal panel — Cursor-style tabbed chats. Each tab in
- * `state.terminalTabs` owns its own PTY + xterm; all tabs render at
+ * Right-side chat panel — Cursor-style tabbed chats. Each tab in
+ * `state.chatTabs` owns its own PTY + xterm; all tabs render at
  * once so switching preserves scrollback (inactive tabs are
  * absolutely-positioned + `visibility: hidden`). New tabs are spawned
  * from the split button in the strip: the main half opens a tab with
@@ -9,40 +9,40 @@
  * toggle's first-open auto-spawn).
  *
  * Per tab the lifecycle is:
- *   1. CLI binary detected → connect WS, shell opens, runs the binary
- *   2. CLI missing → install card with "Install for me" + manual copy
+ *   1. agent binary detected → connect WS, shell opens, runs the binary
+ *   2. agent missing → install card with "Install for me" + manual copy
  *   3. Installing → SSE-streamed npm log; flips back to (1) on success
  */
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { api, getWindowId, type TerminalCli, type TerminalClisResponse } from '../api';
+import { api, getWindowId, type Agent, type AgentsResponse } from '../api';
 import { ChevronDownIcon, CheckIcon } from '../icons';
 import { useApp } from '../store/AppContext';
-import type { TerminalTab } from '../store/state';
+import type { ChatTab } from '../store/state';
 
 type DetectState =
   | { kind: 'loading' }
-  | { kind: 'installed'; cli: TerminalCli }
-  | { kind: 'missing'; cli: TerminalCli }
-  | { kind: 'installing'; cli: TerminalCli; log: string }
-  | { kind: 'install-failed'; cli: TerminalCli; error: string; log: string };
+  | { kind: 'installed'; agent: Agent }
+  | { kind: 'missing'; agent: Agent }
+  | { kind: 'installing'; agent: Agent; log: string }
+  | { kind: 'install-failed'; agent: Agent; error: string; log: string };
 
-export function TerminalPane() {
+export function ChatPane() {
   const { state, dispatch } = useApp();
   const space = state.space;
-  const tabs = state.terminalTabs;
-  const activeId = state.activeTerminalTabId;
+  const tabs = state.chatTabs;
+  const activeId = state.activeChatTabId;
 
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const agentMenuRef = useRef<HTMLDivElement>(null);
 
   // The agent the main button defaults to — the last one started, or
   // Claude Code on a fresh install.
-  const currentCliId = state.terminalCli || 'claude';
+  const currentAgentId = state.agent || 'claude';
   const currentLabel =
-    state.terminalClis.find((c) => c.id === currentCliId)?.label ?? 'Claude Code';
+    state.agents.find((c) => c.id === currentAgentId)?.label ?? 'Claude Code';
 
   // Close the agent menu on any outside click.
   useEffect(() => {
@@ -54,55 +54,55 @@ export function TerminalPane() {
     return () => window.removeEventListener('mousedown', onDocClick);
   }, [agentMenuOpen]);
 
-  function newTab(cliId?: string) {
-    const id = cliId ?? currentCliId;
+  function newTab(agentId?: string) {
+    const id = agentId ?? currentAgentId;
     // Title disambiguates duplicates of the same agent — first tab gets
     // the bare label, copies append " 2", " 3", … the way browsers
     // name duplicate windows.
-    const cliInfo = state.terminalClis.find((c) => c.id === id);
-    const baseLabel = cliInfo?.label ?? id;
-    const sameCli = tabs.filter((t) => t.cli === id);
-    const title = sameCli.length === 0 ? baseLabel : `${baseLabel} ${sameCli.length + 1}`;
-    const tab: TerminalTab = { id: crypto.randomUUID(), cli: id, title };
-    dispatch({ type: 'TERMINAL_TAB_NEW', tab });
+    const agentInfo = state.agents.find((c) => c.id === id);
+    const baseLabel = agentInfo?.label ?? id;
+    const sameAgent = tabs.filter((t) => t.agent === id);
+    const title = sameAgent.length === 0 ? baseLabel : `${baseLabel} ${sameAgent.length + 1}`;
+    const tab: ChatTab = { id: crypto.randomUUID(), agent: id, title };
+    dispatch({ type: 'CHAT_TAB_NEW', tab });
     // Remember which agent we just started so the main button and the
     // chrome toggle default to it next time. Persisted best-effort.
-    if (id !== state.terminalCli) {
-      dispatch({ type: 'TERMINAL_CLI', id });
-      api.setCli(id).catch(() => { /* best-effort */ });
+    if (id !== state.agent) {
+      dispatch({ type: 'AGENT_SET', id });
+      api.setAgent(id).catch(() => { /* best-effort */ });
     }
   }
 
   if (!space) return null;
 
   return (
-    <div className="terminal-pane-shell">
-      <div className="terminal-tabs">
-        <div className="terminal-tabs-list">
+    <div className="chat-pane-shell">
+      <div className="chat-tabs">
+        <div className="chat-tabs-list">
           {tabs.map((tab) => (
             <div
               key={tab.id}
-              className={'terminal-tab' + (tab.id === activeId ? ' active' : '')}
+              className={'chat-tab' + (tab.id === activeId ? ' active' : '')}
               role="tab"
               aria-selected={tab.id === activeId}
-              onClick={() => dispatch({ type: 'TERMINAL_TAB_ACTIVATE', id: tab.id })}
+              onClick={() => dispatch({ type: 'CHAT_TAB_ACTIVATE', id: tab.id })}
               title={tab.title}
             >
-              <span className="terminal-tab-label">{tab.title}</span>
+              <span className="chat-tab-label">{tab.title}</span>
               <button
                 type="button"
-                className="terminal-tab-close"
+                className="chat-tab-close"
                 aria-label={`Close ${tab.title}`}
                 title="Close tab"
                 onClick={(e) => {
                   e.stopPropagation();
-                  dispatch({ type: 'TERMINAL_TAB_CLOSE', id: tab.id });
+                  dispatch({ type: 'CHAT_TAB_CLOSE', id: tab.id });
                 }}
               >×</button>
             </div>
           ))}
         </div>
-        <div className="terminal-tabs-actions">
+        <div className="chat-tabs-actions">
           <div className="agent-new" ref={agentMenuRef}>
             <button
               type="button"
@@ -125,18 +125,18 @@ export function TerminalPane() {
             </button>
             {agentMenuOpen && (
               <div className="agent-new-menu" role="menu">
-                {state.terminalClis.map((c) => (
+                {state.agents.map((c) => (
                   <button
                     key={c.id}
                     type="button"
                     role="menuitem"
-                    className={'agent-new-item' + (c.id === currentCliId ? ' current' : '')}
+                    className={'agent-new-item' + (c.id === currentAgentId ? ' current' : '')}
                     onClick={() => { setAgentMenuOpen(false); newTab(c.id); }}
                   >
                     <span className="agent-new-item-label">
                       {c.label}{c.installed ? '' : ' · not installed'}
                     </span>
-                    {c.id === currentCliId && <CheckIcon className="agent-new-item-check" />}
+                    {c.id === currentAgentId && <CheckIcon className="agent-new-item-check" />}
                   </button>
                 ))}
               </div>
@@ -144,19 +144,19 @@ export function TerminalPane() {
           </div>
         </div>
       </div>
-      <div className="terminal-tabs-body">
+      <div className="chat-tabs-body">
         {tabs.map((tab) => (
           <div
             key={tab.id}
-            className={'terminal-tab-pane' + (tab.id === activeId ? ' active' : '')}
+            className={'chat-tab-pane' + (tab.id === activeId ? ' active' : '')}
             role="tabpanel"
             aria-hidden={tab.id !== activeId}
           >
-            <TerminalTabBody space={space} cliId={tab.cli} active={tab.id === activeId} />
+            <ChatTabBody space={space} agentId={tab.agent} active={tab.id === activeId} />
           </div>
         ))}
         {tabs.length === 0 && (
-          <div className="terminal-pane status">
+          <div className="chat-pane status">
             No active chat. Click <code>+</code> above to start one.
           </div>
         )}
@@ -165,16 +165,16 @@ export function TerminalPane() {
   );
 }
 
-/** Body of a single tab. Owns its CLI-detection state + xterm
+/** Body of a single tab. Owns its agent-detection state + xterm
  *  instance. Detection re-runs only when the space changes — each tab
- *  is locked to its `cliId` at creation. */
-function TerminalTabBody({
+ *  is locked to its `agentId` at creation. */
+function ChatTabBody({
   space,
-  cliId,
+  agentId,
   active,
 }: {
   space: string;
-  cliId: string;
+  agentId: string;
   active: boolean;
 }) {
   const [detect, setDetect] = useState<DetectState>({ kind: 'loading' });
@@ -182,18 +182,18 @@ function TerminalTabBody({
   useEffect(() => {
     let cancelled = false;
     setDetect({ kind: 'loading' });
-    api.listClis().then((res: TerminalClisResponse) => {
+    api.listAgents().then((res: AgentsResponse) => {
       if (cancelled) return;
-      const cli = res.clis.find((c) => c.id === cliId) ?? res.clis[0];
-      if (!cli) return;
-      setDetect({ kind: cli.installed ? 'installed' : 'missing', cli });
+      const agent = res.clis.find((c) => c.id === agentId) ?? res.clis[0];
+      if (!agent) return;
+      setDetect({ kind: agent.installed ? 'installed' : 'missing', agent });
     }).catch(() => {
       if (!cancelled) {
         setDetect({
           kind: 'missing',
-          cli: {
-            id: cliId,
-            label: cliId,
+          agent: {
+            id: agentId,
+            label: agentId,
             vendor: '',
             installHint: '',
             installed: false,
@@ -202,28 +202,28 @@ function TerminalTabBody({
         });
       }
     });
-    // Mirror `skills/<name>/SKILL.md` into the active CLI's per-project
+    // Mirror `skills/<name>/SKILL.md` into the active agent's per-project
     // prompt directory — fire-and-forget, idempotent.
-    if (cliId === 'claude' || cliId === 'codex') {
-      api.syncSkills(cliId).catch(() => { /* silent */ });
+    if (agentId === 'claude' || agentId === 'codex') {
+      api.syncSkills(agentId).catch(() => { /* silent */ });
     }
     return () => { cancelled = true; };
-  }, [space, cliId]);
+  }, [space, agentId]);
 
-  function recheck(cli: TerminalCli) {
+  function recheck(agent: Agent) {
     setDetect({ kind: 'loading' });
-    api.checkCli(cli.id).then((r) => {
-      setDetect({ kind: r.installed ? 'installed' : 'missing', cli });
-    }).catch(() => setDetect({ kind: 'missing', cli }));
+    api.checkAgent(agent.id).then((r) => {
+      setDetect({ kind: r.installed ? 'installed' : 'missing', agent });
+    }).catch(() => setDetect({ kind: 'missing', agent }));
   }
 
-  function startInstall(cli: TerminalCli) {
-    setDetect({ kind: 'installing', cli, log: '' });
-    const es = new EventSource('/api/terminal/install/' + encodeURIComponent(cli.id));
+  function startInstall(agent: Agent) {
+    setDetect({ kind: 'installing', agent, log: '' });
+    const es = new EventSource('/api/terminal/install/' + encodeURIComponent(agent.id));
     let log = '';
     const append = (txt: string) => {
       log += txt;
-      setDetect({ kind: 'installing', cli, log });
+      setDetect({ kind: 'installing', agent, log });
     };
     es.addEventListener('out', (e: MessageEvent) => append(e.data + '\n'));
     es.addEventListener('err', (e: MessageEvent) => append(e.data + '\n'));
@@ -231,11 +231,11 @@ function TerminalTabBody({
       es.close();
       const payload = JSON.parse(e.data) as { code: number | null };
       if (payload.code === 0) {
-        recheck(cli);
+        recheck(agent);
       } else {
         setDetect({
           kind: 'install-failed',
-          cli,
+          agent,
           error: `npm install exited with code ${payload.code}`,
           log,
         });
@@ -244,23 +244,23 @@ function TerminalTabBody({
   }
 
   if (detect.kind === 'loading') {
-    return <div className="terminal-pane status">Checking…</div>;
+    return <div className="chat-pane status">Checking…</div>;
   }
   if (detect.kind === 'missing' || detect.kind === 'install-failed') {
     return (
       <InstallCard
-        cli={detect.cli}
+        agent={detect.agent}
         error={detect.kind === 'install-failed' ? detect.error : null}
         log={detect.kind === 'install-failed' ? detect.log : null}
-        onInstall={() => startInstall(detect.cli)}
-        onRetry={() => recheck(detect.cli)}
+        onInstall={() => startInstall(detect.agent)}
+        onRetry={() => recheck(detect.agent)}
       />
     );
   }
   if (detect.kind === 'installing') {
-    return <InstallProgress cli={detect.cli} log={detect.log} />;
+    return <InstallProgress agent={detect.agent} log={detect.log} />;
   }
-  return <XtermView space={space} launchCmd={detect.cli.launchCommand} active={active} />;
+  return <XtermView space={space} launchCmd={detect.agent.launchCommand} active={active} />;
 }
 
 /** Renders xterm + connects to /ws/terminal. Each tab gets its own
@@ -407,7 +407,7 @@ function XtermView({
     });
     ro.observe(host);
 
-    // Drop sidebar files onto the terminal → insert their
+    // Drop sidebar files onto the chat panel → insert their
     // space-relative path at the cursor. Same FILE_MIME the sidebar
     // uses for intra-tree moves, so dragging a row from FileTree
     // straight into Claude Code's slash-command prompt drops
@@ -464,19 +464,19 @@ function XtermView({
     try { fit.fit(); } catch { /* host detached mid-frame */ }
   }, [active]);
 
-  return <div className="terminal-pane xterm-host" ref={containerRef} />;
+  return <div className="chat-pane xterm-host" ref={containerRef} />;
 }
 
 function InstallCard({
-  cli, error, log, onInstall, onRetry,
+  agent, error, log, onInstall, onRetry,
 }: {
-  cli: TerminalCli;
+  agent: Agent;
   error: string | null;
   log: string | null;
   onInstall: () => void;
   onRetry: () => void;
 }) {
-  const cmd = cli.installHint;
+  const cmd = agent.installHint;
   const [copied, setCopied] = useState(false);
   function copy() {
     void navigator.clipboard.writeText(cmd).then(() => {
@@ -485,11 +485,11 @@ function InstallCard({
     });
   }
   return (
-    <div className="terminal-pane install-card">
-      <div className="install-card-title">{cli.label} not found</div>
+    <div className="chat-pane install-card">
+      <div className="install-card-title">{agent.label} not found</div>
       <p className="install-card-hint">
-        We couldn't find the <code>{cli.id}</code> CLI on your PATH. Install
-        it and we'll connect a terminal here.
+        We couldn't find the <code>{agent.id}</code> CLI on your PATH. Install
+        it and we'll connect it here.
       </p>
       <div className="install-card-cmd">
         <code>{cmd}</code>
@@ -519,14 +519,14 @@ function InstallCard({
   );
 }
 
-function InstallProgress({ cli, log }: { cli: TerminalCli; log: string }) {
+function InstallProgress({ agent, log }: { agent: Agent; log: string }) {
   const ref = useRef<HTMLPreElement | null>(null);
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, [log]);
   return (
-    <div className="terminal-pane install-progress">
-      <div className="install-card-title">Installing {cli.label}…</div>
+    <div className="chat-pane install-progress">
+      <div className="install-card-title">Installing {agent.label}…</div>
       <pre ref={ref} className="install-card-log live">{log || '…'}</pre>
     </div>
   );

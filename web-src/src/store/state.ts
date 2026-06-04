@@ -18,7 +18,7 @@ import type {
   PdfFailure,
   SearchHit,
   SnapshotWarning,
-  TerminalCli,
+  Agent,
 } from '../api';
 
 export interface SaveStatus {
@@ -34,13 +34,13 @@ export const SIDEBAR_MIN_WIDTH = 170;
 export const SIDEBAR_MAX_WIDTH = 520;
 export const SIDEBAR_COLLAPSE_AT = 100;
 
-/** One chat tab in the right-side terminal panel. The tab's `cli` is
+/** One chat tab in the right-side chat panel. The tab's `agent` is
  *  locked at creation time so starting a new tab with a different agent
  *  doesn't restart open conversations. */
-export interface TerminalTab {
+export interface ChatTab {
   id: string;
-  /** CLI id the PTY runs (`claude` / `codex` / …). */
-  cli: string;
+  /** Agent id the PTY runs (`claude` / `codex` / …). */
+  agent: string;
   /** Display name in the tab strip. Default: `"<CLI label>"` (plus a
    *  `" N"` suffix on duplicates). */
   title: string;
@@ -200,25 +200,25 @@ export interface State {
    *  44px activity rail. User-resizable via the drag handle on the
    *  sidebar's right edge; clamped to [SIDEBAR_MIN_WIDTH, MAX]. */
   sidebarWidth: number;
-  /** True opens the right-side terminal panel. */
-  terminalOpen: boolean;
-  /** Terminal panel width in pixels — user-resizable via drag handle. */
-  terminalWidth: number;
+  /** True opens the right-side chat panel. */
+  chatOpen: boolean;
+  /** Chat panel width in pixels — user-resizable via drag handle. */
+  chatWidth: number;
   /** **Last-used** agent id — the agent the chat panel's split button
    *  and the chrome toggle default to for a new tab. Updated (and
    *  persisted server-side) each time a tab is started, so it follows
    *  the user's latest pick. Existing tabs keep running their own
    *  agent — this only affects future tabs. */
-  terminalCli: string;
+  agent: string;
   /** Catalog of available agents from the server, populated on demand. */
-  terminalClis: TerminalCli[];
+  agents: Agent[];
   /** Active chat tabs. Each tab owns its own PTY + xterm instance so
    *  switching tabs preserves scrollback. Cursor-style — a `+` button
-   *  in the tab strip spawns a new one against the default CLI. */
-  terminalTabs: TerminalTab[];
-  /** Id of the currently-visible tab. `null` only when `terminalTabs`
+   *  in the tab strip spawns a new one against the default agent. */
+  chatTabs: ChatTab[];
+  /** Id of the currently-visible tab. `null` only when `chatTabs`
    *  is empty (panel closed or just initialised). */
-  activeTerminalTabId: string | null;
+  activeChatTabId: string | null;
 
   pendingNames: Set<string>;
   /** Space-relative paths of PDFs the server is converting right now.
@@ -324,12 +324,12 @@ export const initialState: State = {
   spaceCollapsed: false,
   sidebarCollapsed: false,
   sidebarWidth: 280,
-  terminalOpen: false,
-  terminalWidth: 480,
-  terminalCli: 'claude',
-  terminalClis: [],
-  terminalTabs: [],
-  activeTerminalTabId: null,
+  chatOpen: false,
+  chatWidth: 480,
+  agent: 'claude',
+  agents: [],
+  chatTabs: [],
+  activeChatTabId: null,
   pendingNames: new Set(),
   pendingConversions: [],
   syncRunning: false,
@@ -388,14 +388,14 @@ export type Action =
   | { type: 'SIDEBAR_FOLD_TOGGLE' }
   | { type: 'SIDEBAR_SET_COLLAPSED'; collapsed: boolean }
   | { type: 'SIDEBAR_WIDTH'; width: number }
-  | { type: 'TERMINAL_TOGGLE' }
-  | { type: 'TERMINAL_WIDTH'; width: number }
-  | { type: 'TERMINAL_CLIS'; current: string; clis: State['terminalClis'] }
-  | { type: 'TERMINAL_CLI'; id: string }
-  | { type: 'TERMINAL_TAB_NEW'; tab: TerminalTab }
-  | { type: 'TERMINAL_TAB_CLOSE'; id: string }
-  | { type: 'TERMINAL_TAB_ACTIVATE'; id: string }
-  | { type: 'TERMINAL_TABS_RESET' }
+  | { type: 'CHAT_TOGGLE' }
+  | { type: 'CHAT_WIDTH'; width: number }
+  | { type: 'AGENTS_LOADED'; current: string; agents: State['agents'] }
+  | { type: 'AGENT_SET'; id: string }
+  | { type: 'CHAT_TAB_NEW'; tab: ChatTab }
+  | { type: 'CHAT_TAB_CLOSE'; id: string }
+  | { type: 'CHAT_TAB_ACTIVATE'; id: string }
+  | { type: 'CHAT_TABS_RESET' }
   | { type: 'ACTIVE_FOLDER'; path: string }
   /** Move the sidebar's single focus to `path`. Pure visual highlight
    *  — does not touch expand state, activeFolder, or the open file. */
@@ -635,42 +635,42 @@ export function reducer(s: State, a: Action): State {
       // collapse, but that decision lives in the drag handler (it has
       // the raw cursor delta); here we just keep the stored width sane.
       return { ...s, sidebarWidth: Math.max(SIDEBAR_MIN_WIDTH, Math.min(a.width, SIDEBAR_MAX_WIDTH)) };
-    case 'TERMINAL_TOGGLE':
-      return { ...s, terminalOpen: !s.terminalOpen };
-    case 'TERMINAL_WIDTH':
+    case 'CHAT_TOGGLE':
+      return { ...s, chatOpen: !s.chatOpen };
+    case 'CHAT_WIDTH':
       // Clamp to sensible bounds. Below ~280 the prompt wraps every
       // word; above ~70% of viewport leaves no room for content.
-      return { ...s, terminalWidth: Math.max(280, Math.min(a.width, 1200)) };
-    case 'TERMINAL_CLIS':
-      return { ...s, terminalCli: a.current, terminalClis: a.clis };
-    case 'TERMINAL_CLI':
-      return { ...s, terminalCli: a.id };
-    case 'TERMINAL_TAB_NEW':
+      return { ...s, chatWidth: Math.max(280, Math.min(a.width, 1200)) };
+    case 'AGENTS_LOADED':
+      return { ...s, agent: a.current, agents: a.agents };
+    case 'AGENT_SET':
+      return { ...s, agent: a.id };
+    case 'CHAT_TAB_NEW':
       return {
         ...s,
-        terminalTabs: [...s.terminalTabs, a.tab],
-        activeTerminalTabId: a.tab.id,
+        chatTabs: [...s.chatTabs, a.tab],
+        activeChatTabId: a.tab.id,
       };
-    case 'TERMINAL_TAB_CLOSE': {
-      const idx = s.terminalTabs.findIndex((t) => t.id === a.id);
+    case 'CHAT_TAB_CLOSE': {
+      const idx = s.chatTabs.findIndex((t) => t.id === a.id);
       if (idx < 0) return s;
-      const nextTabs = s.terminalTabs.filter((t) => t.id !== a.id);
+      const nextTabs = s.chatTabs.filter((t) => t.id !== a.id);
       // If we just closed the active tab, jump to a neighbor (prefer
       // the one immediately to the right, fall back to the left).
-      let nextActive = s.activeTerminalTabId;
-      if (s.activeTerminalTabId === a.id) {
+      let nextActive = s.activeChatTabId;
+      if (s.activeChatTabId === a.id) {
         nextActive = nextTabs[idx]?.id ?? nextTabs[idx - 1]?.id ?? null;
       }
-      return { ...s, terminalTabs: nextTabs, activeTerminalTabId: nextActive };
+      return { ...s, chatTabs: nextTabs, activeChatTabId: nextActive };
     }
-    case 'TERMINAL_TAB_ACTIVATE':
-      if (!s.terminalTabs.some((t) => t.id === a.id)) return s;
-      return { ...s, activeTerminalTabId: a.id };
-    case 'TERMINAL_TABS_RESET':
+    case 'CHAT_TAB_ACTIVATE':
+      if (!s.chatTabs.some((t) => t.id === a.id)) return s;
+      return { ...s, activeChatTabId: a.id };
+    case 'CHAT_TABS_RESET':
       // Wipes ALL tabs — called on space switch (the server kills every
       // PTY in that flow; the frontend has to drop its tab list too or
       // we'd render dead xterms pointing at the old cwd).
-      return { ...s, terminalTabs: [], activeTerminalTabId: null };
+      return { ...s, chatTabs: [], activeChatTabId: null };
     case 'ACTIVE_FOLDER':
       // Semantically "make this folder the user's current target" —
       // also moves the visual focus there.

@@ -101,7 +101,7 @@ export interface IndexStatus {
   /** Monotonic counter the server bumps on every external fs event
    *  (after self-write filtering). Renderer compares against its
    *  last-seen value and triggers `/api/files` on any change — picks
-   *  up writes from the terminal panel (Claude Code, `touch`, …) even
+   *  up writes from the chat panel (Claude Code, `touch`, …) even
    *  for non-indexable files / empty dirs that don't move `pending`. */
   treeVersion?: number;
   /** Non-null when this space's most recent snapshot import skipped
@@ -197,21 +197,21 @@ export interface EmbedderState {
 }
 
 
-export interface TerminalCli {
+export interface Agent {
   id: string;
   label: string;
   vendor: string;
   installHint: string;
   installed: boolean;
   /** Full shell command the panel feeds to the shell once it's ready
-   *  (e.g. `claude --theme light`). Built by the server from the CLI
-   *  registry so the renderer doesn't have to track per-CLI flags. */
+   *  (e.g. `claude --theme light`). Built by the server from the agent
+   *  registry so the renderer doesn't have to track per-agent flags. */
   launchCommand: string;
 }
 
-export interface TerminalClisResponse {
+export interface AgentsResponse {
   current: string;
-  clis: TerminalCli[];
+  clis: Agent[];
 }
 
 /** Extract a printable message from any thrown value. ApiError wins
@@ -372,7 +372,7 @@ export const api = {
     }),
   /** Mirror this space's `skills/<name>/SKILL.md` into the active
    *  CLI's per-project prompt dir (`.claude/commands` / `.codex/prompts`).
-   *  Renderer fires this on terminal panel open / CLI switch. */
+   *  Renderer fires this on chat panel open / agent switch. */
   syncSkills: (cli: 'claude' | 'codex') =>
     send<{ synced: string[]; skipped: string[] }>(
       'POST',
@@ -482,11 +482,13 @@ export const api = {
   validateEmbedder: (openaiKey: string) =>
     send<Record<string, never>>('POST', '/api/embedder/validate', { openaiKey }),
 
-  // Terminal CLIs ----------------------------------------------
-  listClis: () => getJson<TerminalClisResponse>('/api/terminal/clis'),
-  setCli: (id: string) =>
+  // Agents (chat-panel CLIs) -----------------------------------
+  // Server routes stay under `/api/terminal/*` — they manage CLIs that
+  // run inside a PTY; the renderer just calls them "agents".
+  listAgents: () => getJson<AgentsResponse>('/api/terminal/clis'),
+  setAgent: (id: string) =>
     send<{ current: string }>('PUT', '/api/terminal/cli', { id }),
-  checkCli: (id: string) =>
+  checkAgent: (id: string) =>
     getJson<{ installed: boolean }>('/api/terminal/check/' + encodeURIComponent(id)),
   mcpStatus: () =>
     getJson<{ clients: Record<string, boolean>; command: string; config: unknown }>('/api/mcp/status'),
