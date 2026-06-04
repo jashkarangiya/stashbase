@@ -165,12 +165,6 @@ export interface State {
   welcomeError: string | null;
 
   space: string;
-  /** Active "show original PDF" split: when set, MainPane renders the
-   *  HTML preview on the left and the named PDF on the right. Auto-
-   *  set when a search hit on a PDF-derived HTML opens; cleared by
-   *  the toolbar toggle or when the user navigates to an unrelated
-   *  file. */
-  pdfSplit: { html: string; pdf: string } | null;
   recent: { path: string; openedAt: string }[];
   /** OS home directory — used by the Welcome screen to render
    *  `~/foo` instead of the full `/Users/<name>/foo`. */
@@ -317,7 +311,6 @@ export const initialState: State = {
   welcomeVisible: true,
   welcomeError: null,
   space: '',
-  pdfSplit: null,
   recent: [],
   homeDir: '',
   files: [],
@@ -436,7 +429,6 @@ export type Action =
   | { type: 'NAV_RESET' }
   | { type: 'PENDING_SCROLL'; anchor: string | null; scrollY: number | null }
   | { type: 'PENDING_HIGHLIGHT'; highlight: PendingHighlight | null }
-  | { type: 'PDF_SPLIT'; split: { html: string; pdf: string } | null }
   | { type: 'CASCADE_PROMPT'; prompt: CascadePrompt | null }
   | { type: 'MODAL_OPEN'; request: ModalRequest }
   | { type: 'MODAL_CLOSE' }
@@ -797,8 +789,6 @@ export function reducer(s: State, a: Action): State {
       return patchActiveTab(s, { pendingAnchor: a.anchor, pendingScrollY: a.scrollY });
     case 'PENDING_HIGHLIGHT':
       return patchActiveTab(s, { pendingHighlight: a.highlight });
-    case 'PDF_SPLIT':
-      return { ...s, pdfSplit: a.split };
     case 'CASCADE_PROMPT':
       return { ...s, cascadePrompt: a.prompt };
     case 'NEW_FOLDER_INPUT':

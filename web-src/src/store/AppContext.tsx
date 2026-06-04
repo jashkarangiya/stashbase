@@ -22,7 +22,6 @@ import {
 import {
   api,
   ApiError,
-  getWindowId,
 } from '../api';
 import {
   getActiveTab,
@@ -110,10 +109,6 @@ export interface AppActions {
    *  line-range overlay; PdfPreview uses `chunkText` to find the
    *  passage via pdfjs's find controller. */
   selectFileWithHighlight: (name: string, hit: PendingHighlight) => Promise<void>;
-  /** Open / close the "show original PDF" split for the currently
-   *  active file. No-op when the active file isn't an HTML with a
-   *  sibling PDF. */
-  toggleSplitOriginalPdf: () => Promise<void>;
   /** Open a file in a new tab (double-click in sidebar / drag-out
    *  semantics). Always creates a new tab even if the file is already
    *  open in another tab — VS Code does the same with the explicit
@@ -766,29 +761,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [selectFile]);
 
-  /** Toggle the "Show original PDF" dual-view for the current tab.
-   *  No-op if the active file isn't an HTML with a sibling PDF. */
-  const toggleSplitOriginalPdf = useCallback(async () => {
-    const s = stateRef.current;
-    const active = getActiveTab(s);
-    const cur = active?.file;
-    // Works for any note-shaped viewer (md / html). PDFs themselves
-    // and kb-overview tabs don't get the toggle.
-    if (!cur || (cur.format !== 'md' && cur.format !== 'html')) return;
-    if (s.pdfSplit && s.pdfSplit.html === cur.name) {
-      dispatch({ type: 'PDF_SPLIT', split: null });
-      return;
-    }
-    const pdfPath = derivePdfSibling(cur.name);
-    if (!pdfPath) return;
-    if (await assetExists(pdfPath)) {
-      // `pdfSplit.html` is the note path field — kept for back-compat
-      // with the original HTML-only iteration; it now holds the
-      // active note regardless of format.
-      dispatch({ type: 'PDF_SPLIT', split: { html: cur.name, pdf: pdfPath } });
-    }
-  }, []);
-
   /** Double-click in the sidebar = open PINNED. VS Code semantics:
    *    1. File already open → activate, AND promote it if it was
    *       living in the preview slot (so it stops being kickable).
@@ -1389,7 +1361,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     selectFile, selectFileWithHighlight, openInNewTab, newTab, openKbOverview, openKbRules, openSpaceRules, closeTab, closeActiveTab, activateTab,
     navigateTo, navBack, navForward, consumePendingScroll,
     consumePendingHighlight,
-    toggleSplitOriginalPdf,
     resolveCascadePrompt,
     alert: showAlert, confirm: askConfirm, resolveModal,
     toast, dismissToast,
@@ -1408,7 +1379,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     selectFile, selectFileWithHighlight, openInNewTab, newTab, openKbOverview, openKbRules, openSpaceRules, closeTab, closeActiveTab, activateTab,
     navigateTo, navBack, navForward, consumePendingScroll,
     consumePendingHighlight,
-    toggleSplitOriginalPdf,
     resolveCascadePrompt,
     showAlert, askConfirm, resolveModal, toast, dismissToast,
     toggleEditMode,
@@ -1454,44 +1424,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(() => ({ state, actions, dispatch }), [state, actions]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
-}
-
-/** Map a viewer note path back to its parent PDF, if any. Handles the
- *  two flavours of derived-from-PDF notes we might encounter:
- *    - `.paper.md` / `.paper.html` — dot-prefixed app-derived (current
- *      pymupdf4llm convention)
- *    - `paper.html` / `paper.htm` / `paper.md` — historical / user-
- *      authored notes that happen to sit next to a `paper.pdf`
- *  Returns the candidate `paper.pdf` sibling path or null when the
- *  input doesn't match a viewable note suffix. */
-function derivePdfSibling(notePath: string): string | null {
-  // Dot-prefixed derived: `.paper.md` → `paper.pdf`
-  const dot = notePath.match(/^(?:(.*)\/)?\.(.+)\.(md|markdown|html|htm)$/i);
-  if (dot) {
-    const prefix = dot[1] ? `${dot[1]}/` : '';
-    return `${prefix}${dot[2]}.pdf`;
-  }
-  // Plain co-located: `paper.md` / `paper.html` → `paper.pdf`
-  const plain = notePath.match(/^(.+)\.(md|markdown|html|htm)$/i);
-  if (!plain) return null;
-  return `${plain[1]}.pdf`;
-}
-
-/** HEAD `/asset/<path>` to test for existence. We tolerate any non-2xx
- *  as "absent" (404 is the common case; 403 / 500 also count).
- *  Includes the window-id header so the server resolves the asset
- *  against THIS window's active space — without it, a multi-window
- *  session would HEAD against the process-wide default space. */
-async function assetExists(spaceRel: string): Promise<boolean> {
-  try {
-    const resp = await fetch('/asset/' + encodeURIComponent(spaceRel).replace(/%2F/g, '/'), {
-      method: 'HEAD',
-      headers: { 'x-stashbase-window-id': getWindowId() },
-    });
-    return resp.ok;
-  } catch {
-    return false;
-  }
 }
 
 export function useApp() {

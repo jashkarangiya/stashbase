@@ -34,16 +34,6 @@ export function MainPane() {
   const canForward = navCursor >= 0 && navCursor < navStack.length - 1;
   const hasTabs = state.tabs.length > 0;
   const emptyTab = !!activeTab && !cur;
-  // PDF-derived note dual-view: side-by-side note + PDF when the
-  // user clicked "Show original PDF" on a note with a sibling PDF.
-  // Works for either md or html viewers; the `pdfSplit.html` field
-  // is named after the original (HTML-only) iteration but now holds
-  // any note path. The active file must be one of the markdown-ish
-  // viewer formats (md / html) for the split to apply.
-  const splitNoteFormat = cur && (cur.format === 'md' || cur.format === 'html')
-    ? cur.format : null;
-  const pdfSplit = cur && splitNoteFormat && state.pdfSplit?.html === cur.name
-    ? state.pdfSplit : null;
 
   return (
     <main className={'main' + (hasTabs ? '' : ' no-file')}>
@@ -56,29 +46,11 @@ export function MainPane() {
           </div>
         )}
         {emptyTab && <EmptyTabLanding />}
-        {cur && !editMode && cur.format === 'md' && !pdfSplit && (
+        {cur && !editMode && cur.format === 'md' && (
           <MarkdownPreview name={cur.name} content={cur.content} />
         )}
-        {cur && !editMode && cur.format === 'html' && !pdfSplit && (
+        {cur && !editMode && cur.format === 'html' && (
           <HtmlPreview name={cur.name} />
-        )}
-        {cur && !editMode && splitNoteFormat && pdfSplit && (
-          // Dual-view: note (md / html) on the left, PDF on the right.
-          // Two viewer instances — each owns its own iframe / canvas
-          // state — sitting in a 50/50 horizontal split. Plain CSS
-          // grid; no draggable divider in v1 (see Desktop UI Planned
-          // 03 for the future).
-          <div className="pdf-dual-view">
-            <div className="pdf-dual-pane">
-              {splitNoteFormat === 'html'
-                ? <HtmlPreview name={cur.name} />
-                : <MarkdownPreview name={cur.name} content={cur.content} />}
-            </div>
-            <div className="pdf-dual-divider" aria-hidden />
-            <div className="pdf-dual-pane">
-              <PdfPreview name={pdfSplit.pdf} />
-            </div>
-          </div>
         )}
         {cur && cur.format === 'pdf' && (
           // PDFs have no edit mode — the source is a binary file.
@@ -125,16 +97,6 @@ export function MainPane() {
             <span className={'save-status' + (saveStatus.cls ? ' ' + saveStatus.cls : '')}>
               {saveStatus.text}
             </span>
-          )}
-          {splitNoteFormat && (
-            <button
-              className={'icon-btn pdf-split-toggle' + (pdfSplit ? ' active' : '')}
-              type="button"
-              title={pdfSplit ? 'Hide original PDF' : 'Show original PDF'}
-              onClick={() => { void actions.toggleSplitOriginalPdf(); }}
-            >
-              PDF
-            </button>
           )}
           <button
             className={'icon-btn edit-toggle' + (editMode ? ' editing' : '')}
