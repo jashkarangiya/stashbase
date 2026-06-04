@@ -21,6 +21,7 @@ import {
   type FileMetadata,
 } from '../metadata.ts';
 import { derivedPathsForPdf, getInFlightPdfs, maybeConvertPdf, originalForDerivedNote } from '../pdf.ts';
+import { derivedNotePathForImage, maybeConvertImage } from '../image.ts';
 import { isImageFile } from '../format.ts';
 import { clearRecord, listByStatus, readAll as readPdfStatus } from '../pdf-status.ts';
 import { getFsChangeCounter } from '../watcher.ts';
@@ -157,27 +158,25 @@ export function mount(app: express.Express): void {
       const orphaned = status.orphaned
         .map((p) => fromKbRel(p))
         .filter((p): p is string => p != null);
-      // PDF status: space-scoped. `pendingConversions` keeps the old
-      // shape (in-flight only) for backwards compatibility with the
-      // sidebar "Converting…" indicator. `pdfFailures` surfaces the
-      // persistent failure list so the UI can render Retry entries.
-      // Scope to PDFs: the conversion-status DB is shared with image OCR
-      // (image.ts), but the failure list drives the PDF-only Retry banner
-      // / `/api/pdf/retry`. Surfacing an image failure here would offer a
-      // PDF retry that re-runs pdf_extract on a `.png` and fails again.
-      const pdfFailures = listByStatus('failed')
+      // Conversion status: space-scoped. `pendingConversions` keeps the
+      // old shape (in-flight only) for the sidebar "Converting…"
+      // indicator. `conversionFailures` surfaces the persistent failure
+      // list so the UI can render Retry entries — for BOTH PDFs
+      // (pdf_extract) and images (ocr_extract), which share this
+      // status DB. `/api/conversion/retry` dispatches by extension, so a
+      // failed image re-runs OCR (not pdf_extract).
+      const conversionFailures = listByStatus('failed')
         .map(({ path: kbRel, entry }) => {
           const rel = fromKbRel(kbRel);
           return rel == null ? null : { path: rel, lastError: entry.lastError ?? '', attempts: entry.attempts };
         })
-        .filter((x): x is { path: string; lastError: string; attempts: number } => x !== null)
-        .filter((x) => /\.pdf$/i.test(x.path));
+        .filter((x): x is { path: string; lastError: string; attempts: number } => x !== null);
       res.json({
         ...status,
         pending,
         orphaned,
         pendingConversions: getInFlightPdfs(),
-        pdfFailures,
+        conversionFailures,
         treeVersion: getFsChangeCounter(),
         // Surface any unresolved snapshot-import warning for the
         // current space so the renderer can show a banner. `null` when
@@ -212,19 +211,24 @@ export function mount(app: express.Express): void {
     }
   });
 
-  // PDF Retry: take a space-relative path, clear its status record,
-  // then fire the converter again. The fire-and-forget convert path
-  // writes back to state.db with the new outcome; the client
-  // polls /api/index-status or /api/pdf/status to observe the
-  // result.
-  app.post('/api/pdf/retry', (req, res) => {
+  // Conversion Retry: take a space-relative path, clear its status
+  // record, remove the stale derived note, then re-fire the right
+  // converter — pdf_extract for `.pdf`, ocr_extract for images. The
+  // fire-and-forget convert path writes back to state.db with the new
+  // outcome; the client polls /api/index-status to observe the result.
+  app.post('/api/conversion/retry', (req, res) => {
     try {
       const rel = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
       if (!rel) return res.status(400).json({ error: 'path required' });
+      const isPdf = /\.pdf$/i.test(rel);
+      const isImage = isImageFile(rel);
+      if (!isPdf && !isImage) {
+        return res.status(400).json({ error: 'not a convertible file (expected PDF or image)' });
+      }
       const space = getCurrentSpace();
       if (!space) return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
       const abs = path.resolve(space, rel);
-      // PDFs can sit at any depth inside the space, so use the
+      // The source can sit at any depth inside the space, so use the
       // file-level kbRoot containment check, not the space-boundary
       // `isUnderRoot` (which restricts to one-segment children). Also
       // verify the path actually resolves inside the space (not "..").
@@ -233,20 +237,24 @@ export function mount(app: express.Express): void {
         return res.status(400).json({ error: 'path escapes space' });
       }
       if (!fs.existsSync(abs)) return res.status(404).json({ error: 'file not found' });
-      // Clear by KB-relative form (matches what maybeConvertPdf writes
-      // when it spins back up).
+      // Clear by KB-relative form (matches what the converters write
+      // when they spin back up).
       try {
-        const kbRel = toKbRel(rel);
-        clearRecord(kbRel);
+        clearRecord(toKbRel(rel));
       } catch { /* no current space — guarded above, defensive */ }
-      // Also remove any stale derived files so maybeConvertPdf's
-      // "skip if note exists" guard doesn't immediately bail. We
-      // leave the .pdf in place (it's the source); the user's Retry
-      // intent is to re-derive the dot-prefixed `.md` + image bundle.
-      const { notePath: staleNote, bundleDir: staleBundle } = derivedPathsForPdf(abs);
-      try { fs.rmSync(staleNote, { force: true }); } catch { /* no stale to remove */ }
-      try { fs.rmSync(staleBundle, { recursive: true, force: true }); } catch { /* no bundle */ }
-      maybeConvertPdf(abs, rel);
+      // Remove the stale derived note(s) so the converter's "skip if
+      // note exists" guard doesn't immediately bail. The source binary
+      // (.pdf / image) stays in place — Retry only re-derives the
+      // dot-prefixed `.md` (+ PDF image bundle).
+      if (isPdf) {
+        const { notePath: staleNote, bundleDir: staleBundle } = derivedPathsForPdf(abs);
+        try { fs.rmSync(staleNote, { force: true }); } catch { /* no stale to remove */ }
+        try { fs.rmSync(staleBundle, { recursive: true, force: true }); } catch { /* no bundle */ }
+        maybeConvertPdf(abs, rel);
+      } else {
+        try { fs.rmSync(derivedNotePathForImage(abs), { force: true }); } catch { /* no stale */ }
+        maybeConvertImage(abs, rel);
+      }
       res.json({ ok: true });
     } catch (err: unknown) {
       sendError(res, err);

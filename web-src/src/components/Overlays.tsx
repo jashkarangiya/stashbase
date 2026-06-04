@@ -19,12 +19,13 @@ export function ContextMenu() {
   const { x, y, target, kind } = state.ctxMenu;
   const close = () => dispatch({ type: 'CTX_MENU', menu: null });
 
-  // "Retry conversion" is only meaningful when the target is a PDF
-  // currently in the failures list. Showing it on every PDF would let
-  // the user nuke + re-convert a working file by accident — the route
-  // deletes the derived `.<stem>.md` / `_files/` before re-running.
-  const canRetryPdf =
-    kind === 'file' && /\.pdf$/i.test(target) && state.pdfFailures.some((f) => f.path === target);
+  // "Retry conversion" is only meaningful when the target is a PDF or
+  // image currently in the failures list. Showing it on every such file
+  // would let the user nuke + re-convert a working one by accident — the
+  // route deletes the derived `.<stem>.md` (+ PDF `_files/`) before
+  // re-running. Membership already implies the file is a PDF / image.
+  const canRetryConversion =
+    kind === 'file' && state.conversionFailures.some((f) => f.path === target);
 
   const items: MenuItem[] = [
     {
@@ -32,18 +33,18 @@ export function ContextMenu() {
       onSelect: () => dispatch({ type: 'RENAMING', renaming: { path: target, kind } }),
     },
     { label: revealLabel(), onSelect: () => void api.revealFile(target) },
-    ...(canRetryPdf
+    ...(canRetryConversion
       ? [
           {
             label: 'Retry conversion',
-            title: 'Re-run the PDF converter — clears the derived note and bundle',
+            title: 'Re-run text extraction — clears the derived note (and PDF bundle) first',
             // Fire-and-forget — the failures-list / banner update on the
             // next index-status poll (~1.5s in pending mode). If the API
             // itself 4xx's we log; user-facing feedback comes via that
             // banner flipping `failed` → in-flight → done.
             onSelect: () =>
-              void api.retryPdf(target).catch((err) => {
-                console.warn('[ctxmenu] retry pdf failed:', err instanceof Error ? err.message : String(err));
+              void api.retryConversion(target).catch((err) => {
+                console.warn('[ctxmenu] retry conversion failed:', err instanceof Error ? err.message : String(err));
               }),
           } satisfies MenuItem,
         ]

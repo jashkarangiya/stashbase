@@ -234,9 +234,9 @@ function shallowEqualSnapshotWarning(
   );
 }
 
-function shallowEqualPdfFailures(
-  a: State['pdfFailures'],
-  b: State['pdfFailures'],
+function shallowEqualConversionFailures(
+  a: State['conversionFailures'],
+  b: State['conversionFailures'],
 ): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
@@ -492,9 +492,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!shallowEqualSnapshotWarning(prev.snapshotWarning, incomingWarning)) {
         dispatch({ type: 'SNAPSHOT_WARNING', warning: incomingWarning });
       }
-      const incomingFailures = s.pdfFailures ?? [];
-      if (!shallowEqualPdfFailures(prev.pdfFailures, incomingFailures)) {
-        dispatch({ type: 'PDF_FAILURES', failures: incomingFailures });
+      const incomingFailures = s.conversionFailures ?? [];
+      if (!shallowEqualConversionFailures(prev.conversionFailures, incomingFailures)) {
+        dispatch({ type: 'CONVERSION_FAILURES', failures: incomingFailures });
       }
       if (pendingChanged || convChanged || treeChanged) void loadFiles();
       // Tree changed = someone else wrote to disk (Claude Code in the

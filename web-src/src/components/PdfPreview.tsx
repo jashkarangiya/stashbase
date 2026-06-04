@@ -371,7 +371,7 @@ export function PdfPreview({ name }: { name: string }) {
   async function onRetry() {
     setRetryBusy(true);
     try {
-      await api.retryPdf(name);
+      await api.retryConversion(name);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);

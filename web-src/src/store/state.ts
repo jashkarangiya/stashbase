@@ -15,7 +15,7 @@ import type {
   FileMeta,
   FolderMeta,
   KeywordSearchResult,
-  PdfFailure,
+  ConversionFailure,
   SearchHit,
   SnapshotWarning,
   Agent,
@@ -266,11 +266,11 @@ export interface State {
    *  surfaced a provider-mismatch warning. Cleared by user dismissal
    *  (`SNAPSHOT_WARNING_DISMISS`) or by the server reporting null. */
   snapshotWarning: SnapshotWarning | null;
-  /** Space-relative paths of PDFs whose most recent conversion failed,
-   *  carried in from `/api/index-status`. Drives both the failures
-   *  banner inside `PdfPreview` and the context-menu "Retry
-   *  conversion" entry. Empty when no failures. */
-  pdfFailures: PdfFailure[];
+  /** Space-relative paths of PDFs / images whose most recent conversion
+   *  failed, carried in from `/api/index-status`. Drives the failure
+   *  banner inside `PdfPreview` / `ImagePreview` and the context-menu
+   *  "Retry conversion" entry. Empty when no failures. */
+  conversionFailures: ConversionFailure[];
 
   ctxMenu: CtxMenu | null;
   renaming: { path: string; kind: 'file' | 'folder' } | null;
@@ -343,7 +343,7 @@ export const initialState: State = {
   keywordResult: null,
   searching: false,
   snapshotWarning: null,
-  pdfFailures: [],
+  conversionFailures: [],
   ctxMenu: null,
   renaming: null,
   cascadePrompt: null,
@@ -415,7 +415,7 @@ export type Action =
   | { type: 'SEARCH_CASE_STRICT'; strict: boolean }
   | { type: 'SEARCH_WHOLE_WORD'; on: boolean }
   | { type: 'SNAPSHOT_WARNING'; warning: SnapshotWarning | null }
-  | { type: 'PDF_FAILURES'; failures: PdfFailure[] }
+  | { type: 'CONVERSION_FAILURES'; failures: ConversionFailure[] }
   | { type: 'CTX_MENU'; menu: CtxMenu | null }
   | { type: 'RENAMING'; renaming: State['renaming'] }
   /** Push a new entry, truncating any forward history. Updates the
@@ -709,8 +709,8 @@ export function reducer(s: State, a: Action): State {
       return { ...s, wholeWord: a.on, keywordResult: null };
     case 'SNAPSHOT_WARNING':
       return { ...s, snapshotWarning: a.warning };
-    case 'PDF_FAILURES':
-      return { ...s, pdfFailures: a.failures };
+    case 'CONVERSION_FAILURES':
+      return { ...s, conversionFailures: a.failures };
     case 'CTX_MENU':
       return { ...s, ctxMenu: a.menu };
     case 'RENAMING':

@@ -183,11 +183,11 @@ function FilesPanel() {
       </div>
       <div className={'file-list' + (state.spaceCollapsed ? ' collapsed' : '')}>
         {state.pendingConversions.length > 0 && (
-          <div className="pdf-processing-banner">
+          <div className="conversion-processing-banner">
             {state.pendingConversions.map((p) => (
-              <div key={p} className="pdf-processing-row" title={p}>
-                <span className="pdf-processing-spinner" />
-                <span className="pdf-processing-label">
+              <div key={p} className="conversion-processing-row" title={p}>
+                <span className="conversion-processing-spinner" />
+                <span className="conversion-processing-label">
                   Processing <strong>{p.split('/').pop()}</strong>…
                 </span>
               </div>

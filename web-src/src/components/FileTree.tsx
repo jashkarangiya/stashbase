@@ -380,7 +380,12 @@ function FileRow({
     (dropEdge === 'below' ? ' drop-edge-below' : '');
 
   const display = displayName(basename);
-  const extMatch = basename.match(/\.(md|markdown|html|htm)$/i);
+  // Protect the extension during inline rename for every recognised
+  // format — notes (md/html) *and* the binary viewer formats (pdf +
+  // images). Without the binaries here, editing "photo.png" exposes the
+  // whole name and a user can drop ".png", which silently breaks format
+  // detection (the row vanishes) and orphans the derived OCR note.
+  const extMatch = basename.match(/\.(md|markdown|html|htm|pdf|png|jpe?g|webp)$/i);
   const ext = extMatch ? extMatch[0] : '';
 
   function onDragStart(e: DragEvent<HTMLDivElement>) {

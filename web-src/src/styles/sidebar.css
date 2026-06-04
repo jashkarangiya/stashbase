@@ -803,12 +803,12 @@
       animation: sync-spin 0.7s linear infinite;
     }
 
-    /* PDF-conversion indicator. Sits above the file tree while the
-     * server is running pymupdf / marker on a dropped PDF — gives
-     * the user visible "something's happening" feedback. Auto-
+    /* Conversion indicator. Sits above the file tree while the server is
+     * running pymupdf / marker on a dropped PDF or RapidOCR on an image
+     * — gives the user visible "something's happening" feedback. Auto-
      * dismisses when the conversion finishes (the index-status poll
      * drops the entry from `pendingConversions`). */
-    .pdf-processing-banner {
+    .conversion-processing-banner {
       padding: 4px 14px 6px;
       border-bottom: 1px solid var(--border);
       background: rgba(8, 145, 178, 0.04);
@@ -818,24 +818,24 @@
       flex-direction: column;
       gap: 4px;
     }
-    .pdf-processing-row {
+    .conversion-processing-row {
       display: flex;
       align-items: center;
       gap: 8px;
       min-width: 0;
     }
-    .pdf-processing-label {
+    .conversion-processing-label {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       flex: 1;
       min-width: 0;
     }
-    .pdf-processing-label strong {
+    .conversion-processing-label strong {
       color: var(--fg);
       font-weight: 500;
     }
-    .pdf-processing-spinner {
+    .conversion-processing-spinner {
       width: 10px;
       height: 10px;
       border-radius: 50%;
