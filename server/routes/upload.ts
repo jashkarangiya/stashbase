@@ -22,9 +22,11 @@ import {
   saveBytes,
   saveText,
 } from '../files.ts';
+import { isImageFile } from '../format.ts';
 import { errorMessage, logger } from '../log.ts';
-import { getCurrentSpace, toKbRel } from '../space.ts';
+import { getCurrentSpace, runWithWindowId, toKbRel, WINDOW_ID_HEADER } from '../space.ts';
 import { extractEmbeddedResources } from '../resources.ts';
+import { maybeConvertImage } from '../image.ts';
 import { maybeConvertPdf } from '../pdf.ts';
 import { indexer } from '../state.ts';
 
@@ -40,80 +42,100 @@ const upload = multer({
 
 export function mount(app: express.Express): void {
   app.post('/api/upload', upload.array('files', 500), async (req, res) => {
-    const files = (req.files as Express.Multer.File[]) ?? [];
-    if (files.length === 0) return res.status(400).json({ error: 'no files' });
-    // Optional `dir` form field: space-relative path of the folder to
-    // drop the files into. Sanitised the same way we treat any other
-    // write path so a stray `..` or absolute path can't escape the space.
-    let dir = typeof req.body?.dir === 'string' ? req.body.dir.trim() : '';
-    if (dir) dir = sanitizeFilename(dir).replace(/\/+$/, '');
-    const prefix = dir ? dir + '/' : '';
+    // Multer consumes the request body stream, and its callbacks run in the
+    // connection-time async context — which drops the windowId that
+    // `withWindowContext` stashed in AsyncLocalStorage. Without re-binding
+    // it here, every space-scoped lookup inside the handler
+    // (getCurrentSpace, saveBytes → resolveSafe) falls back to
+    // DEFAULT_WINDOW_ID and the upload fails with "no space open" even
+    // though the client sent the right window header. Re-establish the
+    // context from the header before doing any per-window work.
+    await runWithWindowId(req.header(WINDOW_ID_HEADER), () => handleUpload(req, res));
+  });
+}
 
-    // Parallel `paths` array preserves the dropped folder layout —
-    // see web `walkEntry`. Multer normalises a single value to a string
-    // and ≥2 to an array; coerce to a string array.
-    const rawPaths = req.body?.paths;
-    const paths: string[] = Array.isArray(rawPaths)
-      ? rawPaths.map(String)
-      : typeof rawPaths === 'string' ? [rawPaths] : [];
+async function handleUpload(req: express.Request, res: express.Response): Promise<void> {
+  const files = (req.files as Express.Multer.File[]) ?? [];
+  if (files.length === 0) { res.status(400).json({ error: 'no files' }); return; }
+  // Optional `dir` form field: space-relative path of the folder to
+  // drop the files into. Sanitised the same way we treat any other
+  // write path so a stray `..` or absolute path can't escape the space.
+  let dir = typeof req.body?.dir === 'string' ? req.body.dir.trim() : '';
+  if (dir) dir = sanitizeFilename(dir).replace(/\/+$/, '');
+  const prefix = dir ? dir + '/' : '';
 
-    const finalNames = computeFinalNames(files, paths, prefix);
+  // Parallel `paths` array preserves the dropped folder layout —
+  // see web `walkEntry`. Multer normalises a single value to a string
+  // and ≥2 to an array; coerce to a string array.
+  const rawPaths = req.body?.paths;
+  const paths: string[] = Array.isArray(rawPaths)
+    ? rawPaths.map(String)
+    : typeof rawPaths === 'string' ? [rawPaths] : [];
 
-    const out: { file: string; error?: string }[] = [];
-    const toIndex: { name: string; text: string }[] = [];
-    const toConvertPdf: { abs: string; rel: string }[] = [];
-    const spaceAbs = getCurrentSpace();
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      const name = finalNames[i];
-      try {
-        // Always save bytes to disk — bundle assets (PNG / CSS / WOFF
-        // shipped alongside an arxiv HTML) are needed by the iframe even
-        // though they're not indexable. Only indexable formats go to
-        // the indexer.
-        saveBytes(name, f.buffer);
-        out.push({ file: name });
-        if (detectFormat(name)) {
-          let text = f.buffer.toString('utf8');
-          // Pipeline §4.2 steps 2-3: pull inline `data:` images out into
-          // the note's `<stem>_files/` bundle and rewrite the refs, so a
-          // standalone HTML/Markdown drop doesn't carry megabytes of
-          // base64 (and the images become real, previewable assets).
-          try {
-            const { content, assets } = extractEmbeddedResources(name, text);
-            if (assets.length > 0) {
-              text = content;
-              saveText(name, text);
-              for (const a of assets) saveBytes(a.path, a.bytes);
-              log.info(`upload: extracted ${assets.length} embedded resource(s) from ${name}`);
-            }
-          } catch (err: unknown) {
-            log.warn(`upload: resource extraction failed for ${name}: ${errorMessage(err)}`);
+  const finalNames = computeFinalNames(files, paths, prefix);
+
+  const out: { file: string; error?: string }[] = [];
+  const toIndex: { name: string; text: string }[] = [];
+  const toConvertPdf: { abs: string; rel: string }[] = [];
+  const toOcrImage: { abs: string; rel: string }[] = [];
+  const spaceAbs = getCurrentSpace();
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    const name = finalNames[i];
+    try {
+      // Always save bytes to disk — bundle assets (PNG / CSS / WOFF
+      // shipped alongside an arxiv HTML) are needed by the iframe even
+      // though they're not indexable. Only indexable formats go to
+      // the indexer.
+      saveBytes(name, f.buffer);
+      out.push({ file: name });
+      if (detectFormat(name)) {
+        let text = f.buffer.toString('utf8');
+        // Pipeline §4.2 steps 2-3: pull inline `data:` images out into
+        // the note's `<stem>_files/` bundle and rewrite the refs, so a
+        // standalone HTML/Markdown drop doesn't carry megabytes of
+        // base64 (and the images become real, previewable assets).
+        try {
+          const { content, assets } = extractEmbeddedResources(name, text);
+          if (assets.length > 0) {
+            text = content;
+            saveText(name, text);
+            for (const a of assets) saveBytes(a.path, a.bytes);
+            log.info(`upload: extracted ${assets.length} embedded resource(s) from ${name}`);
           }
-          toIndex.push({ name, text });
-        } else if (spaceAbs && /\.pdf$/i.test(name)) {
-          // PDFs run through the pymupdf / marker pipeline so the
-          // user gets a readable note + image bundle they can preview
-          // and that the indexer can pick up via the watcher.
-          toConvertPdf.push({ abs: path.join(spaceAbs, name), rel: name });
+        } catch (err: unknown) {
+          log.warn(`upload: resource extraction failed for ${name}: ${errorMessage(err)}`);
         }
+        toIndex.push({ name, text });
+      } else if (spaceAbs && /\.pdf$/i.test(name)) {
+        // PDFs run through the pymupdf / marker pipeline so the
+        // user gets a readable note + image bundle they can preview
+        // and that the indexer can pick up via the watcher.
+        toConvertPdf.push({ abs: path.join(spaceAbs, name), rel: name });
+      } else if (spaceAbs && isImageFile(name)) {
+        // Images run through RapidOCR so any text in a screenshot /
+        // photo becomes a hidden `.<stem>.md` note the watcher picks
+        // up and indexes — mirrors the PDF path, minus the bundle.
+        toOcrImage.push({ abs: path.join(spaceAbs, name), rel: name });
+      }
+    } catch (err: unknown) {
+      log.warn(`upload: save failed for ${name}: ${errorMessage(err)}`);
+      out.push({ file: name, error: errorMessage(err) });
+    }
+  }
+  res.json({ files: out });
+  // Background indexing — don't await; the response has already been sent.
+  (async () => {
+    for (const { name, text } of toIndex) {
+      try {
+        await indexer.upsertFile(toKbRel(name), text);
       } catch (err: unknown) {
-        out.push({ file: name, error: errorMessage(err) });
+        log.warn(`upload: index failed for ${name}: ${errorMessage(err)}`);
       }
     }
-    res.json({ files: out });
-    // Background indexing — don't await; the response has already been sent.
-    (async () => {
-      for (const { name, text } of toIndex) {
-        try {
-          await indexer.upsertFile(toKbRel(name), text);
-        } catch (err: unknown) {
-          log.warn(`upload: index failed for ${name}: ${errorMessage(err)}`);
-        }
-      }
-    })();
-    for (const { abs, rel } of toConvertPdf) maybeConvertPdf(abs, rel);
-  });
+  })();
+  for (const { abs, rel } of toConvertPdf) maybeConvertPdf(abs, rel);
+  for (const { abs, rel } of toOcrImage) maybeConvertImage(abs, rel);
 }
 
 /** Compute the on-disk paths for a batch up front so any top-level file
