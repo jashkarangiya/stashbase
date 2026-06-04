@@ -344,7 +344,6 @@ export const api = {
       '/api/spaces/' + encodeURIComponent(name) + '/config',
       config,
     ),
-  getResolvedRules: () => getJson<{ space: string | null; content: string }>('/api/rules'),
   /** Read `<kbRoot>/STASHBASE.md` — the KB-level rules book. Powers the
    *  Knowledge base section's "STASHBASE.md" row. */
   getKbRules: () => getJson<{ content: string }>('/api/kb/rules'),
@@ -493,23 +492,25 @@ export const api = {
     getJson<{ tools: { server: string; name: string; fqName: string; description?: string; inputSchema: unknown }[] }>('/api/mcp/tools'),
   callMcpTool: (name: string, args: Record<string, unknown> = {}) =>
     send<{ result: unknown }>('POST', '/api/mcp/tools/call', { name, arguments: args }),
+  // `send` throws ApiError on any non-2xx, so a resolved value is always
+  // the success shape — no `error` field, `ok` is always true. (The
+  // Electron bridge path in McpClientsPanel models `{ok:false,error}`
+  // separately, since it returns failures as a value rather than throwing.)
   configureMcp: (client: string) =>
     send<{
-      ok: boolean;
+      ok: true;
       client?: string;
       file?: string;
       command?: string;
       manual?: unknown;
       mode?: 'file' | 'clipboard';
-      error?: string;
     }>('POST', '/api/mcp/configure', { client }),
   disconnectMcp: (client: string) =>
     send<{
-      ok: boolean;
+      ok: true;
       client?: string;
       file?: string;
       mode?: 'file' | 'clipboard';
-      error?: string;
     }>('POST', '/api/mcp/disconnect', { client }),
   /** Rotate the global OpenAI key without touching the provider choice. */
   changeApiKey: (openaiKey: string) =>

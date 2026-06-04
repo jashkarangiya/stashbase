@@ -264,6 +264,10 @@ export interface State {
    *  render each file's matches as a collapsible group. */
   keywordResult: KeywordSearchResult | null;
   searching: boolean;
+  /** Non-null when the last search failed for a real reason (server /
+   *  daemon error, not just "no matches"). Kept separate so the panel
+   *  shows the error instead of a misleading empty "No matches". */
+  searchError: string | null;
 
   /** Non-null while the active space's most recent snapshot import
    *  surfaced a provider-mismatch warning. Cleared by user dismissal
@@ -345,6 +349,7 @@ export const initialState: State = {
   searchHits: null,
   keywordResult: null,
   searching: false,
+  searchError: null,
   snapshotWarning: null,
   conversionFailures: [],
   ctxMenu: null,
@@ -412,6 +417,7 @@ export type Action =
   | { type: 'SEARCH_START' }
   | { type: 'SEARCH_HITS'; hits: SearchHit[] }
   | { type: 'SEARCH_KEYWORD'; result: KeywordSearchResult }
+  | { type: 'SEARCH_ERROR'; error: string }
   | { type: 'SEARCH_CLEAR' }
   | { type: 'SEARCH_MODE'; mode: 'semantic' | 'keyword' }
   | { type: 'SIDEBAR_VIEW'; view: 'files' | 'search' }
@@ -699,17 +705,19 @@ export function reducer(s: State, a: Action): State {
     case 'FILTER':
       return { ...s, filterQuery: a.q };
     case 'SEARCH_START':
-      return { ...s, searching: true };
+      return { ...s, searching: true, searchError: null };
     case 'SEARCH_HITS':
-      return { ...s, searching: false, searchHits: a.hits, keywordResult: null };
+      return { ...s, searching: false, searchHits: a.hits, keywordResult: null, searchError: null };
     case 'SEARCH_KEYWORD':
-      return { ...s, searching: false, keywordResult: a.result, searchHits: null };
+      return { ...s, searching: false, keywordResult: a.result, searchHits: null, searchError: null };
+    case 'SEARCH_ERROR':
+      return { ...s, searching: false, searchError: a.error, searchHits: null, keywordResult: null };
     case 'SEARCH_CLEAR':
-      return { ...s, searching: false, searchHits: null, keywordResult: null };
+      return { ...s, searching: false, searchHits: null, keywordResult: null, searchError: null };
     case 'SEARCH_MODE':
       // Clear prior results so the renderer shows the new mode's empty
       // state immediately; runSearch will repopulate if a query is live.
-      return { ...s, searchMode: a.mode, searchHits: null, keywordResult: null };
+      return { ...s, searchMode: a.mode, searchHits: null, keywordResult: null, searchError: null };
     case 'SIDEBAR_VIEW':
       return { ...s, activeSidebarView: a.view };
     case 'SEARCH_CASE_STRICT':

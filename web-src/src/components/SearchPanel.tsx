@@ -141,6 +141,10 @@ function SearchBox() {
 
 function SearchResults({ query }: { query: string }) {
   const { state } = useApp();
+  // A real failure (server / daemon error) — distinct from "no matches".
+  if (state.searchError) {
+    return <div className="empty-list search-failed">Search failed: {state.searchError}</div>;
+  }
   if (state.searchMode === 'keyword') {
     return <KeywordSearchResults query={query} />;
   }

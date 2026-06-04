@@ -513,8 +513,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       nextDelay = busy ? POLL_PENDING_MS : POLL_IDLE_MS;
     } catch (err) {
       if (err instanceof ApiError && err.status === 412) {
+        // No space open (e.g. just went home). Clear every space-scoped
+        // indicator so a stale banner from the previous space doesn't
+        // bleed into the welcome / next-space view.
         dispatch({ type: 'PENDING_NAMES', names: new Set() });
         dispatch({ type: 'PENDING_CONVERSIONS', paths: [] });
+        dispatch({ type: 'SNAPSHOT_WARNING', warning: null });
+        dispatch({ type: 'CONVERSION_FAILURES', failures: [] });
+        lastTreeVersion.current = -1;
       }
     }
     if (pollTimer.current) clearTimeout(pollTimer.current);
@@ -563,15 +569,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     } catch (err) {
       if (myGen !== searchGen.current) return;
-      // ApiError 412 = no space open. Anything else: surface empty
-      // result so the UI says "No matches" instead of hanging on
-      // "Searching…".
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[search:${mode}] failed:`, msg);
-      if (mode === 'keyword') {
-        dispatch({ type: 'SEARCH_KEYWORD', result: { query: q, space: '', files: [], totalMatches: 0, truncated: false } });
+      // 412 = no space open: just clear (there's nothing to search), no
+      // error banner. Any other failure is a real error — surface it as
+      // such instead of a misleading empty "No matches".
+      if (err instanceof ApiError && err.status === 412) {
+        dispatch({ type: 'SEARCH_CLEAR' });
       } else {
-        dispatch({ type: 'SEARCH_HITS', hits: [] });
+        dispatch({ type: 'SEARCH_ERROR', error: msg });
       }
     }
   }, []);
@@ -711,13 +717,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
    *       content (the previewed file gets "kicked out" — by design).
    *    4. Otherwise → create a fresh preview tab. */
   const selectFile = useCallback(async (name: string) => {
+    // Flush any pending edit FIRST, then read state — so the tab
+    // decisions below act on the post-flush snapshot, not one a
+    // concurrent poll / loadFiles could invalidate across the await.
+    if (editorRef.current) await flushSave();
     const s = stateRef.current;
     const existing = s.tabs.find((t) => t.file?.name === name);
     if (existing) {
-      if (s.activeTabId !== existing.id) {
-        if (editorRef.current) await flushSave();
-        dispatch({ type: 'ACTIVATE_TAB', id: existing.id });
-      }
+      if (s.activeTabId !== existing.id) dispatch({ type: 'ACTIVATE_TAB', id: existing.id });
       return;
     }
     const active = getActiveTab(s);
@@ -727,10 +734,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     const previewTab = s.tabs.find((t) => t.preview);
     if (previewTab) {
-      if (s.activeTabId !== previewTab.id) {
-        if (editorRef.current) await flushSave();
-        dispatch({ type: 'ACTIVATE_TAB', id: previewTab.id });
-      }
+      if (s.activeTabId !== previewTab.id) dispatch({ type: 'ACTIVATE_TAB', id: previewTab.id });
       // FILE_OPEN with no `preview` field preserves the tab's existing
       // preview=true status, so the slot stays the "preview slot".
       await loadFile(name, { push: true });
@@ -768,17 +772,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
    *       living in the preview slot (so it stops being kickable).
    *    2. Otherwise → fresh pinned tab. */
   const openInNewTab = useCallback(async (name: string) => {
+    if (editorRef.current) await flushSave();
     const s = stateRef.current;
     const existing = s.tabs.find((t) => t.file?.name === name);
     if (existing) {
-      if (s.activeTabId !== existing.id) {
-        if (editorRef.current) await flushSave();
-        dispatch({ type: 'ACTIVATE_TAB', id: existing.id });
-      }
+      if (s.activeTabId !== existing.id) dispatch({ type: 'ACTIVATE_TAB', id: existing.id });
       if (existing.preview) dispatch({ type: 'PROMOTE_TAB', id: existing.id });
       return;
     }
-    if (editorRef.current) await flushSave();
     await loadFile(name, { push: true, newTab: true });
   }, [flushSave, loadFile]);
 
@@ -786,41 +787,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (editorRef.current) await flushSave();
     dispatch({ type: 'NEW_TAB' });
   }, [flushSave]);
-
-  const openKbOverview = useCallback(async () => {
-    try {
-      // If the KB tab is already open, activate it instead of
-      // stacking a duplicate — repeated clicks on the chrome button
-      // shouldn't spawn endless tabs of the same overview file.
-      const s = stateRef.current;
-      const existing = s.tabs.find((t) => t.file?.kind === 'kb' && t.file?.name === 'space-metadata.md');
-      if (existing) {
-        if (existing.id !== s.activeTabId) dispatch({ type: 'ACTIVATE_TAB', id: existing.id });
-        return;
-      }
-      if (editorRef.current) await flushSave();
-      const r = await api.getKbOverview();
-      dispatch({
-        type: 'FILE_OPEN',
-        body: {
-          // Display name matches the actual on-disk file basename
-          // (<kbRoot>/.stashbase/space-metadata.md per
-          // `server/kb.ts:FILENAME`). STASHBASE.md is reserved for the
-          // separate rules-book role and opens via `openKbRules`.
-          name: 'space-metadata.md',
-          format: 'md',
-          content: r.content,
-          // Marks the tab as kb-scope: MainPane hides the edit
-          // button and the save path is short-circuited for this kind.
-          kind: 'kb',
-        } as any,
-        newTab: true,
-      });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      toast('Failed to load KB overview: ' + msg, { level: 'error' });
-    }
-  }, [flushSave, showAlert]);
 
   /** Open some markdown as a kb-kind tab whose name matches the on-disk
    *  filename (so the user reads "STASHBASE.md" exactly, no aliasing).
@@ -854,6 +820,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const openKbRules = useCallback(async () => {
     await openKbFile('STASHBASE.md', () => api.getKbRules());
+  }, [openKbFile]);
+
+  /** Open the KB 目录 (`<kbRoot>/.stashbase/space-metadata.md`) as a
+   *  kb-kind tab. The on-disk basename is `space-metadata.md`; STASHBASE.md
+   *  is the separate rules book (`openKbRules`). */
+  const openKbOverview = useCallback(async () => {
+    await openKbFile('space-metadata.md', () => api.getKbOverview());
   }, [openKbFile]);
 
   const closeTab = useCallback(async (id: string) => {

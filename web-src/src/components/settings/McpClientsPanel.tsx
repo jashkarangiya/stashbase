@@ -71,11 +71,9 @@ export function McpClientsPanel() {
     setBusy(client);
     setStatus(null);
     try {
+      // No bridge path for disconnect — api throws on failure (caught
+      // below), so a resolved result is always a success.
       const result = await api.disconnectMcp(client);
-      if (!result.ok) {
-        setStatus({ kind: 'error', text: result.error || 'Unable to disconnect MCP.' });
-        return;
-      }
       const file = result.file ? ` (${result.file})` : '';
       setConnected((next) => ({ ...next, [client]: false }));
       setStatus({ kind: 'ok', text: `Disconnected ${clientLabel(client)}${file}.` });
