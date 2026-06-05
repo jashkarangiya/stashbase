@@ -325,28 +325,53 @@
 
     /* A turn = one user message (sticky header) + its reply blocks. */
     .agent-turn {
+      position: relative;
       display: flex;
       flex-direction: column;
       gap: 10px;
     }
+    /* 1px sentinel at the turn's flow-top — when it scrolls above the
+     * scroll container's top edge, the header is pinned (see UserTurnHead's
+     * IntersectionObserver). Out of flow so it adds no gap. */
+    .agent-turn-sentinel {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 1px;
+      height: 1px;
+      pointer-events: none;
+    }
     /* The user message renders as a full-width header pinned to the top
      * of the scroll area while its reply scrolls past (VSCode-style).
-     * The opaque background hides the reply scrolling behind it; sticky
-     * release is bounded by `.agent-turn`, so the next turn's header
-     * pushes this one up. */
+     * Sticky release is bounded by `.agent-turn`, so the next turn's
+     * header pushes this one up.
+     *
+     * At rest it sits flat and quiet, embedded in the chat. Only once
+     * pinned (`.stuck`) does it lift into a frosted-glass card — a
+     * translucent fill + backdrop blur let the reply blur softly
+     * underneath, and the shadow separates it from the scrolling chat. */
     .agent-turn-head {
       position: sticky;
       top: 0;
       z-index: 2;
-      background: var(--pane);
+      background: var(--card);
       border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 8px 10px;
+      border-radius: 11px;
+      padding: 9px 12px;
       font-size: 13px;
       line-height: 1.5;
       color: var(--fg);
       white-space: pre-wrap;
       word-break: break-word;
+      transition: box-shadow .18s ease;
+    }
+    /* When pinned: the box body stays opaque; only the bottom EDGE gets a
+     * soft, semi-transparent gradient shadow so the reply scrolling
+     * beneath fades out gently under the box rather than hitting a hard
+     * line (VSCode sticky-scroll style). The negative spread keeps the
+     * shadow at the bottom edge only; kept small per "阴影不用太大". */
+    .agent-turn-head.stuck {
+      box-shadow: 0 7px 8px -6px rgba(15, 23, 42, 0.13);
     }
     .agent-turn-attach {
       display: flex;

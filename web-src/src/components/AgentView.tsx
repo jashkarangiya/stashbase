@@ -87,9 +87,14 @@ let blockSeq = 0;
 const nextId = () => `b${++blockSeq}`;
 
 export function AgentView({ active, title }: { active: boolean; title: string }) {
-  const { state, dispatch } = useApp();
+  const { state, dispatch, actions } = useApp();
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [turnActive, setTurnActive] = useState(false);
+  // Composer attachments (context files) — lifted here so a drop anywhere
+  // on the panel, the composer `+`, and the send path all share one list.
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   // Connection lifecycle. `connecting` → waiting for the session to come
   // up; `live` → session ready, accepting prompts; `closed` → ended or
   // failed (see `fatal`). `nonce` bumps to force a reconnect.
@@ -230,19 +235,64 @@ export function AgentView({ active, title }: { active: boolean; title: string })
     });
   }
 
-  function send(text: string, attachments: Attachment[] = []) {
+  function send(text: string) {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    setBlocks((bs) => [...bs, { kind: 'user', id: nextId(), text, attachments: attachments.length ? attachments : undefined }]);
+    const atts = attachments;
+    setBlocks((bs) => [...bs, { kind: 'user', id: nextId(), text, attachments: atts.length ? atts : undefined }]);
     setTurnActive(true);
     openKind.current = null;
     // Attached files live in the space (cwd); list their paths so the
     // agent knows to read them. Kept out of the displayed header text —
     // the header renders them as chips instead.
-    const wire = attachments.length
-      ? `${text}${text ? '\n\n' : ''}Attached files (in this space):\n${attachments.map((a) => `- ${a.path}`).join('\n')}`
+    const wire = atts.length
+      ? `${text}${text ? '\n\n' : ''}Attached files (in this space):\n${atts.map((a) => `- ${a.path}`).join('\n')}`
       : text;
     ws.send(JSON.stringify({ t: 'prompt', text: wire }));
+    setAttachments([]);
+  }
+
+  /** Upload OS files (dropped from Finder or picked via `+`) into the
+   *  current space, then add an attachment chip per file. The agent reads
+   *  them by the server-authoritative path (it de-dups colliding names). */
+  async function uploadFiles(files: File[]) {
+    if (files.length === 0) return;
+    setUploading(true);
+    try {
+      const items = files.map((file) => ({ file, relPath: file.name }));
+      const result = await api.upload(items, state.activeFolder);
+      await actions.loadFiles();
+      void actions.refreshIndexState();
+      // `result.files` is 1:1 with `files` (server preserves order); pull
+      // image dimensions off the original File for the chip label.
+      const entries = result.files ?? [];
+      const added: Attachment[] = [];
+      let failed = 0;
+      for (let i = 0; i < entries.length; i++) {
+        const r = entries[i];
+        if (r.error) { failed++; continue; }
+        const orig = files[i];
+        const dims = orig && orig.type.startsWith('image/') ? await readImageDims(orig) : undefined;
+        added.push({ path: r.file, name: baseName(r.file), dims });
+      }
+      if (added.length) setAttachments((a) => mergeAttachments(a, added));
+      if (failed) actions.toast(`${failed} file(s) failed to upload.`, { level: 'error' });
+    } catch {
+      actions.toast('Upload failed.', { level: 'error' });
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  /** Add chips for files already in the space (dragged from the sidebar);
+   *  no upload needed — just reference their existing path. */
+  function addSpaceFiles(paths: string[]) {
+    const add = paths.filter(Boolean).map((p) => ({ path: p, name: baseName(p) }));
+    if (add.length) setAttachments((a) => mergeAttachments(a, add));
+  }
+
+  function removeAttachment(path: string) {
+    setAttachments((a) => a.filter((x) => x.path !== path));
   }
 
   function stop() {
@@ -286,8 +336,53 @@ export function AgentView({ active, title }: { active: boolean; title: string })
         : b));
   }
 
+  // Drag files anywhere onto the panel to attach them as context: OS files
+  // (Finder screenshots / PDFs) upload into the space; sidebar files
+  // (FILE_MIME) reference their existing path. We preventDefault on any
+  // file drag so the browser doesn't navigate to the dropped file.
+  function dropKinds(dt: DataTransfer): { os: boolean; kb: boolean } {
+    return { os: dt.types.includes('Files'), kb: dt.types.includes(FILE_MIME) };
+  }
+  function onPanelDragOver(e: React.DragEvent) {
+    const { os, kb } = dropKinds(e.dataTransfer);
+    if (!os && !kb) return;
+    e.preventDefault();
+    // The sidebar drag source sets effectAllowed='move'; match it so the
+    // drop isn't silently cancelled (OS files accept 'copy').
+    e.dataTransfer.dropEffect = kb && !os ? 'move' : 'copy';
+    if (phase === 'live') setDragOver(true);
+  }
+  function onPanelDragLeave(e: React.DragEvent) {
+    // Only clear when the pointer actually leaves the panel, not when it
+    // crosses between child elements.
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false);
+  }
+  function onPanelDrop(e: React.DragEvent) {
+    const { os, kb } = dropKinds(e.dataTransfer);
+    if (!os && !kb) return;
+    e.preventDefault();
+    setDragOver(false);
+    if (phase !== 'live') return;
+    const osFiles = Array.from(e.dataTransfer.files ?? []);
+    if (osFiles.length) void uploadFiles(osFiles);
+    else {
+      const kbPath = e.dataTransfer.getData(FILE_MIME);
+      if (kbPath) addSpaceFiles([kbPath]);
+    }
+  }
+
   return (
-    <div className="agent-view">
+    <div
+      className="agent-view"
+      onDragOver={onPanelDragOver}
+      onDragLeave={onPanelDragLeave}
+      onDrop={onPanelDrop}
+    >
+      {dragOver && (
+        <div className="agent-drop-overlay">
+          <div className="agent-drop-card">Drop files to add as context</div>
+        </div>
+      )}
       <div className="agent-head">
         <span className="agent-head-title">{title}</span>
         <div className="agent-head-actions">
@@ -323,6 +418,10 @@ export function AgentView({ active, title }: { active: boolean; title: string })
         onSetMode={changeMode}
         effort={effort}
         onSetEffort={changeEffort}
+        attachments={attachments}
+        uploading={uploading}
+        onPickFiles={uploadFiles}
+        onRemoveAttachment={removeAttachment}
         onSend={send}
         onStop={stop}
       />
@@ -366,7 +465,7 @@ function MessageList({
       {phase === 'connecting' && <div className="agent-empty">Connecting to Claude…</div>}
       {turns.map((turn) => (
         <div className="agent-turn" key={turn.key}>
-          {turn.head && <UserTurnHead block={turn.head} />}
+          {turn.head && <UserTurnHead block={turn.head} scrollRef={ref} />}
           {turn.body.map((b) => <BlockView key={b.id} block={b} onPermission={onPermission} />)}
         </div>
       ))}
@@ -395,23 +494,50 @@ function groupTurns(blocks: Block[]): Turn[] {
   return turns;
 }
 
-/** Full-width, sticky user-message header (the pinned prompt). */
-function UserTurnHead({ block }: { block: Extract<Block, { kind: 'user' }> }) {
+/** Full-width, sticky user-message header (the pinned prompt). It sits
+ *  flat inside the chat at rest and only lifts (frosted glass + shadow)
+ *  once it's actually pinned to the top. A 1px sentinel at the turn's
+ *  flow-top tells us when that happens: when the sentinel scrolls above
+ *  the scroll container's top edge, the header is stuck. */
+function UserTurnHead({
+  block, scrollRef,
+}: {
+  block: Extract<Block, { kind: 'user' }>;
+  scrollRef?: React.RefObject<HTMLDivElement | null>;
+}) {
+  const [stuck, setStuck] = useState(false);
+  const sentinelRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    const root = scrollRef?.current;
+    const sentinel = sentinelRef.current;
+    if (!root || !sentinel) return;
+    const io = new IntersectionObserver(
+      ([e]) => setStuck(!e.isIntersecting),
+      { root, threshold: 0 },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [scrollRef]);
+
   return (
-    <div className="agent-turn-head">
-      {block.attachments && block.attachments.length > 0 && (
-        <div className="agent-turn-attach">
-          {block.attachments.map((a) => (
-            <span key={a.path} className="agent-attach-chip" title={a.path}>
-              <FileGenericIcon className="agent-attach-icon" />
-              <span className="agent-attach-name">{a.name}</span>
-              {a.dims && <span className="agent-attach-dims">{a.dims}</span>}
-            </span>
-          ))}
-        </div>
-      )}
-      {block.text && <span className="agent-turn-text">{block.text}</span>}
-    </div>
+    <>
+      <span ref={sentinelRef} className="agent-turn-sentinel" aria-hidden="true" />
+      <div className={'agent-turn-head' + (stuck ? ' stuck' : '')}>
+        {block.attachments && block.attachments.length > 0 && (
+          <div className="agent-turn-attach">
+            {block.attachments.map((a) => (
+              <span key={a.path} className="agent-attach-chip" title={a.path}>
+                <FileGenericIcon className="agent-attach-icon" />
+                <span className="agent-attach-name">{a.name}</span>
+                {a.dims && <span className="agent-attach-dims">{a.dims}</span>}
+              </span>
+            ))}
+          </div>
+        )}
+        {block.text && <span className="agent-turn-text">{block.text}</span>}
+      </div>
+    </>
   );
 }
 
@@ -613,10 +739,18 @@ const clip = (s: string) => (s.length > 4000 ? s.slice(0, 4000) + '\n…(truncat
 
 // ----- composer ----------------------------------------------------------
 
-/** A file uploaded via the composer `+`, shown as a removable chip.
+/** A context file attached to the composer, shown as a removable chip.
  *  `path` is the space-relative path (sent to the agent); `dims` is the
  *  pixel size for images (chip label only). */
 interface Attachment { path: string; name: string; dims?: string }
+
+/** Append new attachments, skipping any whose path is already present
+ *  (re-dropping the same file is a no-op). */
+function mergeAttachments(cur: Attachment[], add: Attachment[]): Attachment[] {
+  const have = new Set(cur.map((a) => a.path));
+  const fresh = add.filter((a) => !have.has(a.path));
+  return fresh.length ? [...cur, ...fresh] : cur;
+}
 
 /** Read an image File's natural pixel dimensions for the chip label
  *  (e.g. `2162×4000`). Resolves undefined if it isn't a decodable image. */
@@ -728,7 +862,8 @@ function EffortBar({ effort, onSet }: { effort: EffortLevel; onSet: (l: EffortLe
 }
 
 function Composer({
-  disabled, turnActive, active, activeFile, mode, onSetMode, effort, onSetEffort, onSend, onStop,
+  disabled, turnActive, active, activeFile, mode, onSetMode, effort, onSetEffort,
+  attachments, uploading, onPickFiles, onRemoveAttachment, onSend, onStop,
 }: {
   disabled: boolean;
   turnActive: boolean;
@@ -738,63 +873,25 @@ function Composer({
   onSetMode: (mode: PermMode) => void;
   effort: EffortLevel;
   onSetEffort: (level: EffortLevel) => void;
-  onSend: (text: string, attachments: Attachment[]) => void;
+  attachments: Attachment[];
+  uploading: boolean;
+  onPickFiles: (files: File[]) => void;
+  onRemoveAttachment: (path: string) => void;
+  onSend: (text: string) => void;
   onStop: () => void;
 }) {
   const [text, setText] = useState('');
   const taRef = useRef<HTMLTextAreaElement>(null);
-  const { state, actions } = useApp();
+  const { state } = useApp();
   const [mention, setMention] = useState<{ q: string; from: number } | null>(null);
   const [modeOpen, setModeOpen] = useState(false);
   const modeWrapRef = useRef<HTMLDivElement>(null);
-  // Local-file upload via the composer `+`: a hidden picker whose chosen
-  // files are imported into the current space and shown as removable
-  // attachment chips (VSCode-style), referenced by path on send.
+  // The composer `+` opens this hidden picker; chosen files are handled
+  // by the parent (uploaded into the space + shown as chips).
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
 
   // Focus when this tab becomes active.
   useEffect(() => { if (active) taRef.current?.focus(); }, [active]);
-
-  /** Upload picked local files into the current space (at the active
-   *  folder), then add an attachment chip per file. The agent reads them
-   *  by the server-authoritative path (it de-dups colliding names). */
-  async function uploadLocalFiles(files: FileList | null) {
-    const list = files ? Array.from(files) : [];
-    if (list.length === 0) return;
-    setUploading(true);
-    try {
-      const items = list.map((file) => ({ file, relPath: file.name }));
-      const result = await api.upload(items, state.activeFolder);
-      // Refresh the tree + index banner so the new files show up.
-      await actions.loadFiles();
-      void actions.refreshIndexState();
-      // `result.files` is 1:1 with `list` (server preserves order); pull
-      // image dimensions off the original File for the chip label.
-      const entries = result.files ?? [];
-      const added: Attachment[] = [];
-      let failed = 0;
-      for (let i = 0; i < entries.length; i++) {
-        const r = entries[i];
-        if (r.error) { failed++; continue; }
-        const orig = list[i];
-        const dims = orig && orig.type.startsWith('image/') ? await readImageDims(orig) : undefined;
-        added.push({ path: r.file, name: baseName(r.file), dims });
-      }
-      if (added.length) setAttachments((a) => [...a, ...added]);
-      if (failed) actions.toast(`${failed} file(s) failed to upload.`, { level: 'error' });
-    } catch {
-      actions.toast('Upload failed.', { level: 'error' });
-    } finally {
-      setUploading(false);
-      taRef.current?.focus();
-    }
-  }
-
-  function removeAttachment(path: string) {
-    setAttachments((a) => a.filter((x) => x.path !== path));
-  }
 
   // Close the Modes dropdown on an outside click.
   useEffect(() => {
@@ -842,12 +939,12 @@ function Composer({
 
   function submit() {
     const t = text.trim();
-    // Allow sending with only attachments (no typed text).
+    // Allow sending with only attachments (no typed text). The parent
+    // clears the shared attachment list once the message is sent.
     if ((!t && attachments.length === 0) || disabled || uploading) return;
-    onSend(t, attachments);
+    onSend(t);
     setText('');
     setMention(null);
-    setAttachments([]);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -869,20 +966,8 @@ function Composer({
     if (e.key === 'Escape' && mention) setMention(null);
   }
 
-  // Dropped sidebar files insert their space-relative path.
-  function onDrop(e: React.DragEvent) {
-    const path = e.dataTransfer.getData(FILE_MIME);
-    if (!path) return;
-    e.preventDefault();
-    setText((t) => (t ? t + ' ' : '') + path + ' ');
-    taRef.current?.focus();
-  }
-  function onDragOver(e: React.DragEvent) {
-    if (e.dataTransfer.types.includes(FILE_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }
-  }
-
   return (
-    <div className="agent-composer" onDrop={onDrop} onDragOver={onDragOver}>
+    <div className="agent-composer">
       {mention && suggestions.length > 0 && (
         <div className="agent-mention">
           {suggestions.map((f) => (
@@ -905,7 +990,7 @@ function Composer({
                   type="button"
                   className="agent-attach-x"
                   title="Remove attachment"
-                  onClick={() => removeAttachment(a.path)}
+                  onClick={() => onRemoveAttachment(a.path)}
                 >×</button>
               </span>
             ))}
@@ -928,7 +1013,7 @@ function Composer({
           multiple
           hidden
           onChange={(e) => {
-            void uploadLocalFiles(e.target.files);
+            onPickFiles(Array.from(e.target.files ?? []));
             e.target.value = ''; // allow re-picking the same file
           }}
         />
