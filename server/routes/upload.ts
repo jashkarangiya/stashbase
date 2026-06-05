@@ -114,7 +114,7 @@ async function handleUpload(req: express.Request, res: express.Response): Promis
         toConvertPdf.push({ abs: path.join(spaceAbs, name), rel: name });
       } else if (spaceAbs && isImageFile(name)) {
         // Images run through RapidOCR so any text in a screenshot /
-        // photo becomes a hidden `.<stem>.md` note the watcher picks
+        // photo becomes a hidden `.<sourceBasename>.md` note the watcher picks
         // up and indexes — mirrors the PDF path, minus the bundle.
         toOcrImage.push({ abs: path.join(spaceAbs, name), rel: name });
       }

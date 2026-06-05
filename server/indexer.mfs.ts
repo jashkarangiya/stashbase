@@ -51,9 +51,19 @@ function prepareForIndex(filePath: string, content: string): {
   const fileHash = bytesToHex(blake3(new TextEncoder().encode(content)));
   const format = detectFormat(filePath);
   if (format === 'html') {
+    // HTML is structured (the .html file is the source of truth), but
+    // MFS's chunker splits on markdown headings — so we run a cheap,
+    // in-memory "targeted optimization" that turns <h1-6> into `#`
+    // headings + flattened body. Done here at feed time (not materialized
+    // to a hidden .md) because the transform is pure-regex / near-free and
+    // the .html already covers viewing. Unstructured sources (pdf/image),
+    // by contrast, are extracted to a hidden `.md` on disk because their
+    // conversion is expensive and worth caching.
     const { plaintext } = analyzeHtml(content);
     return { text: plaintext, ext: '.md', fileHash };
   }
+  // Markdown (incl. the derived `.md` of an unstructured source): the
+  // file already IS the structured single source of truth — index as-is.
   return {
     text: content,
     ext: path.extname(filePath).toLowerCase() || '.md',

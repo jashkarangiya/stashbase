@@ -3,12 +3,12 @@
  *
  * The image analogue of `pdf.ts`: whenever a `.png` / `.jpg` / `.jpeg`
  * / `.webp` lands in a space (drag-in, clipboard paste, in-app capture)
- * we spawn RapidOCR in the background. It writes `.<stem>.md` alongside
+ * we spawn RapidOCR in the background. It writes `.<sourceBasename>.md` alongside
  * the image, then the fs.watch debounce picks it up and the indexer
  * embeds the note — so a screenshot's text becomes searchable. The
  * image itself stays on disk as the user-facing file.
  *
- * Unlike PDFs there is no image bundle (`.<stem>_files/`) — OCR yields
+ * Unlike PDFs there is no image bundle (`.<sourceBasename>_files/`) — OCR yields
  * only text. The single derived note is dot-prefixed for the same
  * reason PDF notes are (app-maintained artifact, hidden in the sidebar
  * via `files.ts walk()`'s sibling-bound rule, but still indexed).
@@ -23,12 +23,13 @@ import { isImageFile } from './format.ts';
 import { extractorSpawn } from './python-host.ts';
 import { discoverNewSources, maybeConvert, type ConversionSpec } from './conversion.ts';
 
-/** Dot-prefixed derived note path (`.<stem>.md`) for an image — same
+/** Dot-prefixed derived note path (`.<sourceBasename>.md`) for an image — same
  *  hidden-sibling layout PDFs use, minus the image bundle. */
 export function derivedNotePathForImage(imageAbsPath: string): string {
+  // Carry the full source filename (`shot.png`) so different-extension
+  // images with the same stem don't collide on `.shot.png.md`.
   const dir = path.dirname(imageAbsPath);
-  const stem = path.basename(imageAbsPath, path.extname(imageAbsPath));
-  return path.join(dir, `.${stem}.md`);
+  return path.join(dir, `.${path.basename(imageAbsPath)}.md`);
 }
 
 /** Run the OCR extractor on a single image. Resolves with the note path

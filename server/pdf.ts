@@ -2,8 +2,8 @@
  * PDF → markdown-with-bundle conversion, driven by `python/pdf_extract.py`.
  *
  * Wired from the upload route: whenever a `.pdf` lands in a space we
- * spawn the extractor in the background. It writes `.<stem>.md` and
- * `.<stem>_files/` alongside the PDF, then the fs.watch debounce picks
+ * spawn the extractor in the background. It writes `.<sourceBasename>.md` and
+ * `.<sourceBasename>_files/` alongside the PDF, then the fs.watch debounce picks
  * them up and the indexer embeds the new note. Both the derived note
  * and its bundle are dot-prefixed — they're app-maintained artifacts,
  * not user content, so they sit alongside `.stashbase/` / `.claude/`
@@ -11,7 +11,7 @@
  * itself stays on disk as a regular file — the user-facing copy.
  *
  * Hidden in the sidebar via `files.ts walk()`'s sibling-bound hide
- * rule (a `paper.pdf` next to `.paper.md` collapses the derived files
+ * rule (a `paper.pdf` next to `.paper.pdf.md` collapses the derived files
  * into the PDF row), but the indexer still picks them up so RAG sees
  * the structured content.
  *
@@ -27,17 +27,17 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { listByStatus } from './pdf-status.ts';
-import { DERIVED_SOURCE_EXTS, isDerivedNoteName, matchDerivedNote } from './format.ts';
+import { isDerivedNoteName, matchDerivedNote } from './format.ts';
 import { extractorSpawn } from './python-host.ts';
 import { fromKbRel } from './space.ts';
 import { discoverNewSources, maybeConvert, type ConversionSpec } from './conversion.ts';
 
 export interface ConvertResult {
-  /** Absolute path of the written `.<stem>.md` (dot-prefixed app-
+  /** Absolute path of the written `.<sourceBasename>.md` (dot-prefixed app-
    *  derived note; hidden from the sidebar via sibling-bound rules
    *  in files.ts walk()). */
   notePath: string;
-  /** Absolute path of the `.<stem>_files/` bundle (dot-prefixed for
+  /** Absolute path of the `.<sourceBasename>_files/` bundle (dot-prefixed for
    *  the same reason). */
   bundleDir: string;
 }
@@ -48,37 +48,36 @@ export interface ConvertResult {
  *  don't need to repeat the naming. */
 export function derivedPathsForPdf(pdfAbsPath: string): { notePath: string; bundleDir: string } {
   const dir = path.dirname(pdfAbsPath);
-  const stem = path.basename(pdfAbsPath, path.extname(pdfAbsPath));
+  // Derived names carry the full source filename (`paper.pdf`) so a
+  // `paper.pdf` and a `paper.png` don't collide on `.paper.pdf.md`.
+  const base = path.basename(pdfAbsPath);
   return {
-    notePath: path.join(dir, `.${stem}.md`),
-    bundleDir: path.join(dir, `.${stem}_files`),
+    notePath: path.join(dir, `.${base}.md`),
+    bundleDir: path.join(dir, `.${base}_files`),
   };
 }
 
-/** Given a POSIX-relative path that points at a dot-prefixed app-
- *  derived note (`.paper.md` / `.paper.html`, or an image's `.shot.md`),
- *  return the relative path of the parent binary source (PDF or image)
- *  when it exists on disk — or null if the shape doesn't match or no
- *  source is there. Used by the search routes to rewrite hits so users
- *  see the PDF / image row rather than the app-derived note (which they
- *  can't open anyway because it's hidden in the sidebar). `baseAbs` is
- *  the root the relative path resolves against (space root for
- *  /api/search, kb root for /api/kb/search). Probes `DERIVED_SOURCE_EXTS`
- *  in order and returns the first source present. */
+/** Given a POSIX-relative path to a dot-prefixed app-derived note
+ *  (`.paper.pdf.md` / `.shot.png.md`), return the relative path of its
+ *  parent binary source (PDF / image) when that source exists on disk —
+ *  or null if the shape doesn't match or the source is gone. The source
+ *  filename is encoded in the derived name, so this is a direct read +
+ *  existence check (no extension probing). Used by the search routes to
+ *  rewrite hits so users see the PDF / image row rather than the hidden
+ *  derived note. `baseAbs` is the root the relative path resolves against
+ *  (space root for /api/search, kb root for /api/kb/search). */
 export function originalForDerivedNote(noteRel: string, baseAbs: string): string | null {
+  // The derived name encodes the full source filename, so the source is
+  // read straight off it — no extension probing.
   const m = matchDerivedNote(noteRel);
   if (!m) return null;
-  for (const ext of DERIVED_SOURCE_EXTS) {
-    const candidateRel = `${m.dir}${m.stem}.${ext}`;
-    if (existsSync(path.join(baseAbs, candidateRel))) return candidateRel;
-  }
-  return null;
+  return existsSync(path.join(baseAbs, m.source)) ? m.source : null;
 }
 
 /** The single remap-or-drop rule every search route applies to a hit's
  *  path so a hidden derived note is never shown to the user:
  *
- *    • app-derived note (`.paper.md` / `.shot.md`) with a live source
+ *    • app-derived note (`.paper.pdf.md` / `.shot.png.md`) with a live source
  *        → the source PDF / image (the clickable, openable original);
  *    • derived note whose source is gone (orphan)
  *        → `null`, i.e. drop the hit — the bare `.md` is hidden in the

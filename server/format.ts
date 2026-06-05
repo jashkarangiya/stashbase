@@ -1,5 +1,19 @@
 /**
- * Leaf module for file-format detection.
+ * Leaf module for file-format detection — and the home of the
+ * structured-vs-unstructured model the whole ingestion pipeline rests on.
+ *
+ * The index unit is always markdown. Formats split two ways:
+ *   - **Structured** (`FileFormat`: md, html): the source file is itself
+ *     the single source of truth and is indexed directly — markdown
+ *     as-is; HTML via a cheap in-memory "→ heading markdown" optimization
+ *     at MFS-feed time (`analyzeHtml`), NOT materialized to disk.
+ *   - **Unstructured** (`UNSTRUCTURED_SOURCE_EXTS`: pdf, images): on
+ *     import a converter EXTRACTS structured content into a hidden
+ *     `.<sourceBasename>.md` derived note (pdf_extract / ocr_extract);
+ *     that derived markdown is the single source of truth for the file's
+ *     indexed content. The binary source stays only for viewing.
+ * So MFS only ever sees markdown; all format knowledge lives here / in
+ * the converters, never in MFS.
  *
  * Lives separately from `files.ts` because `files.ts` imports from
  * `watcher.ts` (→ `state.ts`, which instantiates `MfsIndexer` at module
@@ -9,15 +23,14 @@
  * cycle that the packaged bundle can't resolve correctly.
  */
 
+/** Structured note formats — indexed directly (the file is the source). */
 export type FileFormat = 'md' | 'html';
 
-/** Wider format set the renderer recognises in the file tree, including
- *  binary "viewable but not indexable" formats like PDF and images.
- *  Kept distinct from `FileFormat` so anything in the indexing pipeline
- *  (chunker, daemon upsert, scan_diff) still only sees `md` / `html` —
- *  there's no risk of routing a PDF / image into a text-only pipeline by
- *  accident. PDFs and images both get a hidden `.<stem>.md` derived note
- *  (pdf_extract / ocr_extract) that carries the actual indexed text. */
+/** Everything the renderer can open in the file tree: the structured
+ *  note formats plus the unstructured binaries (pdf, image) that are
+ *  viewable but indexed only via their hidden derived `.md`. Kept
+ *  distinct from `FileFormat` so the indexing pipeline (chunker, daemon
+ *  upsert, scan_diff) only ever sees structured `md` / `html`. */
 export type ViewerFormat = FileFormat | 'pdf' | 'image';
 
 /** Recognised note extensions and how the rest of the pipeline should
@@ -34,10 +47,24 @@ const NOTE_FORMATS: Array<{ exts: string[]; format: FileFormat }> = [
  *  Single source for the alternation baked into the regexes below. */
 export const NOTE_EXTS: readonly string[] = NOTE_FORMATS.flatMap((f) => f.exts);
 
+/** Unstructured source extensions — PDFs (pdf_extract) and images
+ *  (ocr_extract). On import each is extracted into a hidden derived note
+ *  whose name carries the FULL source filename incl. extension
+ *  (`report.pdf` → `.report.pdf.md`), so `report.pdf` and `report.png`
+ *  don't collide on `.report.md` and the remap back to the source is
+ *  deterministic (strip the leading `.` and trailing `.md` — no probing). */
+export const UNSTRUCTURED_SOURCE_EXTS = ['pdf', 'png', 'jpg', 'jpeg', 'webp'] as const;
+
 const NOTE_EXT_ALT = NOTE_EXTS.join('|');
+const SRC_EXT_ALT = UNSTRUCTURED_SOURCE_EXTS.join('|');
 const NOTE_EXT_RE = new RegExp(`\\.(${NOTE_EXT_ALT})$`, 'i');
-/** `<dir>/.<stem>.<noteExt>` — an app-derived hidden note (dot-prefixed). */
-const DERIVED_NOTE_RE = new RegExp(`^(.*/)?\\.([^/]+)\\.(${NOTE_EXT_ALT})$`, 'i');
+const UNSTRUCTURED_SOURCE_RE = new RegExp(`\\.(${SRC_EXT_ALT})$`, 'i');
+/** `<dir>/.<sourceBasename>.md` — an app-derived hidden note, where
+ *  `sourceBasename` is the full source filename incl. extension. Capture
+ *  1 = dir (trailing slash kept), capture 2 = the source basename. The
+ *  required source extension is what keeps a user's own hidden `.foo.md`
+ *  from being mistaken for a derived note. */
+const DERIVED_NOTE_RE = new RegExp(`^(.*/)?\\.(.+\\.(?:${SRC_EXT_ALT}))\\.(?:${NOTE_EXT_ALT})$`, 'i');
 /** `<dir>/<stem>.<noteExt>` — a visible note, captured for bundle naming. */
 const NOTE_STEM_RE = new RegExp(`^(.*/)?([^/]+)\\.(${NOTE_EXT_ALT})$`, 'i');
 
@@ -48,19 +75,28 @@ export function isNoteName(name: string): boolean {
   return NOTE_EXT_RE.test(name);
 }
 
+/** True for an unstructured source (PDF / image) — a file that is NOT
+ *  indexed directly but gets extracted into a hidden derived `.md`. Use
+ *  for "skip the binary itself from the index/pending" style checks. */
+export function isUnstructuredSource(name: string): boolean {
+  return UNSTRUCTURED_SOURCE_RE.test(name);
+}
+
 /** True when a path/basename has the app-derived hidden-note shape
- *  (`.<stem>.md` etc). Used by search remap/drop and the sidebar hide
- *  rule so a hidden derived note never leaks. */
+ *  (`.<sourceBasename>.md`, e.g. `.report.pdf.md`). Used by search
+ *  remap/drop and the sidebar hide rule so a hidden derived note never
+ *  leaks. */
 export function isDerivedNoteName(pathOrName: string): boolean {
   return DERIVED_NOTE_RE.test(pathOrName);
 }
 
-/** Split a derived-note relative path into `{ dir, stem }` (dir keeps its
- *  trailing slash, or is `''` at the root), or null if the shape doesn't
- *  match. */
-export function matchDerivedNote(rel: string): { dir: string; stem: string } | null {
+/** Split a derived-note relative path into `{ dir, source }` where
+ *  `source` is the source file's relative path (dir + full basename, e.g.
+ *  `sub/report.pdf`), or null if it isn't a derived note. The source is
+ *  read straight from the name — no extension probing. */
+export function matchDerivedNote(rel: string): { dir: string; source: string } | null {
   const m = rel.replace(/\\/g, '/').match(DERIVED_NOTE_RE);
-  return m ? { dir: m[1] ?? '', stem: m[2] } : null;
+  return m ? { dir: m[1] ?? '', source: `${m[1] ?? ''}${m[2]}` } : null;
 }
 
 /** Split a (visible) note relative path into `{ dir, stem }` for deriving
@@ -86,12 +122,6 @@ const VIEWER_ONLY_FORMATS: Array<{ pattern: RegExp; format: ViewerFormat }> = [
 export function isImageFile(name: string): boolean {
   return IMAGE_PATTERN.test(name);
 }
-
-/** Ordered list of "binary source" extensions that own a hidden
- *  `.<stem>.md` derived note — PDFs (pdf_extract) and images
- *  (ocr_extract). The derived-note → original remap probes these in
- *  order. `.pdf` first since it's the oldest / most common case. */
-export const DERIVED_SOURCE_EXTS = ['pdf', 'png', 'jpg', 'jpeg', 'webp'] as const;
 
 const NOTE_FORMAT_RES: Array<{ re: RegExp; format: FileFormat }> = NOTE_FORMATS.map((f) => ({
   re: new RegExp(`\\.(${f.exts.join('|')})$`, 'i'),

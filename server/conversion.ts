@@ -1,9 +1,16 @@
 /**
- * Shared "binary source → hidden derived note" conversion plumbing for
- * PDFs (`pdf_extract.py`) and images (`ocr_extract.py`). The two only
- * differ in three things — captured by a `ConversionSpec`:
+ * Shared "unstructured source → extracted structured markdown" plumbing
+ * for the two unstructured formats: PDFs (`pdf_extract.py`) and images
+ * (`ocr_extract.py`). Each extracts the file's structured content into a
+ * hidden derived `.<sourceBasename>.md` that becomes the single source of
+ * truth for that file's indexed content (the binary stays only for
+ * viewing). Materialized to disk — unlike HTML's in-memory transform —
+ * because these conversions are expensive (subprocess) and worth caching.
+ *
+ * The two formats differ in only three things — captured by a
+ * `ConversionSpec`:
  *   - `matches`     which filenames are convertible sources
- *   - `derivedNote` the dot-prefixed `.<stem>.md` a source maps to
+ *   - `derivedNote` the dot-prefixed `.<sourceBasename>.md` a source maps to
  *   - `convert`     the actual extractor spawn (PDF emits an extra bundle)
  *
  * Everything else (status tracking, the min-visible timer, the
@@ -29,7 +36,7 @@ export interface ConversionSpec {
   kind: string;
   /** Does this filename look like a convertible source (`.pdf`, image)? */
   matches: (name: string) => boolean;
-  /** The dot-prefixed `.<stem>.md` derived-note path for a source file. */
+  /** The dot-prefixed `.<sourceBasename>.md` derived-note path for a source file. */
   derivedNote: (absPath: string) => string;
   /** Run the extractor; resolve on success, reject with the stderr tail. */
   convert: (absPath: string) => Promise<unknown>;

@@ -23,7 +23,7 @@ import {
 import { HIDDEN_DOT_DIRS } from '../files.ts';
 import { derivedPathsForPdf, displayPathForHit, getInFlightPdfs, maybeConvertPdf } from '../pdf.ts';
 import { derivedNotePathForImage, maybeConvertImage } from '../image.ts';
-import { isImageFile, isNoteName } from '../format.ts';
+import { isImageFile, isNoteName, isUnstructuredSource } from '../format.ts';
 import { clearRecord, listByStatus, readAll as readPdfStatus } from '../pdf-status.ts';
 import { getFsChangeCounter } from '../watcher.ts';
 import { getDaemon } from '../mfs-daemon.ts';
@@ -136,7 +136,7 @@ export function mount(app: express.Express): void {
       const wholeWord = req.query.whole_word === '1' || req.query.whole_word === 'true';
       const result = await runRipgrep(query, spaceDir, { caseStrict, wholeWord });
       // ripgrep's `*.md` glob also matches the hidden dot-prefixed
-      // derived notes (`.paper.md` / `.shot.md`). Apply the same
+      // derived notes (`.paper.pdf.md` / `.shot.png.md`). Apply the same
       // remap-or-drop rule as the semantic routes so a hit's row points
       // at the openable source PDF / image (the matched OCR / converted
       // snippet stays) and an orphan note never surfaces.
@@ -167,13 +167,13 @@ export function mount(app: express.Express): void {
       // Convert kbRoot-relative paths back to space-relative for the UI.
       // Drop `.pdf` and image files from `pending`: like PDFs, images are
       // visible in the sidebar (listFiles surfaces them) but never enter
-      // the index themselves — only their hidden `.<stem>.md` OCR note
-      // does. Keeping them in `pending` would make the sidebar
-      // permanently pulse "indexing…" on every PDF / image row.
+      // the index themselves — only their hidden derived `.md` does.
+      // Keeping them in `pending` would make the sidebar permanently
+      // pulse "indexing…" on every unstructured (PDF / image) row.
       const pending = status.pending
         .map((p) => fromKbRel(p))
         .filter((p): p is string => p != null)
-        .filter((p) => !/\.pdf$/i.test(p) && !isImageFile(p));
+        .filter((p) => !isUnstructuredSource(p));
       const orphaned = status.orphaned
         .map((p) => fromKbRel(p))
         .filter((p): p is string => p != null);

@@ -201,12 +201,12 @@ export function deleteFile(relPath: string): boolean {
     // `<stem>_files/` behind. Best-effort: a missing bundle is fine.
     deleteBundleSibling(relPath);
     // Deleting a `paper.pdf` also tears down the dot-prefixed app-
-    // derived sibling note (`.paper.md` / `.paper.html`) and its
-    // bundle (`.paper_files/`). Without this, those orphaned files
+    // derived sibling note (`.paper.pdf.md` / `.paper.html`) and its
+    // bundle (`.paper.pdf_files/`). Without this, those orphaned files
     // would re-appear in the sidebar (the sibling-bound hide rule in
     // `walk()` depends on the parent PDF still being there).
     if (/\.pdf$/i.test(relPath)) deletePdfDerivedSiblings(relPath);
-    // Same story for an image's OCR sibling note (`.shot.md`) — no
+    // Same story for an image's OCR sibling note (`.shot.png.md`) — no
     // bundle, just the single derived note.
     else if (isImageFile(relPath)) deleteImageDerivedNote(relPath);
   }
@@ -251,7 +251,7 @@ function deleteBundleSibling(noteRel: string): void {
 }
 
 /** Tear down a PDF's app-derived siblings: the dot-prefixed
- *  `.<stem>.md` (or `.html`) note + `.<stem>_files/` bundle. Called
+ *  `.<sourceBasename>.md` (or `.html`) note + `.<sourceBasename>_files/` bundle. Called
  *  from `deleteFile` whenever a `.pdf` goes away — otherwise the
  *  sibling-bound hide rule in `walk()` would un-hide these orphans
  *  on the next sidebar refresh. Best-effort: missing siblings are
@@ -286,7 +286,7 @@ function deletePdfDerivedSiblings(pdfRel: string): void {
   } catch { /* no bundle — fine */ }
 }
 
-/** Tear down an image's app-derived OCR note (`.<stem>.md`). Called
+/** Tear down an image's app-derived OCR note (`.<sourceBasename>.md`). Called
  *  from `deleteFile` whenever an image goes away — otherwise the
  *  orphaned dot-prefixed note would un-hide in the sidebar (the
  *  sibling-bound hide rule depends on the parent image still being
@@ -522,7 +522,7 @@ function walk(
       // `<stem>_files/` siblings to user-authored notes (browser
       // "Save complete webpage" convention).
       if (noteStems.has(stem)) continue;
-      // `.<stem>_files/` dot-prefixed app-derived bundle — always hide.
+      // `.<sourceBasename>_files/` dot-prefixed app-derived bundle — always hide.
       if (stem.startsWith('.')) continue;
     }
     const rel = prefix ? `${prefix}/${e.name}` : e.name;
