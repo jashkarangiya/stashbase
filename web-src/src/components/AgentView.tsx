@@ -11,7 +11,7 @@
  * Codex shows a "Coming soon" placeholder (CodexView).
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getWindowId } from '../api';
+import { api, getWindowId } from '../api';
 import { FILE_MIME } from '../dragMime';
 import { renderMarkdownInline } from '../markdown';
 import { useApp } from '../store/AppContext';
@@ -63,7 +63,7 @@ interface ToolBlock {
 }
 
 type Block =
-  | { kind: 'user'; id: string; text: string }
+  | { kind: 'user'; id: string; text: string; attachments?: Attachment[] }
   | { kind: 'assistant'; id: string; text: string }
   | { kind: 'thinking'; id: string; text: string }
   | { kind: 'error'; id: string; text: string }
@@ -230,13 +230,19 @@ export function AgentView({ active, title }: { active: boolean; title: string })
     });
   }
 
-  function send(text: string) {
+  function send(text: string, attachments: Attachment[] = []) {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    setBlocks((bs) => [...bs, { kind: 'user', id: nextId(), text }]);
+    setBlocks((bs) => [...bs, { kind: 'user', id: nextId(), text, attachments: attachments.length ? attachments : undefined }]);
     setTurnActive(true);
     openKind.current = null;
-    ws.send(JSON.stringify({ t: 'prompt', text }));
+    // Attached files live in the space (cwd); list their paths so the
+    // agent knows to read them. Kept out of the displayed header text —
+    // the header renders them as chips instead.
+    const wire = attachments.length
+      ? `${text}${text ? '\n\n' : ''}Attached files (in this space):\n${attachments.map((a) => `- ${a.path}`).join('\n')}`
+      : text;
+    ws.send(JSON.stringify({ t: 'prompt', text: wire }));
   }
 
   function stop() {
@@ -347,12 +353,64 @@ function MessageList({
     if (stick.current && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   });
 
+  // Group the flat block stream into turns: each user message starts a
+  // turn and owns every following block until the next user message.
+  // The user message renders as a full-width header that sticks to the
+  // top of the scroll area while its turn's reply scrolls past
+  // (VSCode-style) — the next user message pushes it up.
+  const turns = useMemo(() => groupTurns(blocks), [blocks]);
+
   return (
     <div className="agent-messages" ref={ref} onScroll={onScroll}>
       {blocks.length === 0 && phase === 'live' && <Hero />}
       {phase === 'connecting' && <div className="agent-empty">Connecting to Claude…</div>}
-      {blocks.map((b) => <BlockView key={b.id} block={b} onPermission={onPermission} />)}
+      {turns.map((turn) => (
+        <div className="agent-turn" key={turn.key}>
+          {turn.head && <UserTurnHead block={turn.head} />}
+          {turn.body.map((b) => <BlockView key={b.id} block={b} onPermission={onPermission} />)}
+        </div>
+      ))}
       {turnActive && <div className="agent-working"><span className="agent-dot" />Claude is working…</div>}
+    </div>
+  );
+}
+
+interface Turn { key: string; head: Extract<Block, { kind: 'user' }> | null; body: Block[] }
+
+/** Slice the block list into turns at each user message. Blocks before
+ *  the first user message (rare — e.g. a startup error) form a headless
+ *  leading turn. */
+function groupTurns(blocks: Block[]): Turn[] {
+  const turns: Turn[] = [];
+  let cur: Turn | null = null;
+  for (const b of blocks) {
+    if (b.kind === 'user') {
+      cur = { key: b.id, head: b, body: [] };
+      turns.push(cur);
+    } else {
+      if (!cur) { cur = { key: `lead-${b.id}`, head: null, body: [] }; turns.push(cur); }
+      cur.body.push(b);
+    }
+  }
+  return turns;
+}
+
+/** Full-width, sticky user-message header (the pinned prompt). */
+function UserTurnHead({ block }: { block: Extract<Block, { kind: 'user' }> }) {
+  return (
+    <div className="agent-turn-head">
+      {block.attachments && block.attachments.length > 0 && (
+        <div className="agent-turn-attach">
+          {block.attachments.map((a) => (
+            <span key={a.path} className="agent-attach-chip" title={a.path}>
+              <FileGenericIcon className="agent-attach-icon" />
+              <span className="agent-attach-name">{a.name}</span>
+              {a.dims && <span className="agent-attach-dims">{a.dims}</span>}
+            </span>
+          ))}
+        </div>
+      )}
+      {block.text && <span className="agent-turn-text">{block.text}</span>}
     </div>
   );
 }
@@ -392,7 +450,9 @@ function PixelMascot() {
 function BlockView({ block, onPermission }: { block: Block; onPermission: (t: string, p: string, a: boolean) => void }) {
   switch (block.kind) {
     case 'user':
-      return <div className="agent-msg user"><div className="agent-bubble">{block.text}</div></div>;
+      // User messages normally render as the turn's sticky header (see
+      // MessageList/groupTurns); this branch is just a fallback.
+      return <UserTurnHead block={block} />;
     case 'assistant':
       return (
         <div className="agent-msg assistant">
@@ -553,6 +613,23 @@ const clip = (s: string) => (s.length > 4000 ? s.slice(0, 4000) + '\n…(truncat
 
 // ----- composer ----------------------------------------------------------
 
+/** A file uploaded via the composer `+`, shown as a removable chip.
+ *  `path` is the space-relative path (sent to the agent); `dims` is the
+ *  pixel size for images (chip label only). */
+interface Attachment { path: string; name: string; dims?: string }
+
+/** Read an image File's natural pixel dimensions for the chip label
+ *  (e.g. `2162×4000`). Resolves undefined if it isn't a decodable image. */
+function readImageDims(file: File): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { resolve(`${img.naturalWidth}×${img.naturalHeight}`); URL.revokeObjectURL(url); };
+    img.onerror = () => { resolve(undefined); URL.revokeObjectURL(url); };
+    img.src = url;
+  });
+}
+
 /** The composer's "Modes" control: a button showing the active mode that
  *  opens a dropdown to switch permission mode (Ask / Edit auto / Plan /
  *  Auto). The active mode gets a check; ⇧+Tab cycles (handled in the
@@ -661,18 +738,63 @@ function Composer({
   onSetMode: (mode: PermMode) => void;
   effort: EffortLevel;
   onSetEffort: (level: EffortLevel) => void;
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments: Attachment[]) => void;
   onStop: () => void;
 }) {
   const [text, setText] = useState('');
   const taRef = useRef<HTMLTextAreaElement>(null);
-  const { state } = useApp();
+  const { state, actions } = useApp();
   const [mention, setMention] = useState<{ q: string; from: number } | null>(null);
   const [modeOpen, setModeOpen] = useState(false);
   const modeWrapRef = useRef<HTMLDivElement>(null);
+  // Local-file upload via the composer `+`: a hidden picker whose chosen
+  // files are imported into the current space and shown as removable
+  // attachment chips (VSCode-style), referenced by path on send.
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
 
   // Focus when this tab becomes active.
   useEffect(() => { if (active) taRef.current?.focus(); }, [active]);
+
+  /** Upload picked local files into the current space (at the active
+   *  folder), then add an attachment chip per file. The agent reads them
+   *  by the server-authoritative path (it de-dups colliding names). */
+  async function uploadLocalFiles(files: FileList | null) {
+    const list = files ? Array.from(files) : [];
+    if (list.length === 0) return;
+    setUploading(true);
+    try {
+      const items = list.map((file) => ({ file, relPath: file.name }));
+      const result = await api.upload(items, state.activeFolder);
+      // Refresh the tree + index banner so the new files show up.
+      await actions.loadFiles();
+      void actions.refreshIndexState();
+      // `result.files` is 1:1 with `list` (server preserves order); pull
+      // image dimensions off the original File for the chip label.
+      const entries = result.files ?? [];
+      const added: Attachment[] = [];
+      let failed = 0;
+      for (let i = 0; i < entries.length; i++) {
+        const r = entries[i];
+        if (r.error) { failed++; continue; }
+        const orig = list[i];
+        const dims = orig && orig.type.startsWith('image/') ? await readImageDims(orig) : undefined;
+        added.push({ path: r.file, name: baseName(r.file), dims });
+      }
+      if (added.length) setAttachments((a) => [...a, ...added]);
+      if (failed) actions.toast(`${failed} file(s) failed to upload.`, { level: 'error' });
+    } catch {
+      actions.toast('Upload failed.', { level: 'error' });
+    } finally {
+      setUploading(false);
+      taRef.current?.focus();
+    }
+  }
+
+  function removeAttachment(path: string) {
+    setAttachments((a) => a.filter((x) => x.path !== path));
+  }
 
   // Close the Modes dropdown on an outside click.
   useEffect(() => {
@@ -720,10 +842,12 @@ function Composer({
 
   function submit() {
     const t = text.trim();
-    if (!t || disabled) return;
-    onSend(t);
+    // Allow sending with only attachments (no typed text).
+    if ((!t && attachments.length === 0) || disabled || uploading) return;
+    onSend(t, attachments);
     setText('');
     setMention(null);
+    setAttachments([]);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -770,6 +894,24 @@ function Composer({
         </div>
       )}
       <div className="agent-composer-box">
+        {(attachments.length > 0 || uploading) && (
+          <div className="agent-attachments">
+            {attachments.map((a) => (
+              <span key={a.path} className="agent-attach-chip" title={a.path}>
+                <FileGenericIcon className="agent-attach-icon" />
+                <span className="agent-attach-name">{a.name}</span>
+                {a.dims && <span className="agent-attach-dims">{a.dims}</span>}
+                <button
+                  type="button"
+                  className="agent-attach-x"
+                  title="Remove attachment"
+                  onClick={() => removeAttachment(a.path)}
+                >×</button>
+              </span>
+            ))}
+            {uploading && <span className="agent-attach-loading">Uploading…</span>}
+          </div>
+        )}
         <textarea
           ref={taRef}
           className="agent-input"
@@ -780,8 +922,24 @@ function Composer({
           onChange={(e) => onChange(e.target.value, e.target.selectionStart)}
           onKeyDown={onKeyDown}
         />
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            void uploadLocalFiles(e.target.files);
+            e.target.value = ''; // allow re-picking the same file
+          }}
+        />
         <div className="agent-composer-bar">
-          <button type="button" className="agent-bar-btn" title="Add context (coming soon)" disabled>
+          <button
+            type="button"
+            className="agent-bar-btn"
+            title={uploading ? 'Uploading…' : 'Upload local files'}
+            disabled={uploading}
+            onClick={() => fileInputRef.current?.click()}
+          >
             <PlusIcon />
           </button>
           <button type="button" className="agent-bar-btn slash" title="Slash commands (coming soon)" disabled>
@@ -810,7 +968,7 @@ function Composer({
           {turnActive ? (
             <button type="button" className="agent-send stop" title="Stop" onClick={onStop}>■</button>
           ) : (
-            <button type="button" className="agent-send" title="Send" disabled={disabled || !text.trim()} onClick={submit}><ArrowUpIcon /></button>
+            <button type="button" className="agent-send" title="Send" disabled={disabled || uploading || (!text.trim() && attachments.length === 0)} onClick={submit}><ArrowUpIcon /></button>
           )}
         </div>
       </div>
