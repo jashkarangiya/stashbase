@@ -718,7 +718,9 @@
       padding: 0;
       border-radius: 6px;
       background: transparent;
-      color: var(--fg);
+      /* Match the header action buttons (.agent-head-btn): muted at rest,
+       * solid --fg on hover. Keeps +, /, and "new chat" one visual set. */
+      color: var(--muted);
       cursor: pointer;
       display: grid;
       place-items: center;
@@ -726,13 +728,12 @@
       line-height: 1;
     }
     .agent-bar-btn svg { width: 16px; height: 16px; }
-    /* The rounded-square-with-slash glyph; 18px reads as a framed box inside
-     * the 26px button's hover background. */
-    .agent-bar-btn.slash svg { width: 18px; height: 18px; }
     .agent-bar-btn:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
     .agent-bar-btn:disabled { opacity: 0.5; cursor: default; }
-    /* Slash keeps its hover box even while it's a disabled placeholder — the
-     * glyph lifts from dim to solid and the framing box fills in. */
+    /* Slash is a "coming soon" placeholder but should read identically to
+     * the + at rest (same muted colour, no dim); only the cursor + no-op
+     * click signal it's inert. Its hover still fills the framing box. */
+    .agent-bar-btn.slash:disabled { opacity: 1; }
     .agent-bar-btn.slash:hover { opacity: 1; background: var(--hover); color: var(--fg); }
     /* Thin vertical rule separating the action cluster from the context chip. */
     .agent-bar-divider {
