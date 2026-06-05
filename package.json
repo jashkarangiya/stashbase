@@ -38,7 +38,6 @@
     "build:mcp": "node scripts/build-mcp.mjs",
     "build:python-sidecar": "node scripts/build-python-sidecar.mjs",
     "test:import-folder": "node --import tsx --test server/import-folder.test.ts",
-    "postinstall": "node scripts/fix-pty-helper.mjs",
     "build": "pnpm build:web && pnpm build:server && pnpm build:mcp",
     "build:desktop": "pnpm build && pnpm build:python-sidecar",
     "setup:python": "node scripts/setup-python.mjs",
@@ -87,7 +86,6 @@
     ],
     "asar": true,
     "asarUnpack": [
-      "node_modules/node-pty/**/*",
       "node_modules/better-sqlite3/**/*",
       "node_modules/@vscode/**/*",
       "node_modules/.pnpm/better-sqlite3*/**/*",
@@ -165,7 +163,6 @@
     "gray-matter": "^4.0.3",
     "marked": "^18.0.3",
     "multer": "^1.4.5-lts.1",
-    "node-pty": "^1.1.0",
     "pdfjs-dist": "^5.7.284",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
