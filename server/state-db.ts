@@ -2,9 +2,16 @@
  * KB-level transactional state in `<kbRoot>/.stashbase/state.db`.
  *
  * This is StashBase-owned state, separate from MFS/Milvus' `store/`
- * schema. The tables here track file reconcile facts, PDF conversion
- * status, and the indexing queue boundary that needs atomic updates and
- * field-level queries.
+ * schema. It holds exactly one thing: PDF / image conversion status
+ * (in-flight + failed-with-reason), which is non-derivable — a failed
+ * conversion looks identical on disk to one that hasn't run — and drives
+ * the sidebar "Converting…" indicator and the per-file Retry banner.
+ *
+ * Everything else lives at its authoritative source: the daemon/store
+ * owns the per-file hash + index state (via `scan_diff`), the filesystem
+ * answers "does this file exist", and `~/.stashbase/config.json` holds
+ * recents / kbRoot / embedder config. (Earlier `files` and `index_queue`
+ * tables duplicated daemon/reconcile state write-only and were removed.)
  */
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
@@ -22,16 +29,6 @@ export interface PdfStatusEntry {
   lastError?: string;
   lastAttemptAt: string;
   doneAt?: string;
-}
-
-export interface FileStateRow {
-  path: string;
-  mtime: number;
-  size: number;
-  contentHash: string;
-  lastIndexedAt?: string;
-  status: 'indexed' | 'pending' | 'failed' | 'deleted';
-  lastError?: string;
 }
 
 let db: Database.Database | null = null;
@@ -67,16 +64,6 @@ export function closeStateDb(): void {
 
 function migrate(conn: Database.Database): void {
   conn.exec(`
-    CREATE TABLE IF NOT EXISTS files (
-      path TEXT PRIMARY KEY,
-      mtime REAL NOT NULL DEFAULT 0,
-      size INTEGER NOT NULL DEFAULT 0,
-      content_hash TEXT NOT NULL DEFAULT '',
-      last_indexed_at TEXT,
-      status TEXT NOT NULL CHECK (status IN ('indexed', 'pending', 'failed', 'deleted')),
-      last_error TEXT
-    );
-
     CREATE TABLE IF NOT EXISTS pdf_conversions (
       path TEXT PRIMARY KEY,
       status TEXT NOT NULL CHECK (status IN ('in-flight', 'done', 'failed', 'cancelled')),
@@ -86,20 +73,17 @@ function migrate(conn: Database.Database): void {
       done_at TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS index_queue (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      path TEXT NOT NULL,
-      op TEXT NOT NULL,
-      status TEXT NOT NULL CHECK (status IN ('pending', 'in-progress', 'done', 'failed')),
-      attempts INTEGER NOT NULL DEFAULT 0,
-      last_error TEXT,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE INDEX IF NOT EXISTS index_queue_status_idx ON index_queue(status, updated_at);
-    CREATE INDEX IF NOT EXISTS files_status_idx ON files(status);
     CREATE INDEX IF NOT EXISTS pdf_conversions_status_idx ON pdf_conversions(status, last_attempt_at);
+
+    -- Removed: 'files' (a per-file index/hash table) and 'index_queue'
+    -- (a durable op queue). Both were write-only — the daemon/store owns
+    -- the authoritative per-file hash (via scan_diff) and reconcile
+    -- recovers idempotently, so nothing consumed them. Drop on open so
+    -- existing installs shed the dead tables. The conversion table below
+    -- (PDF + image, despite the legacy name) is the only state.db data
+    -- that is non-derivable and actually read.
+    DROP TABLE IF EXISTS files;
+    DROP TABLE IF EXISTS index_queue;
   `);
 }
 
@@ -235,92 +219,18 @@ export function listPdfStatus(status: PdfStatus): Array<{ path: string; entry: P
   }));
 }
 
-export function markFilePending(pathKey: string): void {
-  upsertFileState(pathKey, { status: 'pending' });
-}
-
-export function markFileIndexed(pathKey: string, stat: { mtime: number; size: number }, contentHash: string): void {
-  upsertFileState(pathKey, {
-    status: 'indexed',
-    mtime: stat.mtime,
-    size: stat.size,
-    contentHash,
-    lastIndexedAt: new Date().toISOString(),
-  });
-}
-
-export function markFileDeleted(pathKey: string): void {
-  upsertFileState(pathKey, { status: 'deleted' });
-}
-
-/** Drop every row for a deleted space across all three state tables
- *  (`files`, `pdf_conversions`, `index_queue`). Without this, removing a
- *  space leaves orphan rows behind — most visibly a stale
- *  `pdf_conversions` record, which makes `discoverNewPdfs` skip
- *  auto-conversion for a later same-named PDF (it sees a "record" and
- *  assumes the PDF was already handled). `space` is the kbRoot-relative
- *  space name (its rows are `space` itself or `space/...`). Prefix match
- *  via `substr` avoids LIKE wildcard escaping on arbitrary space names. */
+/** Drop a deleted space's rows from `pdf_conversions`. Without this, a
+ *  stale conversion record survives the space's deletion and makes
+ *  `discoverNewSources` skip auto-conversion for a later same-named PDF /
+ *  image (it sees a "record" and assumes it was already handled). `space`
+ *  is the kbRoot-relative name (its rows are `space` itself or
+ *  `space/...`); the `substr` prefix match avoids LIKE wildcard escaping
+ *  on arbitrary space names. */
 export function deleteSpaceState(space: string): void {
   const name = space.replace(/\/+$/, '');
   if (!name) return;
   const prefix = name + '/';
-  const args = { name, prefix, plen: prefix.length };
-  const db = getStateDb();
-  const sweep = db.transaction(() => {
-    for (const table of ['files', 'pdf_conversions', 'index_queue']) {
-      db.prepare(
-        `DELETE FROM ${table} WHERE path = @name OR substr(path, 1, @plen) = @prefix`,
-      ).run(args);
-    }
-  });
-  sweep();
-}
-
-export function markFileFailed(pathKey: string, error: string): void {
-  upsertFileState(pathKey, { status: 'failed', lastError: error });
-}
-
-function upsertFileState(
-  pathKey: string,
-  patch: Partial<Omit<FileStateRow, 'path'>>,
-): void {
-  const prev = getStateDb().prepare('SELECT * FROM files WHERE path = ?').get(pathKey) as any;
-  getStateDb().prepare(`
-    INSERT INTO files (path, mtime, size, content_hash, last_indexed_at, status, last_error)
-    VALUES (@path, @mtime, @size, @contentHash, @lastIndexedAt, @status, @lastError)
-    ON CONFLICT(path) DO UPDATE SET
-      mtime = excluded.mtime,
-      size = excluded.size,
-      content_hash = excluded.content_hash,
-      last_indexed_at = excluded.last_indexed_at,
-      status = excluded.status,
-      last_error = excluded.last_error
-  `).run({
-    path: pathKey,
-    mtime: patch.mtime ?? prev?.mtime ?? 0,
-    size: patch.size ?? prev?.size ?? 0,
-    contentHash: patch.contentHash ?? prev?.content_hash ?? '',
-    lastIndexedAt: patch.lastIndexedAt ?? prev?.last_indexed_at ?? null,
-    status: patch.status ?? prev?.status ?? 'pending',
-    lastError: patch.lastError ?? null,
-  });
-}
-
-export function enqueueIndexOp(pathKey: string, op: string): number {
-  const now = new Date().toISOString();
-  const res = getStateDb().prepare(`
-    INSERT INTO index_queue (path, op, status, updated_at)
-    VALUES (?, ?, 'pending', ?)
-  `).run(pathKey, op, now);
-  return Number(res.lastInsertRowid);
-}
-
-export function updateIndexOp(id: number, status: 'in-progress' | 'done' | 'failed', error?: string): void {
-  getStateDb().prepare(`
-    UPDATE index_queue
-    SET status = ?, attempts = attempts + CASE WHEN ? = 'in-progress' THEN 1 ELSE 0 END,
-        last_error = ?, updated_at = ?
-    WHERE id = ?
-  `).run(status, status, error ?? null, new Date().toISOString(), id);
+  getStateDb().prepare(
+    'DELETE FROM pdf_conversions WHERE path = @name OR substr(path, 1, @plen) = @prefix',
+  ).run({ name, prefix, plen: prefix.length });
 }

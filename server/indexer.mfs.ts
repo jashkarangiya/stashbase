@@ -22,14 +22,6 @@ import { resolveFileMetadata, isReservedMetadataFile } from './metadata.ts';
 import { logger, errorMessage } from './log.ts';
 import { getDaemon } from './mfs-daemon.ts';
 import { getKbRoot } from './space.ts';
-import {
-  enqueueIndexOp,
-  markFileDeleted,
-  markFileFailed,
-  markFileIndexed,
-  markFilePending,
-  updateIndexOp,
-} from './state-db.ts';
 import type {
   EmbedderRuntimeConfig,
   Indexer,
@@ -185,54 +177,31 @@ export class MfsIndexer implements Indexer {
     // YAML / 目录 prose would surface as bogus hits.
     if (isReservedMetadataFile(filePath)) return;
     const { text, ext, fileHash } = prepareForIndex(filePath, content);
-    const queueId = enqueueIndexOp(filePath, 'upsert');
-    updateIndexOp(queueId, 'in-progress');
-    markFilePending(filePath);
-    // Temporarily mark not-indexed while we re-embed so an in-flight
-    // status() during a re-embed doesn't claim the file is up to date.
+    // Mark not-indexed while we re-embed so an in-flight status() during
+    // a re-embed doesn't claim the file is up to date.
     this.noteUnindexed(filePath);
-    try {
-      if (content.length === 0) {
-        await getDaemon().call('delete', { path: filePath });
-        markFileDeleted(filePath);
-        updateIndexOp(queueId, 'done');
-        log.info(`upsert ${filePath}: empty file, skipped embedding`);
-        return;
-      }
-      const t0 = Date.now();
-      // File-level metadata (user front-matter / HTML <meta> + the agent's
-      // `<space>/file-metadata.md` sidecar) rides along so every chunk carries it.
-      const metadata = resolveFileMetadata(filePath, content);
-      const res = await getDaemon().call<{ chunks: number; embed_ms: number; total_ms: number }>(
-        'upsert', { path: filePath, content: text, ext, file_hash: fileHash, metadata },
-      );
-      if (res.chunks > 0) this.noteIndexed(filePath);
-      markFileIndexed(filePath, statForKbRel(filePath), fileHash);
-      updateIndexOp(queueId, 'done');
-      log.info(
-        `upsert ${filePath}: ${res.chunks} chunks ` +
-          `(embed ${fmtMs(res.embed_ms)}, total ${fmtMs(res.total_ms)}, wall ${fmtMs(Date.now() - t0)})`,
-      );
-    } catch (err: unknown) {
-      markFileFailed(filePath, errorMessage(err));
-      updateIndexOp(queueId, 'failed', errorMessage(err));
-      throw err;
+    if (content.length === 0) {
+      await getDaemon().call('delete', { path: filePath });
+      log.info(`upsert ${filePath}: empty file, skipped embedding`);
+      return;
     }
+    const t0 = Date.now();
+    // File-level metadata (user front-matter / HTML <meta> + the agent's
+    // `<space>/file-metadata.md` sidecar) rides along so every chunk carries it.
+    const metadata = resolveFileMetadata(filePath, content);
+    const res = await getDaemon().call<{ chunks: number; embed_ms: number; total_ms: number }>(
+      'upsert', { path: filePath, content: text, ext, file_hash: fileHash, metadata },
+    );
+    if (res.chunks > 0) this.noteIndexed(filePath);
+    log.info(
+      `upsert ${filePath}: ${res.chunks} chunks ` +
+        `(embed ${fmtMs(res.embed_ms)}, total ${fmtMs(res.total_ms)}, wall ${fmtMs(Date.now() - t0)})`,
+    );
   }
 
   async deleteFile(filePath: string): Promise<void> {
-    const queueId = enqueueIndexOp(filePath, 'delete');
-    updateIndexOp(queueId, 'in-progress');
-    try {
-      await getDaemon().call('delete', { path: filePath });
-      this.noteUnindexed(filePath);
-      markFileDeleted(filePath);
-      updateIndexOp(queueId, 'done');
-    } catch (err: unknown) {
-      markFileFailed(filePath, errorMessage(err));
-      updateIndexOp(queueId, 'failed', errorMessage(err));
-      throw err;
-    }
+    await getDaemon().call('delete', { path: filePath });
+    this.noteUnindexed(filePath);
   }
 
   async deletePathPrefix(prefix: string): Promise<void> {
@@ -258,31 +227,19 @@ export class MfsIndexer implements Indexer {
     // Metadata only matters on the re-embed fallback (content changed);
     // the hash-match fast path copies existing rows, metadata included.
     const metadata = resolveFileMetadata(newPath, content);
-    const queueId = enqueueIndexOp(newPath, 'rename');
-    updateIndexOp(queueId, 'in-progress');
-    markFilePending(newPath);
-    try {
-      const res = await getDaemon().call<{ chunks: number; embed_ms: number; fast_path?: boolean }>(
-        'rename', { old: oldPath, new: newPath, content: text, ext, file_hash: fileHash, metadata },
-      );
-      this.noteUnindexed(oldPath);
-      if (res.chunks > 0) this.noteIndexed(newPath);
-      markFileDeleted(oldPath);
-      markFileIndexed(newPath, statForKbRel(newPath), fileHash);
-      updateIndexOp(queueId, 'done');
-      // Fast path reuses the cached vectors (embed_ms == 0); only the
-      // fallback actually re-embeds. Log which one ran so a slow rename
-      // is distinguishable from a copied one.
-      const how = res.fast_path ? 'copied' : 're-embedded';
-      log.info(
-        `rename ${oldPath} → ${newPath}: ${how} ${res.chunks} chunks ` +
-          `(embed ${fmtMs(res.embed_ms)}, wall ${fmtMs(Date.now() - t0)})`,
-      );
-    } catch (err: unknown) {
-      markFileFailed(newPath, errorMessage(err));
-      updateIndexOp(queueId, 'failed', errorMessage(err));
-      throw err;
-    }
+    const res = await getDaemon().call<{ chunks: number; embed_ms: number; fast_path?: boolean }>(
+      'rename', { old: oldPath, new: newPath, content: text, ext, file_hash: fileHash, metadata },
+    );
+    this.noteUnindexed(oldPath);
+    if (res.chunks > 0) this.noteIndexed(newPath);
+    // Fast path reuses the cached vectors (embed_ms == 0); only the
+    // fallback actually re-embeds. Log which one ran so a slow rename
+    // is distinguishable from a copied one.
+    const how = res.fast_path ? 'copied' : 're-embedded';
+    log.info(
+      `rename ${oldPath} → ${newPath}: ${how} ${res.chunks} chunks ` +
+        `(embed ${fmtMs(res.embed_ms)}, wall ${fmtMs(Date.now() - t0)})`,
+    );
   }
 
   async renamePathPrefix(
@@ -306,12 +263,9 @@ export class MfsIndexer implements Indexer {
     );
     for (const f of files) {
       this.noteUnindexed(f.path);
-      markFileDeleted(f.path);
       const rel = f.path.slice(oldPrefix.length + 1);
       const next = `${newPrefix}/${rel}`;
       this.noteIndexed(next);
-      const { fileHash } = prepareForIndex(next, f.content);
-      markFileIndexed(next, statForKbRel(next), fileHash);
     }
     const fast = res.fast_path_files ?? 0;
     log.info(
@@ -428,13 +382,4 @@ export class MfsIndexer implements Indexer {
 function fmtMs(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function statForKbRel(kbRel: string): { mtime: number; size: number } {
-  try {
-    const s = fs.statSync(path.join(getKbRoot(), kbRel));
-    return { mtime: s.mtimeMs, size: s.size };
-  } catch {
-    return { mtime: 0, size: 0 };
-  }
 }
