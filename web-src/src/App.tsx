@@ -14,6 +14,10 @@ interface ElectronBridge {
   onCaptureError?: (handler: (error: CaptureErrorPayload) => void) => (() => void);
   onClipboardImage?: (handler: (offer: ClipboardOffer) => void) => (() => void);
   markClipboardHandled?: (hash: string) => void;
+  onRecordingCreated?: (handler: (recording: RecordingPayload) => void) => (() => void);
+  onRecordingError?: (handler: (error: CaptureErrorPayload) => void) => (() => void);
+  onRecordingStatus?: (handler: (status: RecordingStatusPayload) => void) => (() => void);
+  revealRecording?: (filePath: string) => Promise<boolean>;
   onFullscreenChange?: (handler: (isFullScreen: boolean) => void) => (() => void);
 }
 
@@ -33,6 +37,25 @@ interface CaptureErrorPayload {
   title?: string;
   message?: string;
   detail?: string;
+}
+
+interface RecordingPayload {
+  kind?: 'recording';
+  mode?: 'window';
+  mime?: string;
+  filePath?: string;
+  filename?: string;
+  sourceTitle?: string;
+  durationMs?: number;
+  size?: number;
+  limitReached?: boolean;
+}
+
+interface RecordingStatusPayload {
+  active?: boolean;
+  sourceTitle?: string;
+  startedAt?: number;
+  filePath?: string;
 }
 import { Welcome } from './components/Welcome';
 import { Sidebar } from './components/Sidebar';
@@ -77,6 +100,7 @@ function AppBody() {
   const { state, actions } = useApp();
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [clipboardOffer, setClipboardOffer] = useState<ClipboardOffer | null>(null);
+  const recordingActiveRef = useRef(false);
   // Mount the chat panel lazily on first open and then NEVER
   // unmount it — collapsing the panel just hides the column via CSS,
   // the underlying xterm + WebSocket + PTY stay alive. Killing the
@@ -155,6 +179,53 @@ function AppBody() {
         error.message || (isPermission
           ? 'Turn on Screen Recording for StashBase, then restart the app.'
           : 'Screenshot did not finish. Try again.'),
+        {
+          level: isPermission ? 'warning' : 'error',
+          ttl: isPermission ? null : undefined,
+          action: isPermission
+            ? { label: 'Open settings', onClick: () => openSettings('capture') }
+            : undefined,
+        },
+      );
+    });
+  }, [actions]);
+  useEffect(() => {
+    const bridge = (window as { electron?: ElectronBridge }).electron;
+    return bridge?.onRecordingStatus?.((status) => {
+      const active = !!status.active;
+      if (active && !recordingActiveRef.current) {
+        actions.toast(`Recording ${status.sourceTitle || 'window'}... Click the floating control to stop.`, {
+          level: 'info',
+        });
+      }
+      recordingActiveRef.current = active;
+    });
+  }, [actions]);
+  useEffect(() => {
+    const bridge = (window as { electron?: ElectronBridge }).electron;
+    return bridge?.onRecordingCreated?.((recording) => {
+      recordingActiveRef.current = false;
+      const name = recording.filename || 'recording.webm';
+      const duration = formatDuration(recording.durationMs);
+      const prefix = recording.limitReached ? 'Recording size limit reached. Saved' : 'Saved';
+      actions.toast(`${prefix} ${name}${duration ? ` (${duration})` : ''}.`, {
+        level: 'success',
+        action: recording.filePath && bridge?.revealRecording
+          ? { label: 'Show in Finder', onClick: () => { void bridge.revealRecording?.(recording.filePath || ''); } }
+          : undefined,
+      });
+    });
+  }, [actions]);
+  useEffect(() => {
+    const bridge = (window as { electron?: ElectronBridge }).electron;
+    return bridge?.onRecordingError?.((error) => {
+      recordingActiveRef.current = false;
+      if (error.detail) console.warn('[recording] failed:', error.detail);
+      const isPermission = error.kind === 'permission';
+      actions.toast(
+        error.message || (isPermission
+          ? 'Turn on Screen Recording for StashBase, then restart the app.'
+          : 'Window recording did not finish.'),
         {
           level: isPermission ? 'warning' : 'error',
           ttl: isPermission ? null : undefined,
@@ -310,6 +381,14 @@ function AppBody() {
 function defaultCaptureFilename(mode?: string): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   return `screenshot-${mode || 'capture'}-${stamp}.png`;
+}
+
+function formatDuration(durationMs?: number): string {
+  if (!Number.isFinite(durationMs) || !durationMs) return '';
+  const totalSeconds = Math.max(1, Math.round(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}:${String(seconds).padStart(2, '0')}` : `${seconds}s`;
 }
 
 /** Decode a `data:` URL into a File. Decodes the base64 (or percent-

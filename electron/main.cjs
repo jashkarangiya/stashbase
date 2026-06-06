@@ -52,8 +52,11 @@ const mainWindows = new Set();
 let lastMainWindow = null;
 let floatingBallWindow = null;
 let capturePickerWindow = null;
+let activeRecording = null;
+let recordingStopTimer = null;
 
 const APP_CONFIG_FILE = path.join(os.homedir(), '.stashbase', 'config.json');
+const MAX_RECORDING_BYTES = 150 * 1024 * 1024;
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -445,6 +448,29 @@ function offerClipboardImage(win) {
   });
 }
 
+function emitRecordingCreated(recording) {
+  const target = getMainTargetWindow();
+  if (!target) return false;
+  target.webContents.send('recording:created', recording);
+  if (target.isMinimized()) target.restore();
+  return true;
+}
+
+function emitRecordingError(error) {
+  const target = getMainTargetWindow();
+  if (!target) return false;
+  target.webContents.send('recording:error', error);
+  return true;
+}
+
+function emitRecordingStatus(status) {
+  const target = getMainTargetWindow();
+  if (target) target.webContents.send('recording:status', status);
+  if (floatingBallWindow && !floatingBallWindow.isDestroyed()) {
+    floatingBallWindow.webContents.send('recording:status', status);
+  }
+}
+
 function getScreenPermission() {
   if (process.platform !== 'darwin') {
     return {
@@ -473,6 +499,20 @@ function screenPermissionHint() {
   const permission = getScreenPermission();
   if (permission.status === 'granted') return '';
   return ' Grant Screen Recording permission in macOS System Settings, then restart StashBase.';
+}
+
+function isScreenPermissionError(detail, permission = getScreenPermission()) {
+  return permission.needsGuide || /permission|denied|not.?allowed|access|failed to get sources/i.test(String(detail || ''));
+}
+
+function screenPermissionError(detail, title = 'Screen Recording permission required') {
+  return {
+    kind: 'permission',
+    title,
+    message: 'Turn on Screen Recording for StashBase, then restart the app.',
+    detail,
+    permission: getScreenPermission(),
+  };
 }
 
 async function openScreenPermissionSettings() {
@@ -512,6 +552,20 @@ function captureFilename(mode) {
   return `screenshot-${mode}-${stamp}.png`;
 }
 
+function recordingFilename(mode) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `recording-${mode}-${stamp}.webm`;
+}
+
+function recordingStorageDir() {
+  return path.join(os.homedir(), '.stashbase', 'captures', 'recordings');
+}
+
+function isInsidePath(parent, child) {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 function getCaptureSettings() {
   return {
     permission: getScreenPermission(),
@@ -525,14 +579,30 @@ function getCaptureSettings() {
 }
 
 function configureDisplayMediaRequests() {
-  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
     if (permission === 'display-capture') {
+      callback(true);
+      return;
+    }
+    if (permission === 'media' && activeRecording?.window?.webContents === webContents) {
       callback(true);
       return;
     }
     callback(false);
   });
   session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+    if (activeRecording?.sourceId) {
+      void desktopCapturer.getSources({
+        types: ['window'],
+        thumbnailSize: { width: 1, height: 1 },
+      }).then((sources) => {
+        const source = sources.find((item) => item.id === activeRecording.sourceId);
+        callback(source ? { video: source } : {});
+      }).catch(() => {
+        callback({});
+      });
+      return;
+    }
     void desktopCapturer.getSources({
       types: ['screen'],
       thumbnailSize: { width: 1, height: 1 },
@@ -620,18 +690,36 @@ async function captureWindowSource(sourceId) {
 }
 
 async function listCaptureWindows() {
-  const internalIds = internalCaptureSourceIds();
-  const sources = await desktopCapturer.getSources({
-    types: ['window'],
-    thumbnailSize: { width: 320, height: 200 },
-  });
-  return sources
-    .filter((source) => source.id && source.name && !source.thumbnail.isEmpty() && !internalIds.has(source.id))
-    .map((source) => ({
-      id: source.id,
-      name: source.name,
-      thumbnail: source.thumbnail.toDataURL(),
-    }));
+  try {
+    const internalIds = internalCaptureSourceIds();
+    const sources = await desktopCapturer.getSources({
+      types: ['window'],
+      thumbnailSize: { width: 320, height: 200 },
+    });
+    return {
+      ok: true,
+      sources: sources
+        .filter((source) => source.id && source.name && !source.thumbnail.isEmpty() && !internalIds.has(source.id))
+        .map((source) => ({
+          id: source.id,
+          name: source.name,
+          thumbnail: source.thumbnail.toDataURL(),
+        })),
+    };
+  } catch (err) {
+    const detail = err && typeof err.message === 'string' ? err.message : String(err);
+    const permission = getScreenPermission();
+    const payload = isScreenPermissionError(detail, permission)
+      ? screenPermissionError(detail, 'Screen Recording permission required')
+      : {
+          kind: 'capture-failed',
+          title: 'Windows could not be listed',
+          message: 'Could not list capturable windows. Try again.',
+          detail: detail || 'Failed to get windows.',
+          permission,
+        };
+    return { ok: false, ...payload };
+  }
 }
 
 function hideFloatingBall() {
@@ -786,15 +874,8 @@ async function safeRunCapture(request = {}, event) {
   } catch (err) {
     const detail = err && typeof err.message === 'string' ? err.message : String(err);
     const permission = getScreenPermission();
-    const needsPermission = permission.needsGuide || /permission|denied|not.?allowed|access/i.test(detail);
-    const error = needsPermission
-      ? {
-          kind: 'permission',
-          title: 'Screen Recording is off',
-          message: 'Turn on Screen Recording for StashBase, then restart the app.',
-          detail,
-          permission,
-        }
+    const error = isScreenPermissionError(detail, permission)
+      ? screenPermissionError(detail)
       : {
           kind: 'capture-failed',
           title: 'Screenshot did not finish',
@@ -803,17 +884,208 @@ async function safeRunCapture(request = {}, event) {
           permission,
         };
     emitCaptureError(error);
-    return { ok: false, error: detail, kind: error.kind };
+    return { ok: false, error: detail, ...error };
   }
+}
+
+function recordingPublicStatus() {
+  if (!activeRecording) return { active: false };
+  return {
+    active: true,
+    id: activeRecording.id,
+    sourceTitle: activeRecording.sourceName,
+    startedAt: activeRecording.startedAt,
+    filePath: activeRecording.filePath,
+  };
+}
+
+function closeRecordingWindow(recording) {
+  if (recording?.window && !recording.window.isDestroyed()) {
+    try { recording.window.close(); } catch { /* best-effort */ }
+  }
+}
+
+function failActiveRecording(detail) {
+  const recording = activeRecording;
+  if (!recording) return;
+  if (recordingStopTimer) {
+    clearTimeout(recordingStopTimer);
+    recordingStopTimer = null;
+  }
+  activeRecording = null;
+  try { recording.stream.destroy(); } catch { /* best-effort */ }
+  try {
+    if (recording.filePath && fs.existsSync(recording.filePath)) {
+      fs.unlinkSync(recording.filePath);
+    }
+  } catch { /* best-effort */ }
+  closeRecordingWindow(recording);
+  emitRecordingStatus({ active: false });
+  const permission = getScreenPermission();
+  emitRecordingError(isScreenPermissionError(detail, permission)
+    ? screenPermissionError(detail)
+    : {
+        kind: 'recording-failed',
+        title: 'Recording did not finish',
+        message: 'Window recording stopped before it could be saved.',
+        detail,
+        permission,
+      });
+}
+
+function finishActiveRecording(id, info = {}) {
+  const recording = activeRecording;
+  if (!recording || recording.id !== id) return { ok: false, error: 'No matching recording is active.' };
+  if (recordingStopTimer) {
+    clearTimeout(recordingStopTimer);
+    recordingStopTimer = null;
+  }
+  activeRecording = null;
+  return new Promise((resolve) => {
+    recording.stream.end(() => {
+      const size = fs.existsSync(recording.filePath) ? fs.statSync(recording.filePath).size : recording.bytesWritten;
+      closeRecordingWindow(recording);
+      const payload = {
+        ok: true,
+        kind: 'recording',
+        mode: 'window',
+        mime: info.mime || recording.mime || 'video/webm',
+        filePath: recording.filePath,
+        filename: recording.filename,
+        sourceTitle: recording.sourceName || 'Window recording',
+        startedAt: recording.startedAt,
+        durationMs: Math.max(0, Math.round(Number(info.durationMs) || (Date.now() - recording.startedAt))),
+        size,
+        limitReached: size >= MAX_RECORDING_BYTES,
+      };
+      emitRecordingStatus({ active: false });
+      emitRecordingCreated(payload);
+      resolve({ ok: true, recording: payload });
+    });
+  });
+}
+
+function writeRecordingChunk(id, chunk) {
+  const recording = activeRecording;
+  if (!recording || recording.id !== id) return Promise.resolve({ ok: false, error: 'No matching recording is active.' });
+  const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  if (bytes.length === 0) return Promise.resolve({ ok: true, bytesWritten: recording.bytesWritten });
+  recording.bytesWritten += bytes.length;
+  return new Promise((resolve, reject) => {
+    recording.stream.write(bytes, (err) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      if (recording.bytesWritten >= MAX_RECORDING_BYTES && !recording.stopping) {
+        stopWindowRecording();
+      }
+      resolve({
+        ok: true,
+        bytesWritten: recording.bytesWritten,
+        limitReached: recording.bytesWritten >= MAX_RECORDING_BYTES,
+      });
+    });
+  });
+}
+
+async function startWindowRecording(request = {}, event) {
+  if (activeRecording) {
+    return { ok: false, error: 'A recording is already in progress.' };
+  }
+  const sourceId = typeof request.sourceId === 'string' ? request.sourceId : '';
+  if (!sourceId) return { ok: false, error: 'No window was selected.' };
+  const sources = await desktopCapturer.getSources({
+    types: ['window'],
+    thumbnailSize: { width: 1, height: 1 },
+  });
+  const source = sources.find((item) => item.id === sourceId);
+  if (!source) return { ok: false, error: 'The selected window is no longer available.' };
+
+  fs.mkdirSync(recordingStorageDir(), { recursive: true });
+  const id = `recording-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const filename = recordingFilename('window');
+  const filePath = path.join(recordingStorageDir(), filename);
+  const stream = fs.createWriteStream(filePath, { flags: 'wx' });
+  const recorderWindow = new BrowserWindow({
+    width: 420,
+    height: 240,
+    show: false,
+    skipTaskbar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false,
+    },
+  });
+  activeRecording = {
+    id,
+    sourceId,
+    sourceName: request.sourceName || source.name || 'Window recording',
+    startedAt: Date.now(),
+    filePath,
+    filename,
+    mime: 'video/webm',
+    bytesWritten: 0,
+    stream,
+    window: recorderWindow,
+    stopping: false,
+  };
+  stream.on('error', (err) => failActiveRecording(err && err.message ? err.message : String(err)));
+  recorderWindow.on('closed', () => {
+    if (activeRecording?.id === id && !activeRecording.stopping) {
+      failActiveRecording('The recording worker closed unexpectedly.');
+    }
+  });
+  try {
+    await recorderWindow.loadFile(path.join(__dirname, 'recorder.html'), { query: { id, sourceId } });
+  } catch (err) {
+    const detail = err && err.message ? err.message : String(err);
+    failActiveRecording(detail);
+    return { ok: false, error: detail };
+  }
+
+  const senderWindow = event ? BrowserWindow.fromWebContents(event.sender) : null;
+  if (senderWindow && senderWindow !== getMainTargetWindow() && senderWindow !== floatingBallWindow && !senderWindow.isDestroyed()) {
+    senderWindow.close();
+  }
+  emitRecordingStatus(recordingPublicStatus());
+  return { ok: true, id, filePath, sourceTitle: activeRecording.sourceName };
+}
+
+function stopWindowRecording() {
+  if (!activeRecording) return { ok: false, error: 'No recording is active.' };
+  activeRecording.stopping = true;
+  if (activeRecording.window && !activeRecording.window.isDestroyed()) {
+    activeRecording.window.webContents.send('recording:stop');
+  }
+  if (recordingStopTimer) clearTimeout(recordingStopTimer);
+  recordingStopTimer = setTimeout(() => {
+    if (activeRecording) failActiveRecording('The recorder did not stop in time.');
+  }, 8000);
+  emitRecordingStatus(recordingPublicStatus());
+  return { ok: true };
 }
 
 function showCaptureMenu() {
   keepFloatingBallAboveApps();
-  const menu = Menu.buildFromTemplate([
+  const items = [
     { label: 'Full screen screenshot', click: () => { void safeRunCapture({ mode: 'screen' }); } },
     { label: 'Window screenshot', click: () => createCapturePickerWindow() },
     { label: 'Region screenshot', click: () => { void safeRunCapture({ mode: 'region' }); } },
-  ]);
+    { type: 'separator' },
+  ];
+  if (activeRecording) {
+    items.push(
+      { label: `Recording ${activeRecording.sourceName}`, enabled: false },
+      { label: 'Stop recording', click: () => stopWindowRecording() },
+    );
+  } else {
+    items.push({ label: 'Record window', click: () => createCapturePickerWindow('record') });
+  }
+  const menu = Menu.buildFromTemplate(items);
   menu.popup({ window: floatingBallWindow || undefined });
 }
 
@@ -865,11 +1137,12 @@ function createFloatingBallWindow() {
   floatingBallWindow.on('closed', () => { floatingBallWindow = null; });
 }
 
-function createCapturePickerWindow() {
+function createCapturePickerWindow(action = 'capture') {
   if (capturePickerWindow && !capturePickerWindow.isDestroyed()) {
     capturePickerWindow.focus();
     return;
   }
+  const normalizedAction = action === 'record' ? 'record' : 'capture';
   capturePickerWindow = new BrowserWindow({
     width: 720,
     height: 520,
@@ -886,7 +1159,7 @@ function createCapturePickerWindow() {
       sandbox: false,
     },
   });
-  capturePickerWindow.loadFile(path.join(__dirname, 'capture-picker.html'));
+  capturePickerWindow.loadFile(path.join(__dirname, 'capture-picker.html'), { query: { action: normalizedAction } });
   capturePickerWindow.on('closed', () => { capturePickerWindow = null; });
 }
 
@@ -1100,6 +1373,51 @@ ipcMain.handle('capture:capture', async (event, request = {}) => {
   return safeRunCapture(request, event);
 });
 
+ipcMain.handle('recording:startWindow', async (event, request = {}) => {
+  try {
+    return await startWindowRecording(request, event);
+  } catch (err) {
+    const detail = err && typeof err.message === 'string' ? err.message : String(err);
+    const permission = getScreenPermission();
+    const error = isScreenPermissionError(detail, permission)
+      ? screenPermissionError(detail)
+      : {
+          kind: 'recording-failed',
+          title: 'Recording did not start',
+          message: 'Window recording could not start.',
+          detail,
+          permission,
+        };
+    emitRecordingError(error);
+    return { ok: false, error: detail, ...error };
+  }
+});
+
+ipcMain.handle('recording:stop', async () => stopWindowRecording());
+
+ipcMain.handle('recording:status', async () => recordingPublicStatus());
+
+ipcMain.handle('recording:started', async (_event, id, info = {}) => {
+  if (!activeRecording || activeRecording.id !== id) return { ok: false };
+  activeRecording.mime = info.mime || activeRecording.mime;
+  emitRecordingStatus(recordingPublicStatus());
+  return { ok: true };
+});
+
+ipcMain.handle('recording:writeChunk', async (_event, id, chunk) => {
+  return writeRecordingChunk(id, chunk);
+});
+
+ipcMain.handle('recording:finish', async (_event, id, info = {}) => {
+  return finishActiveRecording(id, info);
+});
+
+ipcMain.handle('recording:failed', async (_event, id, detail) => {
+  if (!activeRecording || activeRecording.id !== id) return { ok: false };
+  failActiveRecording(typeof detail === 'string' && detail ? detail : 'The recorder failed.');
+  return { ok: true };
+});
+
 ipcMain.handle('capture:getSettings', async () => getCaptureSettings());
 
 ipcMain.handle('capture:openScreenPermissionSettings', async () => openScreenPermissionSettings());
@@ -1117,6 +1435,15 @@ ipcMain.handle('clipboard:setWatch', (_event, enabled) => {
 // image; remember the hash so re-focus doesn't re-offer the same one.
 ipcMain.on('clipboard:markHandled', (_event, hash) => {
   if (typeof hash === 'string' && hash) lastClipboardOfferHash = hash;
+});
+
+ipcMain.handle('recording:reveal', async (_event, filePath) => {
+  if (typeof filePath !== 'string') return false;
+  const resolved = path.resolve(filePath);
+  const root = recordingStorageDir();
+  if (!isInsidePath(root, resolved) || !fs.existsSync(resolved)) return false;
+  shell.showItemInFolder(resolved);
+  return true;
 });
 
 ipcMain.handle('floating:getBounds', () => {

@@ -8,7 +8,6 @@ import express from 'express';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { rgPath } from '@vscode/ripgrep';
 import { errorMessage, logger } from '../log.ts';
 import { fromKbRel, getCurrentSpace, getCurrentSpaceName, getKbRoot, isInsideKbRoot, toKbRel } from '../space.ts';
 import { syncIndex } from '../sync.ts';
@@ -747,6 +746,7 @@ const RG_PER_FILE_CAP = 50;
 const RG_TOTAL_CAP = 500;
 const RG_TIMEOUT_MS = 8000;
 const RG_MAX_LINE_CHARS = 240;
+let rgPathPromise: Promise<string> | null = null;
 
 interface RipgrepOpts {
   /** false → `--smart-case` (case-insensitive unless query has caps);
@@ -757,10 +757,21 @@ interface RipgrepOpts {
   wholeWord: boolean;
 }
 
+async function getRgPath(): Promise<string> {
+  rgPathPromise ??= import('@vscode/ripgrep')
+    .then((mod) => mod.rgPath)
+    .catch((err) => {
+      const message = errorMessage(err);
+      throw new Error(`ripgrep is unavailable: ${message}`);
+    });
+  return rgPathPromise;
+}
+
 /** Spawn ripgrep on `cwd` with `query` as a literal pattern (no shell).
  *  `--json` gives structured `match` events; we group them into
  *  per-file buckets, applying caps and truncations. */
-function runRipgrep(query: string, cwd: string, opts: RipgrepOpts): Promise<KeywordSearchResult> {
+async function runRipgrep(query: string, cwd: string, opts: RipgrepOpts): Promise<KeywordSearchResult> {
+  const rgPath = await getRgPath();
   return new Promise((resolve, reject) => {
     const args = [
       '--json',

@@ -106,7 +106,7 @@
 </head>
 <body>
   <header>
-    <h1>Choose a window to capture</h1>
+    <h1 id="title">Choose a window to capture</h1>
     <button id="refresh" type="button">Refresh</button>
   </header>
   <div id="error" hidden></div>
@@ -117,6 +117,11 @@
     const empty = document.getElementById('empty');
     const errorBox = document.getElementById('error');
     const refresh = document.getElementById('refresh');
+    const title = document.getElementById('title');
+    const action = new URLSearchParams(window.location.search).get('action') === 'record'
+      ? 'record'
+      : 'capture';
+    title.textContent = action === 'record' ? 'Choose a window to record' : 'Choose a window to capture';
 
     function showError(message) {
       errorBox.textContent = message;
@@ -127,7 +132,18 @@
       grid.innerHTML = '';
       empty.hidden = true;
       errorBox.hidden = true;
-      const sources = await window.electron.listCaptureWindows();
+      let response;
+      try {
+        response = await window.electron.listCaptureWindows();
+      } catch (err) {
+        showError(err && err.message ? err.message : 'Could not list windows.');
+        return;
+      }
+      const sources = Array.isArray(response) ? response : response?.sources || [];
+      if (response && !Array.isArray(response) && response.ok === false) {
+        showError(response.message || response.error || 'Could not list capturable windows.');
+        return;
+      }
       if (!sources.length) {
         empty.hidden = false;
         return;
@@ -143,10 +159,15 @@
         button.querySelector('.name').textContent = source.name;
         button.addEventListener('click', async () => {
           button.disabled = true;
-          const result = await window.electron.capture({ mode: 'window', sourceId: source.id });
+          const result = action === 'record'
+            ? await window.electron.startWindowRecording({
+                sourceId: source.id,
+                sourceName: source.name,
+              })
+            : await window.electron.capture({ mode: 'window', sourceId: source.id });
           if (!result || result.ok !== true) {
             button.disabled = false;
-            showError(result?.error || 'Window capture failed.');
+            showError(result?.message || result?.error || (action === 'record' ? 'Window recording failed.' : 'Window capture failed.'));
           }
         });
         grid.appendChild(button);

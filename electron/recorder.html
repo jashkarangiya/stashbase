@@ -1,0 +1,139 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline';">
+  <style>
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #111827;
+      color: #f9fafb;
+      font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+  </style>
+</head>
+<body>
+  Recording
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('id');
+    const sourceId = params.get('sourceId');
+    const startedAt = Date.now();
+    let recorder = null;
+    let stream = null;
+    let writes = Promise.resolve();
+    let stopped = false;
+
+    function pickMimeType() {
+      const candidates = [
+        'video/webm;codecs=vp9',
+        'video/webm;codecs=vp8',
+        'video/webm',
+      ];
+      return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || '';
+    }
+
+    function stopTracks() {
+      if (!stream) return;
+      for (const track of stream.getTracks()) track.stop();
+      stream = null;
+    }
+
+    function fail(error) {
+      const message = error && error.message ? error.message : String(error);
+      stopTracks();
+      window.electron.failRecording(id, message);
+    }
+
+    async function stop() {
+      if (stopped) return;
+      stopped = true;
+      try {
+        if (recorder && recorder.state !== 'inactive') {
+          recorder.requestData();
+          recorder.stop();
+          return;
+        }
+        stopTracks();
+        await writes;
+        await window.electron.finishRecording(id, {
+          mime: recorder?.mimeType || 'video/webm',
+          durationMs: Date.now() - startedAt,
+        });
+      } catch (err) {
+        fail(err);
+      }
+    }
+
+    window.electron.onRecorderStop(stop);
+
+    async function getCaptureStream() {
+      try {
+        return await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            frameRate: { ideal: 10, max: 12 },
+            width: { ideal: 1600, max: 1600 },
+            height: { ideal: 900, max: 900 },
+          },
+          audio: false,
+        });
+      } catch (err) {
+        if (!sourceId) throw err;
+        return navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            mandatory: {
+              chromeMediaSource: 'desktop',
+              chromeMediaSourceId: sourceId,
+              maxFrameRate: 12,
+              maxWidth: 1600,
+              maxHeight: 900,
+            },
+          },
+        });
+      }
+    }
+
+    (async () => {
+      if (!id) throw new Error('Missing recording id.');
+      stream = await getCaptureStream();
+      const mimeType = pickMimeType();
+      recorder = new MediaRecorder(stream, {
+        mimeType: mimeType || undefined,
+        videoBitsPerSecond: 1500000,
+      });
+      stream.getVideoTracks()[0]?.addEventListener('ended', stop);
+      recorder.addEventListener('dataavailable', (event) => {
+        if (!event.data || event.data.size === 0) return;
+        writes = writes.then(async () => {
+          const bytes = await event.data.arrayBuffer();
+          await window.electron.writeRecordingChunk(id, bytes);
+        });
+      });
+      recorder.addEventListener('error', (event) => {
+        fail(event.error || new Error('MediaRecorder failed.'));
+      });
+      recorder.addEventListener('stop', async () => {
+        try {
+          stopTracks();
+          await writes;
+          await window.electron.finishRecording(id, {
+            mime: recorder.mimeType || 'video/webm',
+            durationMs: Date.now() - startedAt,
+          });
+        } catch (err) {
+          fail(err);
+        }
+      });
+      recorder.start(1500);
+      await window.electron.notifyRecordingStarted(id, {
+        mime: recorder.mimeType || 'video/webm',
+      });
+    })().catch(fail);
+  </script>
+</body>
+</html>

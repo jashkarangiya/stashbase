@@ -23,6 +23,11 @@ await esbuild.build({
     // dir at runtime — bundling it into one file breaks that resolution,
     // so load it from packaged node_modules like the native modules above.
     '@anthropic-ai/claude-agent-sdk',
+    // Uses createRequire at module top-level to locate the platform
+    // binary. Bundling it into our ESM output collides with the
+    // createRequire banner below, and the package is already included
+    // and unpacked for packaged apps.
+    '@vscode/ripgrep',
   ],
   banner: {
     js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",

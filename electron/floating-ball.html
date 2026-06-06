@@ -37,6 +37,12 @@
       cursor: grabbing;
     }
 
+    button.recording {
+      border-color: rgba(220, 38, 38, 0.35);
+      background: rgba(185, 28, 28, 0.94);
+      box-shadow: 0 12px 30px rgba(185, 28, 28, 0.32);
+    }
+
     svg {
       width: 24px;
       height: 24px;
@@ -55,6 +61,16 @@
     const button = document.getElementById('capture');
     let drag = null;
     let moved = false;
+    let recording = false;
+
+    function setRecordingStatus(status) {
+      recording = !!status?.active;
+      button.classList.toggle('recording', recording);
+      button.title = recording ? 'Recording. Click for controls.' : 'Screenshot';
+    }
+
+    window.electron.getRecordingStatus?.().then(setRecordingStatus).catch(() => {});
+    window.electron.onRecordingStatus?.(setRecordingStatus);
 
     button.addEventListener('pointerdown', async (event) => {
       const bounds = await window.electron.getFloatingBounds();

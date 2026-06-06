@@ -30,6 +30,10 @@ contextBridge.exposeInMainWorld('electron', {
   openSpaceWindow: (name) => ipcRenderer.invoke('window:openSpace', name),
   listCaptureWindows: () => ipcRenderer.invoke('capture:listWindows'),
   capture: (request) => ipcRenderer.invoke('capture:capture', request),
+  startWindowRecording: (request) => ipcRenderer.invoke('recording:startWindow', request),
+  stopRecording: () => ipcRenderer.invoke('recording:stop'),
+  getRecordingStatus: () => ipcRenderer.invoke('recording:status'),
+  revealRecording: (filePath) => ipcRenderer.invoke('recording:reveal', filePath),
   getCaptureSettings: () => ipcRenderer.invoke('capture:getSettings'),
   primeScreenRecordingPermission: async () => {
     if (!navigator.mediaDevices?.getDisplayMedia) {
@@ -78,6 +82,37 @@ contextBridge.exposeInMainWorld('electron', {
   /** Tell main an offered clipboard image was handled so it isn't
    *  re-offered on the next focus. */
   markClipboardHandled: (hash) => ipcRenderer.send('clipboard:markHandled', hash),
+  onRecordingCreated: (handler) => {
+    const wrapped = (_event, recording) => {
+      if (recording && typeof recording === 'object') handler(recording);
+    };
+    ipcRenderer.on('recording:created', wrapped);
+    return () => ipcRenderer.removeListener('recording:created', wrapped);
+  },
+  onRecordingError: (handler) => {
+    const wrapped = (_event, error) => {
+      if (typeof error === 'string' && error) handler({ kind: 'recording-failed', message: error, detail: error });
+      else if (error && typeof error === 'object') handler(error);
+    };
+    ipcRenderer.on('recording:error', wrapped);
+    return () => ipcRenderer.removeListener('recording:error', wrapped);
+  },
+  onRecordingStatus: (handler) => {
+    const wrapped = (_event, status) => {
+      if (status && typeof status === 'object') handler(status);
+    };
+    ipcRenderer.on('recording:status', wrapped);
+    return () => ipcRenderer.removeListener('recording:status', wrapped);
+  },
+  writeRecordingChunk: (id, arrayBuffer) => ipcRenderer.invoke('recording:writeChunk', id, Buffer.from(arrayBuffer)),
+  finishRecording: (id, info) => ipcRenderer.invoke('recording:finish', id, info),
+  failRecording: (id, detail) => ipcRenderer.invoke('recording:failed', id, detail),
+  notifyRecordingStarted: (id, info) => ipcRenderer.invoke('recording:started', id, info),
+  onRecorderStop: (handler) => {
+    const wrapped = () => handler();
+    ipcRenderer.on('recording:stop', wrapped);
+    return () => ipcRenderer.removeListener('recording:stop', wrapped);
+  },
   showCaptureMenu: () => ipcRenderer.send('floating:captureMenu'),
   getFloatingBounds: () => ipcRenderer.invoke('floating:getBounds'),
   setFloatingPosition: (point) => ipcRenderer.invoke('floating:setPosition', point),
