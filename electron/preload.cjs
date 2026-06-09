@@ -78,15 +78,14 @@ contextBridge.exposeInMainWorld('electron', {
   /** Tell main an offered clipboard image was handled so it isn't
    *  re-offered on the next focus. */
   markClipboardHandled: (hash) => ipcRenderer.send('clipboard:markHandled', hash),
-  showCaptureMenu: () => ipcRenderer.send('floating:captureMenu'),
-  /** Floating ball's default click: open the picker to record a window. */
-  startWindowRecording: () => ipcRenderer.send('floating:startWindowRecording'),
+  /** Rail "record" button: start recording (raises the source picker). */
+  startRecording: () => ipcRenderer.send('capture:startRecording'),
   /** Picker hands the chosen window id over to start recording it. */
   recordWindow: (sourceId) => ipcRenderer.invoke('recorder:recordWindow', sourceId),
-  /** Stop an in-progress screen recording (the floating ball doubles as
-   *  the stop button while recording). */
-  stopRecording: () => ipcRenderer.send('floating:stopRecording'),
-  /** Sidebar record button subscribes to recording-state pushes so it can
+  /** Stop an in-progress screen recording (the rail button toggles to a
+   *  stop control while recording). */
+  stopRecording: () => ipcRenderer.send('capture:stopRecording'),
+  /** Rail record button subscribes to recording-state pushes so it can
    *  swap the record icon for a red stop square. */
   onRecordingState: (handler) => {
     const wrapped = (_event, recording) => handler(Boolean(recording));
@@ -114,8 +113,6 @@ contextBridge.exposeInMainWorld('electron', {
   recorderResult: (payload) => ipcRenderer.send('recorder:result', payload),
   /** Recorder window reports a getUserMedia / getDisplayMedia / MediaRecorder failure. */
   recorderError: (message) => ipcRenderer.send('recorder:error', message),
-  getFloatingBounds: () => ipcRenderer.invoke('floating:getBounds'),
-  setFloatingPosition: (point) => ipcRenderer.invoke('floating:setPosition', point),
   selectCaptureRegion: (rect) => ipcRenderer.send('capture:region-selected', rect),
   cancelCaptureRegion: () => ipcRenderer.send('capture:region-cancel'),
   /** Subscribe to fullscreen-state pushes. macOS green-button fullscreen

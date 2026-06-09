@@ -7,7 +7,7 @@ interface CaptureBridge {
   /** Region screenshot → image saved + OCR'd (same path as other images). */
   capture?: (request: { mode: string }) => Promise<unknown>;
   /** Start screen recording → Gemini video understanding → note. */
-  startWindowRecording?: () => void;
+  startRecording?: () => void;
   stopRecording?: () => void;
   onRecordingState?: (handler: (recording: boolean) => void) => (() => void);
 }
@@ -48,7 +48,7 @@ export function ActivityBar() {
   function toggleRecording() {
     const bridge = captureBridge();
     if (recording) bridge?.stopRecording?.();
-    else bridge?.startWindowRecording?.();
+    else bridge?.startRecording?.();
   }
 
   /** VSCode rail semantics: clicking the *active* view toggles the

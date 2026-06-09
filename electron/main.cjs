@@ -9,7 +9,7 @@
  * The renderer is sandboxed; all main → renderer surfaces are exposed
  * through the narrow IPC bridge in preload.cjs.
  */
-const { app, BrowserWindow, Menu, clipboard, desktopCapturer, dialog, ipcMain, screen, session, shell, systemPreferences } = require('electron');
+const { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, screen, session, shell, systemPreferences } = require('electron');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -50,7 +50,6 @@ const MCP_ENTRY = app.isPackaged
 let serverProc = null;
 const mainWindows = new Set();
 let lastMainWindow = null;
-let floatingBallWindow = null;
 let capturePickerWindow = null;
 let recorderWindow = null;
 let recordingActive = false;
@@ -577,7 +576,7 @@ function internalCaptureSourceIds() {
   // the picker itself, the recorder, and the (legacy) floating ball.
   // Recording StashBase itself is never the intent and just clutters the
   // list (e.g. the main window titled after the current chat).
-  const own = [floatingBallWindow, capturePickerWindow, recorderWindow, ...mainWindows];
+  const own = [capturePickerWindow, recorderWindow, ...mainWindows];
   for (const win of own) {
     if (!win || win.isDestroyed()) continue;
     try {
@@ -671,37 +670,12 @@ async function listCaptureWindows() {
     }));
 }
 
-function hideFloatingBall() {
-  if (floatingBallWindow && !floatingBallWindow.isDestroyed()) floatingBallWindow.hide();
-}
-
-function keepFloatingBallAboveApps() {
-  if (!floatingBallWindow || floatingBallWindow.isDestroyed()) return;
-  floatingBallWindow.setAlwaysOnTop(true, process.platform === 'darwin' ? 'screen-saver' : 'floating');
-  if (process.platform === 'darwin') {
-    floatingBallWindow.setVisibleOnAllWorkspaces(true, {
-      visibleOnFullScreen: true,
-      skipTransformProcessType: true,
-    });
-  }
-  try { floatingBallWindow.moveTop(); } catch { /* best-effort */ }
-}
-
-function showFloatingBall() {
-  if (!floatingBallWindow || floatingBallWindow.isDestroyed()) return;
-  keepFloatingBallAboveApps();
-  floatingBallWindow.showInactive();
-  keepFloatingBallAboveApps();
-}
-
-async function withFloatingBallHidden(fn) {
-  hideFloatingBall();
+// Small settle delay before a screenshot grab so the triggering UI has
+// quiesced. (Historically this also hid the floating ball; the ball is
+// gone, the brief delay stays.)
+async function withCaptureSettle(fn) {
   await sleep(120);
-  try {
-    return await fn();
-  } finally {
-    showFloatingBall();
-  }
+  return fn();
 }
 
 function createRegionOverlay(display) {
@@ -800,18 +774,18 @@ async function runCapture(request = {}, event) {
   const mode = typeof request.mode === 'string' ? request.mode : 'screen';
   let capture = null;
   if (mode === 'screen') {
-    capture = await withFloatingBallHidden(() => captureScreenAtCursor());
+    capture = await withCaptureSettle(() => captureScreenAtCursor());
   } else if (mode === 'window') {
-    capture = await withFloatingBallHidden(() => captureWindowSource(request.sourceId));
+    capture = await withCaptureSettle(() => captureWindowSource(request.sourceId));
   } else if (mode === 'region') {
-    capture = await withFloatingBallHidden(() => captureRegionAtCursor());
+    capture = await withCaptureSettle(() => captureRegionAtCursor());
   } else {
     throw new Error(`Unsupported capture mode: ${mode}`);
   }
   if (!capture) return { ok: false, canceled: true };
   emitCaptureCreated(capture);
   const senderWindow = event ? BrowserWindow.fromWebContents(event.sender) : null;
-  if (senderWindow && senderWindow !== getMainTargetWindow() && senderWindow !== floatingBallWindow && !senderWindow.isDestroyed()) {
+  if (senderWindow && senderWindow !== getMainTargetWindow() && !senderWindow.isDestroyed()) {
     senderWindow.close();
   }
   return { ok: true };
@@ -925,7 +899,7 @@ function startRecordingSystemPicker() {
   const trigger = () => {
     if (recorderWindow && !recorderWindow.isDestroyed()) {
       // `true` injects a user gesture; getDisplayMedia needs transient
-      // activation, which the floating-ball click (a different renderer)
+      // activation, which the rail button's click (in a different renderer)
       // doesn't provide to this window.
       recorderWindow.webContents
         .executeJavaScript('window.startCapture && window.startCapture()', true)
@@ -974,69 +948,6 @@ function finishScreenRecording() {
   emitRecordingState(false);
   if (recorderWindow && !recorderWindow.isDestroyed()) recorderWindow.close();
   recorderWindow = null;
-}
-
-function showCaptureMenu() {
-  keepFloatingBallAboveApps();
-  const menu = Menu.buildFromTemplate([
-    { label: 'Full screen screenshot', click: () => { void safeRunCapture({ mode: 'screen' }); } },
-    { label: 'Window screenshot', click: () => createCapturePickerWindow() },
-    { label: 'Region screenshot', click: () => { void safeRunCapture({ mode: 'region' }); } },
-    { type: 'separator' },
-    { label: 'Record…', click: () => beginRecording() },
-  ]);
-  menu.popup({ window: floatingBallWindow || undefined });
-}
-
-function clampFloatingPosition(point) {
-  const bounds = floatingBallWindow && !floatingBallWindow.isDestroyed()
-    ? floatingBallWindow.getBounds()
-    : { width: 58, height: 58 };
-  const display = screen.getDisplayNearestPoint(point);
-  const area = display.workArea;
-  return {
-    x: Math.min(area.x + area.width - bounds.width, Math.max(area.x, point.x)),
-    y: Math.min(area.y + area.height - bounds.height, Math.max(area.y, point.y)),
-  };
-}
-
-function createFloatingBallWindow() {
-  if (floatingBallWindow && !floatingBallWindow.isDestroyed()) {
-    showFloatingBall();
-    return;
-  }
-  const display = screen.getPrimaryDisplay();
-  const x = display.workArea.x + display.workArea.width - 82;
-  const y = display.workArea.y + Math.round(display.workArea.height * 0.55);
-  floatingBallWindow = new BrowserWindow({
-    x,
-    y,
-    width: 58,
-    height: 58,
-    frame: false,
-    transparent: true,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    skipTaskbar: true,
-    alwaysOnTop: true,
-    hasShadow: false,
-    backgroundColor: '#00000000',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
-  keepFloatingBallAboveApps();
-  // Keep the ball out of screen recordings (it would otherwise show up
-  // when recording a whole screen). NSWindowSharingNone on macOS.
-  try { floatingBallWindow.setContentProtection(true); } catch { /* best-effort */ }
-  floatingBallWindow.loadFile(path.join(__dirname, 'floating-ball.html'));
-  floatingBallWindow.once('ready-to-show', () => showFloatingBall());
-  floatingBallWindow.on('closed', () => { floatingBallWindow = null; });
 }
 
 // `mode === 'record'` loads the picker in window-recording mode (it then
@@ -1167,7 +1078,6 @@ async function createWindow(initialSpace) {
     mainWindows.delete(win);
     if (lastMainWindow === win) lastMainWindow = null;
     if (mainWindows.size === 0) {
-      hideFloatingBall();
       if (process.platform !== 'darwin') app.quit();
     }
   });
@@ -1297,28 +1207,9 @@ ipcMain.on('clipboard:markHandled', (_event, hash) => {
   if (typeof hash === 'string' && hash) lastClipboardOfferHash = hash;
 });
 
-ipcMain.handle('floating:getBounds', () => {
-  if (!floatingBallWindow || floatingBallWindow.isDestroyed()) return null;
-  return floatingBallWindow.getBounds();
-});
-
-ipcMain.handle('floating:setPosition', (_event, point) => {
-  if (!floatingBallWindow || floatingBallWindow.isDestroyed()) return false;
-  const x = Math.round(Number(point?.x));
-  const y = Math.round(Number(point?.y));
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
-  const next = clampFloatingPosition({ x, y });
-  floatingBallWindow.setPosition(next.x, next.y, false);
-  return true;
-});
-
-ipcMain.on('floating:captureMenu', () => {
-  showCaptureMenu();
-});
-
-// Floating-ball default action: start recording (system picker on macOS
-// 15+, our own windows-only picker below that).
-ipcMain.on('floating:startWindowRecording', () => {
+// Rail "record" button: start recording (system picker on macOS 15+, our
+// own windows-only picker below that).
+ipcMain.on('capture:startRecording', () => {
   beginRecording();
 });
 
@@ -1352,7 +1243,7 @@ ipcMain.on('recorder:canceled', (event) => {
   recorderWindow = null;
 });
 
-ipcMain.on('floating:stopRecording', () => {
+ipcMain.on('capture:stopRecording', () => {
   stopScreenRecording();
 });
 
