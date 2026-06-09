@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react';
-import { FilesViewIcon, RecordIcon, RegionCaptureIcon, SearchIcon, SettingsIcon, StopIcon } from '../icons';
+import { FilesViewIcon, RecordIcon, SearchIcon, SettingsIcon, StopIcon } from '../icons';
 import { useApp } from '../store/AppContext';
 import { openSettings } from './SettingsModal';
 
 interface CaptureBridge {
-  /** Region screenshot → image saved + OCR'd (same path as other images). */
-  capture?: (request: { mode: string }) => Promise<unknown>;
   /** Start screen recording → Gemini video understanding → note. */
   startRecording?: () => void;
   stopRecording?: () => void;
@@ -40,10 +38,6 @@ export function ActivityBar() {
   const [recording, setRecording] = useState(false);
   const isElectron = !!captureBridge();
   useEffect(() => captureBridge()?.onRecordingState?.(setRecording), []);
-
-  function captureRegion() {
-    void captureBridge()?.capture?.({ mode: 'region' });
-  }
 
   function toggleRecording() {
     const bridge = captureBridge();
@@ -87,28 +81,18 @@ export function ActivityBar() {
       >
         <SearchIcon />
       </ActivityIcon>
-      {/* Capture group — desktop only. Region screenshot (still → OCR) on
-          top, video understanding (recording → Gemini) below. */}
+      {/* Screen recording — desktop only. Video understanding (recording →
+          Gemini). Doubles as the stop control while recording. */}
       {isElectron && (
-        <>
-          <button
-            type="button"
-            className="activity-bar-btn"
-            onClick={captureRegion}
-            title="Region screenshot"
-          >
-            <RegionCaptureIcon />
-          </button>
-          <button
-            type="button"
-            className={'activity-bar-btn' + (recording ? ' recording' : '')}
-            onClick={toggleRecording}
-            title={recording ? 'Stop recording' : 'Record screen (video understanding)'}
-            aria-pressed={recording}
-          >
-            {recording ? <StopIcon /> : <RecordIcon />}
-          </button>
-        </>
+        <button
+          type="button"
+          className={'activity-bar-btn' + (recording ? ' recording' : '')}
+          onClick={toggleRecording}
+          title={recording ? 'Stop recording' : 'Record screen (video understanding)'}
+          aria-pressed={recording}
+        >
+          {recording ? <StopIcon /> : <RecordIcon />}
+        </button>
       )}
       {/* Settings pinned to the bottom of the rail, VSCode-style. The
           spacer above (margin-top:auto on this button) pushes it down

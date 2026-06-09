@@ -29,7 +29,6 @@ contextBridge.exposeInMainWorld('electron', {
   configureMcp: (client) => ipcRenderer.invoke('mcp:configure', client),
   openSpaceWindow: (name) => ipcRenderer.invoke('window:openSpace', name),
   listCaptureWindows: () => ipcRenderer.invoke('capture:listWindows'),
-  capture: (request) => ipcRenderer.invoke('capture:capture', request),
   getCaptureSettings: () => ipcRenderer.invoke('capture:getSettings'),
   primeScreenRecordingPermission: async () => {
     if (!navigator.mediaDevices?.getDisplayMedia) {
@@ -127,8 +126,6 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.on('recording:label', wrapped);
     return () => ipcRenderer.removeListener('recording:label', wrapped);
   },
-  selectCaptureRegion: (rect) => ipcRenderer.send('capture:region-selected', rect),
-  cancelCaptureRegion: () => ipcRenderer.send('capture:region-cancel'),
   /** Subscribe to fullscreen-state pushes. macOS green-button fullscreen
    *  hides traffic lights; the renderer uses this to toggle the body
    *  class that controls the chrome-strip left padding. */

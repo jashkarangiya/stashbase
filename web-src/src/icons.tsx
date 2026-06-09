@@ -364,17 +364,6 @@ export function SettingsIcon({ className }: IconProps) {
   );
 }
 
-/** Region screenshot — crop marks (Lucide `crop`). Top of the two capture
- *  buttons in the rail (region still → OCR); video understanding sits below. */
-export function RegionCaptureIcon({ className }: IconProps) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" strokeWidth={1.6} {...stroke}>
-      <path d="M7 3v12a2 2 0 0 0 2 2h12" />
-      <path d="M17 21V9a2 2 0 0 0-2-2H3" />
-    </svg>
-  );
-}
-
 /** Start a visual capture — viewfinder corner marks framing the classic
  *  record symbol (ring + filled dot): "frame this region and capture it".
  *  The brackets carry the screen-capture metaphor, the record dot the

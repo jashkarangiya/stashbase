@@ -131,7 +131,7 @@
 </head>
 <body>
   <header>
-    <h1 id="title">Choose a window to capture</h1>
+    <h1 id="title">Choose a window to record</h1>
     <button id="refresh" type="button">Refresh</button>
   </header>
   <div id="error" hidden></div>
@@ -145,14 +145,10 @@
     const hintBox = document.getElementById('hint');
     const refresh = document.getElementById('refresh');
 
-    // `#record` → pick a window to record; otherwise pick one to screenshot.
-    const RECORD_MODE = location.hash === '#record';
-    if (RECORD_MODE) {
-      document.getElementById('title').textContent = 'Choose a window to record';
-      document.title = 'Choose a window to record';
-      hintBox.textContent = 'Fullscreen apps aren’t listed on this macOS — exit fullscreen (maximize) to record them. (macOS 15+ adds direct fullscreen capture.)';
-      hintBox.hidden = false;
-    }
+    // This picker is record-only (the screenshot path was removed).
+    document.title = 'Choose a window to record';
+    hintBox.textContent = 'Fullscreen apps aren’t listed on this macOS — exit fullscreen (maximize) to record them. (macOS 15+ adds direct fullscreen capture.)';
+    hintBox.hidden = false;
 
     function showError(message) {
       errorBox.textContent = message;
@@ -174,12 +170,10 @@
       button.querySelector('.name').textContent = source.name;
       button.addEventListener('click', async () => {
         button.disabled = true;
-        const result = RECORD_MODE
-          ? await window.electron.recordWindow(source.id)
-          : await window.electron.capture({ mode: 'window', sourceId: source.id });
+        const result = await window.electron.recordWindow(source.id);
         if (!result || result.ok !== true) {
           button.disabled = false;
-          showError(result?.error || (RECORD_MODE ? 'Recording failed.' : 'Window capture failed.'));
+          showError(result?.error || 'Recording failed.');
         }
       });
       grid.appendChild(button);

@@ -526,11 +526,6 @@ async function primeScreenRecordingPermission() {
   }
 }
 
-function captureFilename(mode) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return `screenshot-${mode}-${stamp}.png`;
-}
-
 function getCaptureSettings() {
   return {
     permission: getScreenPermission(),
@@ -597,67 +592,6 @@ function internalCaptureSourceIds() {
   return ids;
 }
 
-function findSourceByDisplay(sources, display) {
-  const id = String(display.id);
-  return sources.find((source) => String(source.display_id) === id) || sources[0] || null;
-}
-
-async function captureDisplay(display) {
-  const scale = display.scaleFactor || 1;
-  const sources = await desktopCapturer.getSources({
-    types: ['screen'],
-    thumbnailSize: {
-      width: Math.round(display.bounds.width * scale),
-      height: Math.round(display.bounds.height * scale),
-    },
-  });
-  const source = findSourceByDisplay(sources, display);
-  if (!source || source.thumbnail.isEmpty()) {
-    throw new Error('No screen capture source is available.');
-  }
-  return { image: source.thumbnail, source };
-}
-
-async function captureScreenAtCursor() {
-  const point = screen.getCursorScreenPoint();
-  const display = screen.getDisplayNearestPoint(point);
-  const { image, source } = await captureDisplay(display);
-  const size = image.getSize();
-  return {
-    ok: true,
-    mode: 'screen',
-    mime: 'image/png',
-    dataUrl: image.toDataURL(),
-    width: size.width,
-    height: size.height,
-    sourceTitle: source.name || 'Screen',
-    filename: captureFilename('screen'),
-  };
-}
-
-async function captureWindowSource(sourceId) {
-  if (typeof sourceId !== 'string' || !sourceId) throw new Error('No window was selected.');
-  const sources = await desktopCapturer.getSources({
-    types: ['window'],
-    thumbnailSize: { width: 2400, height: 1800 },
-  });
-  const source = sources.find((item) => item.id === sourceId);
-  if (!source || source.thumbnail.isEmpty()) {
-    throw new Error('The selected window is no longer available.');
-  }
-  const size = source.thumbnail.getSize();
-  return {
-    ok: true,
-    mode: 'window',
-    mime: 'image/png',
-    dataUrl: source.thumbnail.toDataURL(),
-    width: size.width,
-    height: size.height,
-    sourceTitle: source.name || 'Window',
-    filename: captureFilename('window'),
-  };
-}
-
 async function listCaptureWindows() {
   const internalIds = internalCaptureSourceIds();
   const sources = await desktopCapturer.getSources({
@@ -676,127 +610,6 @@ async function listCaptureWindows() {
       // picker for those).
       thumbnail: source.thumbnail.isEmpty() ? '' : source.thumbnail.toDataURL(),
     }));
-}
-
-// Small settle delay before a screenshot grab so the triggering UI has
-// quiesced. (Historically this also hid the floating ball; the ball is
-// gone, the brief delay stays.)
-async function withCaptureSettle(fn) {
-  await sleep(120);
-  return fn();
-}
-
-function createRegionOverlay(display) {
-  return new Promise((resolve) => {
-    const overlay = new BrowserWindow({
-      x: display.bounds.x,
-      y: display.bounds.y,
-      width: display.bounds.width,
-      height: display.bounds.height,
-      frame: false,
-      transparent: true,
-      resizable: false,
-      movable: false,
-      minimizable: false,
-      maximizable: false,
-      fullscreenable: false,
-      skipTaskbar: true,
-      alwaysOnTop: true,
-      hasShadow: false,
-      backgroundColor: '#00000000',
-      webPreferences: {
-        preload: path.join(__dirname, 'preload.cjs'),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: false,
-      },
-    });
-
-    overlay.setAlwaysOnTop(true, 'screen-saver');
-    if (process.platform === 'darwin') overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-
-    let settled = false;
-    function settle(value) {
-      if (settled) return;
-      settled = true;
-      ipcMain.removeListener('capture:region-selected', onSelected);
-      ipcMain.removeListener('capture:region-cancel', onCancel);
-      if (overlay.isDestroyed()) {
-        resolve(value);
-        return;
-      }
-      overlay.once('closed', () => resolve(value));
-      overlay.close();
-    }
-    function onSelected(event, rect) {
-      if (event.sender !== overlay.webContents) return;
-      settle(rect && typeof rect === 'object' ? rect : null);
-    }
-    function onCancel(event) {
-      if (event.sender !== overlay.webContents) return;
-      settle(null);
-    }
-    ipcMain.on('capture:region-selected', onSelected);
-    ipcMain.on('capture:region-cancel', onCancel);
-    overlay.on('closed', () => settle(null));
-
-    overlay.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(regionOverlayHtml())}`);
-  });
-}
-
-async function captureRegionAtCursor() {
-  const point = screen.getCursorScreenPoint();
-  const display = screen.getDisplayNearestPoint(point);
-  const rect = await createRegionOverlay(display);
-  if (!rect) return null;
-  const x = Math.max(0, Number(rect.x) || 0);
-  const y = Math.max(0, Number(rect.y) || 0);
-  const width = Math.max(1, Number(rect.width) || 0);
-  const height = Math.max(1, Number(rect.height) || 0);
-  if (width < 4 || height < 4) return null;
-  await sleep(120);
-  const { image, source } = await captureDisplay(display);
-  const imageSize = image.getSize();
-  const scaleX = imageSize.width / display.bounds.width;
-  const scaleY = imageSize.height / display.bounds.height;
-  const cropped = image.crop({
-    x: Math.round(x * scaleX),
-    y: Math.round(y * scaleY),
-    width: Math.round(width * scaleX),
-    height: Math.round(height * scaleY),
-  });
-  const size = cropped.getSize();
-  return {
-    ok: true,
-    mode: 'region',
-    mime: 'image/png',
-    dataUrl: cropped.toDataURL(),
-    width: size.width,
-    height: size.height,
-    sourceTitle: source.name || 'Region',
-    filename: captureFilename('region'),
-  };
-}
-
-async function runCapture(request = {}, event) {
-  const mode = typeof request.mode === 'string' ? request.mode : 'screen';
-  let capture = null;
-  if (mode === 'screen') {
-    capture = await withCaptureSettle(() => captureScreenAtCursor());
-  } else if (mode === 'window') {
-    capture = await withCaptureSettle(() => captureWindowSource(request.sourceId));
-  } else if (mode === 'region') {
-    capture = await withCaptureSettle(() => captureRegionAtCursor());
-  } else {
-    throw new Error(`Unsupported capture mode: ${mode}`);
-  }
-  if (!capture) return { ok: false, canceled: true };
-  emitCaptureCreated(capture);
-  const senderWindow = event ? BrowserWindow.fromWebContents(event.sender) : null;
-  if (senderWindow && senderWindow !== getMainTargetWindow() && !senderWindow.isDestroyed()) {
-    senderWindow.close();
-  }
-  return { ok: true };
 }
 
 // Turn a raw capture/recording failure into the structured error the
@@ -822,24 +635,11 @@ function classifyCaptureError(detail) {
       };
 }
 
-async function safeRunCapture(request = {}, event) {
-  try {
-    return await runCapture(request, event);
-  } catch (err) {
-    const detail = err && typeof err.message === 'string' ? err.message : String(err);
-    const error = classifyCaptureError(detail);
-    emitCaptureError(error);
-    return { ok: false, error: detail, kind: error.kind };
-  }
-}
-
 // --- Screen recording --------------------------------------------------
-// Unlike screenshots (a still desktopCapturer thumbnail grabbed in this
-// process), recording needs MediaRecorder, which only exists in a
-// renderer. So a hidden recorder window (electron/recorder.html) does the
-// getUserMedia + MediaRecorder work; main just picks the display, starts
-// it, and on stop forwards the webm to the main window via the same
-// `capture:created` path screenshots use.
+// Recording needs MediaRecorder, which only exists in a renderer. So a
+// hidden recorder window (electron/recorder.html) does the getUserMedia +
+// MediaRecorder work; main just picks the display, starts it, and on stop
+// forwards the webm to the main window via the `capture:created` path.
 
 function recordingFilename() {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -1301,63 +1101,6 @@ function createCapturePickerWindow(mode) {
   capturePickerWindow.on('closed', () => { capturePickerWindow = null; });
 }
 
-function regionOverlayHtml() {
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <style>
-    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; cursor: crosshair; user-select: none; }
-    body { background: rgba(15, 23, 42, 0.22); }
-    #hint { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); padding: 8px 12px; border-radius: 8px; background: rgba(15, 23, 42, 0.86); color: white; font: 13px system-ui, sans-serif; }
-    #box { position: fixed; border: 2px solid #38bdf8; background: rgba(56, 189, 248, 0.16); box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.28); display: none; }
-  </style>
-</head>
-<body>
-  <div id="hint">Drag to select a screenshot region. Press Esc to cancel.</div>
-  <div id="box"></div>
-  <script>
-    const box = document.getElementById('box');
-    let start = null;
-    let current = null;
-    function rect() {
-      const x = Math.min(start.x, current.x);
-      const y = Math.min(start.y, current.y);
-      const width = Math.abs(current.x - start.x);
-      const height = Math.abs(current.y - start.y);
-      return { x, y, width, height };
-    }
-    function render() {
-      if (!start || !current) return;
-      const r = rect();
-      box.style.display = 'block';
-      box.style.left = r.x + 'px';
-      box.style.top = r.y + 'px';
-      box.style.width = r.width + 'px';
-      box.style.height = r.height + 'px';
-    }
-    window.addEventListener('pointerdown', (event) => {
-      start = { x: event.clientX, y: event.clientY };
-      current = start;
-      render();
-    });
-    window.addEventListener('pointermove', (event) => {
-      if (!start) return;
-      current = { x: event.clientX, y: event.clientY };
-      render();
-    });
-    window.addEventListener('pointerup', () => {
-      if (!start || !current) return window.electron.cancelCaptureRegion();
-      window.electron.selectCaptureRegion(rect());
-    });
-    window.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') window.electron.cancelCaptureRegion();
-    });
-  </script>
-</body>
-</html>`;
-}
-
 async function createWindow(initialSpace) {
   try {
     await ensureServer();
@@ -1504,10 +1247,6 @@ ipcMain.handle('window:openSpace', async (_e, name) => {
 });
 
 ipcMain.handle('capture:listWindows', async () => listCaptureWindows());
-
-ipcMain.handle('capture:capture', async (event, request = {}) => {
-  return safeRunCapture(request, event);
-});
 
 ipcMain.handle('capture:getSettings', async () => getCaptureSettings());
 
