@@ -436,6 +436,10 @@
       line-height: 1.5;
     }
     .agent-ended {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
       border-top: 1px solid var(--border);
       padding: 8px 12px;
     }

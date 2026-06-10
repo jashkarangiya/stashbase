@@ -118,6 +118,7 @@ class AgentSession {
     const cwd = getCurrentSpace();
     if (!cwd) {
       this.send({ t: 'error', message: 'No space open.' });
+      this.send({ t: 'exit' });
       return;
     }
     try {
@@ -155,6 +156,7 @@ class AgentSession {
       });
     } catch (err: unknown) {
       this.send({ t: 'error', message: errorMessage(err) });
+      this.send({ t: 'exit' });
       return;
     }
     this.send({ t: 'ready' });

@@ -26,7 +26,7 @@ import { clearRecord, listByStatus, readAll as readConversionStatus } from '../c
 import { getFsChangeCounter } from '../watcher.ts';
 import { getDaemon } from '../mfs-daemon.ts';
 import { clearSnapshotWarning, getSnapshotWarning, indexer } from '../state.ts';
-import { noteSelfWrite } from '../watcher.ts';
+import { noteSelfWrite, noteTreeChanged } from '../watcher.ts';
 import {
   getKbRules,
   getKbInfo,
@@ -537,9 +537,9 @@ export function mount(app: express.Express): void {
   // create / update notes anywhere in the KB. Default `overwrite=false`
   // returns 409 when the target exists — an agent must opt in to
   // replace user content, matching 02-storage's "agent writes need
-  // explicit overwrite" rule. Indexes the file synchronously so a
-  // follow-up `search_kb` sees it immediately. Creates parent
-  // directories as needed.
+  // explicit overwrite" rule. The disk write returns immediately; the
+  // semantic index updates in the background so generated peer files
+  // don't hang on embedding latency / key problems / large content.
   app.put('/api/kb/file/*', async (req, res) => {
     try {
       const rel = (req.params as any)[0] as string;
@@ -577,13 +577,16 @@ export function mount(app: express.Express): void {
         log.warn(`write ${rel}: resource extraction failed: ${errorMessage(err)}`);
       }
       // Mark before write so the watcher swallows the resulting fs
-      // event — we've already upserted below; another sync would just
-      // be a wasted scan_diff round-trip.
+      // event. We bump treeVersion manually below and fire indexing in
+      // the background; a watcher-triggered sync would just duplicate
+      // that work.
       noteSelfWrite(abs);
       fs.writeFileSync(abs, finalContent);
-      try { await indexer.upsertFile(rel, finalContent); }
-      catch (err) { log.warn(`upsert ${rel} failed after write: ${errorMessage(err)}`); }
-      res.json({ path: rel });
+      noteTreeChanged();
+      res.json({ path: rel, indexDeferred: true });
+      void indexer.upsertFile(rel, finalContent).catch((err) => {
+        log.warn(`upsert ${rel} failed after write: ${errorMessage(err)}`);
+      });
     } catch (err: unknown) {
       sendError(res, err);
     }

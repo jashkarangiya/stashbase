@@ -583,9 +583,10 @@ const BUILTIN_TOOLS = [
       name: 'write_file',
       description:
         'Write a file to the knowledge base at a kbRoot-relative path (e.g. ' +
-        '`cs183b/lecture-01.md`). Creates parent directories as needed and indexes ' +
-        'the file synchronously — a follow-up `search_kb` sees the new content ' +
-        'immediately. Default `overwrite=false` returns an error if the target ' +
+        '`cs183b/lecture-01.md`). Creates parent directories as needed and updates ' +
+        'the semantic index in the background so generated notes return quickly. ' +
+        'Call `index_status` if you need to wait until the new content is searchable. ' +
+        'Default `overwrite=false` returns an error if the target ' +
         'exists; pass `overwrite=true` to replace user content. Intended for ' +
         'markdown / HTML notes; binary formats can be written but won\'t enter the ' +
         'index. The first path segment is the space name (must be an existing space). ' +
@@ -904,13 +905,15 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         }
         fs.mkdirSync(path.dirname(abs), { recursive: true });
         fs.writeFileSync(abs, content);
-        const { indexer, ready } = getEmbedded();
-        await ready;
-        await indexer.upsertFile(kbRel, content);
+        void (async () => {
+          const { indexer, ready } = getEmbedded();
+          await ready;
+          await indexer.upsertFile(kbRel, content);
+        })().catch(() => { /* stdio server cannot log; index_status/update_index can reconcile */ });
       },
     );
     return {
-      content: [{ type: 'text', text: JSON.stringify({ ok: true, path: kbRel }, null, 2) }],
+      content: [{ type: 'text', text: JSON.stringify({ ok: true, path: kbRel, indexDeferred: true }, null, 2) }],
     };
   }
 
