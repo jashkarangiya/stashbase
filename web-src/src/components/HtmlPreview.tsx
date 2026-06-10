@@ -7,11 +7,16 @@ import { useApp, type MatchInfo } from '../store/AppContext';
  * resolves relative references in the page (`<img src="X_files/foo.png">`)
  * to the sibling files inside the space dir.
  *
- * Sandbox = `allow-scripts` only (no same-origin) — pages we accept
- * may include inline scripts that fill in templated views (Wikipedia
- * snapshots, arxiv reports). The server-injected scroll-bootstrap
- * listens for postMessage from the parent (anchor scroll + cross-file
- * link forwarding).
+ * Sandbox = `allow-scripts allow-same-origin` — `allow-scripts` lets
+ * inline scripts run (Wikipedia snapshots, arxiv reports, self-contained
+ * bundler apps); `allow-same-origin` gives the page a real localhost
+ * origin so that `URL.createObjectURL` produces loadable `blob:http://`
+ * URLs (without it, blob URLs are `blob:null/…` which Electron/Chromium
+ * refuses to load as `<script src>`). For a local desktop app whose HTML
+ * content is user-controlled, this tradeoff mirrors what Obsidian and
+ * VS Code do. The server-injected scroll-bootstrap listens for
+ * postMessage from the parent (anchor scroll + cross-file link
+ * forwarding).
  *
  * Auto-reload on external edits (Claude Code edits the file from the
  * chat panel) is the reason for the cache-buster query string on
@@ -162,7 +167,7 @@ export function HtmlPreview({ name }: { name: string }) {
         ref={frameRef}
         id="previewFrame"
         className="html-viewer"
-        sandbox="allow-scripts"
+        sandbox="allow-scripts allow-same-origin"
         src={src}
         title="HTML preview"
         onLoad={onLoad}
