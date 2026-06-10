@@ -600,7 +600,10 @@ export async function setKbRootConfirming(
     return await api.setKbRoot(path, { confirmNonEmpty: false });
   } catch (err) {
     if (err instanceof ApiError && err.status === 409) {
-      const ok = await confirm('That directory is not empty. Use it as the root folder anyway?');
+      const ok = await confirm(
+        'That directory is not empty. StashBase will treat each direct child folder as a space, ' +
+        'and supported files inside opened spaces may be indexed. Use a dedicated StashBase folder unless this is already a knowledge base root. Continue?',
+      );
       if (!ok) return null;
       return await api.setKbRoot(path, { confirmNonEmpty: true });
     }

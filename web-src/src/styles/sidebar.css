@@ -263,6 +263,11 @@
       border-radius: 6px;
       font-size: 12px;
       line-height: 1.45;
+      max-width: 100%;
+      max-height: min(180px, 32vh);
+      overflow-y: auto;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
     .modal-warning {
@@ -273,6 +278,11 @@
       border-radius: 6px;
       font-size: 12px;
       line-height: 1.45;
+      max-width: 100%;
+      max-height: min(180px, 32vh);
+      overflow-y: auto;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
     .mcp-client-list {

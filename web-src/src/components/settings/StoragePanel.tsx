@@ -47,6 +47,14 @@ export function StoragePanel() {
   const [migrationError, setMigrationError] = useState<string | null>(null);
 
   useEffect(() => {
+    const locked = busy || migration !== null;
+    window.dispatchEvent(new CustomEvent('stashbase-settings-lock', { detail: { locked } }));
+    return () => {
+      window.dispatchEvent(new CustomEvent('stashbase-settings-lock', { detail: { locked: false } }));
+    };
+  }, [busy, migration]);
+
+  useEffect(() => {
     void api.getKbRoot()
       .then((r) => { setKbRoot(r.path); setSavedRoot(r.path); })
       .catch((err) => setError(errorMessage(err)));
@@ -77,9 +85,11 @@ export function StoragePanel() {
     setKbRoot(path);
     setSavedRoot(path);
     actions.goHome();
-    await actions.bootstrap();
     setSaved(true);
     setNotice(warnings && warnings.length ? warnings.join(' ') : null);
+    void actions.bootstrap().catch((err) => {
+      setNotice(`Root folder updated, but refresh failed: ${errorMessage(err)}`);
+    });
   }
 
   /** Switch the root without moving anything. The target may be

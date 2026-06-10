@@ -29,6 +29,10 @@ interface OpenDetail {
   section?: SettingsSection;
 }
 
+interface LockDetail {
+  locked?: boolean;
+}
+
 /** Fire from anywhere to open the Settings modal. Optional `section`
  *  picks the initial pane (default: storage). */
 export function openSettings(section?: SettingsSection): void {
@@ -42,25 +46,44 @@ export function openSettings(section?: SettingsSection): void {
 export function SettingsPortal() {
   const [open, setOpen] = useState(false);
   const [section, setSection] = useState<SettingsSection>('storage');
+  const [interactionLocked, setInteractionLocked] = useState(false);
 
   useEffect(() => {
     function onOpen(e: Event) {
       const detail = (e as CustomEvent<OpenDetail>).detail;
-      if (detail?.section) setSection(detail.section);
+      if (detail?.section && !interactionLocked) setSection(detail.section);
       setOpen(true);
     }
+    function onLock(e: Event) {
+      const detail = (e as CustomEvent<LockDetail>).detail;
+      setInteractionLocked(detail?.locked === true);
+    }
     window.addEventListener('stashbase-open-settings', onOpen);
-    return () => window.removeEventListener('stashbase-open-settings', onOpen);
-  }, []);
+    window.addEventListener('stashbase-settings-lock', onLock);
+    return () => {
+      window.removeEventListener('stashbase-open-settings', onOpen);
+      window.removeEventListener('stashbase-settings-lock', onLock);
+    };
+  }, [interactionLocked]);
 
-  return open ? <SettingsModal initialSection={section} onClose={() => setOpen(false)} /> : null;
+  return open ? (
+    <SettingsModal
+      initialSection={section}
+      interactionLocked={interactionLocked}
+      onClose={() => {
+        if (!interactionLocked) setOpen(false);
+      }}
+    />
+  ) : null;
 }
 
 function SettingsModal({
   initialSection,
+  interactionLocked,
   onClose,
 }: {
   initialSection: SettingsSection;
+  interactionLocked: boolean;
   onClose: () => void;
 }) {
   const [current, setCurrent] = useState<SettingsSection>(initialSection);
@@ -68,17 +91,17 @@ function SettingsModal({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && !interactionLocked) {
         e.preventDefault();
         onClose();
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [interactionLocked, onClose]);
 
   return (
-    <div className="modal-veil" onClick={onClose}>
+    <div className="modal-veil" onClick={interactionLocked ? undefined : onClose}>
       <div
         className="modal-card settings-card"
         onClick={(e) => e.stopPropagation()}
@@ -90,6 +113,7 @@ function SettingsModal({
             className="settings-close"
             aria-label="Close settings"
             onClick={onClose}
+            disabled={interactionLocked}
           >×</button>
         </div>
         <div className="settings-body">
@@ -101,6 +125,7 @@ function SettingsModal({
                 role="tab"
                 aria-selected={s.id === current}
                 className={'settings-nav-item' + (s.id === current ? ' current' : '')}
+                disabled={interactionLocked}
                 onClick={() => setCurrent(s.id)}
               >{s.label}</button>
             ))}

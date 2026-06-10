@@ -235,7 +235,6 @@ class MfsDaemon extends EventEmitter {
   }
 
   async close(): Promise<void> {
-    if (!this.proc) return;
     const proc = this.proc;
     this.proc = null;
     this.readyP = null;
@@ -245,6 +244,7 @@ class MfsDaemon extends EventEmitter {
     this.pending.clear();
     const closeErr = new Error('MFS daemon closing');
     for (const slot of inflight) slot.reject(closeErr);
+    if (!proc) return;
     proc.stdin.end();
     // Escalation ladder: graceful EOF → SIGTERM → SIGKILL. The Python
     // signal handler can't run while the main thread is blocked inside

@@ -1421,6 +1421,11 @@
       background: var(--hover);
     }
 
+    .settings-close:disabled {
+      cursor: default;
+      opacity: 0.45;
+    }
+
     .settings-body {
       display: grid;
       grid-template-columns: 180px 1fr;
@@ -1452,6 +1457,15 @@
 
     .settings-nav-item:hover {
       background: var(--hover);
+    }
+
+    .settings-nav-item:disabled {
+      cursor: default;
+      opacity: 0.55;
+    }
+
+    .settings-nav-item:disabled:hover {
+      background: transparent;
     }
 
     .settings-nav-item.current {

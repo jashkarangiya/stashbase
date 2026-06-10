@@ -21,6 +21,7 @@
  * space prefix before handing names to `files.ts:readText` (which
  * still operates space-relative).
  */
+import path from 'node:path';
 import { reclaimInterruptedConversions } from './conversion.ts';
 import { readText } from './files.ts';
 import { discoverNewImages } from './image.ts';
@@ -29,7 +30,7 @@ import { discoverNewVideos } from './video.ts';
 import { fromKbRel, getCurrentSpace } from './space.ts';
 import type { Indexer } from './indexer.ts';
 import { logger, errorMessage } from './log.ts';
-import { shouldIndexFilePath } from './indexable.ts';
+import { indexableFileSizeError, shouldIndexFilePath } from './indexable.ts';
 
 const log = logger('sync');
 
@@ -84,6 +85,11 @@ export async function syncIndex(indexer: Indexer, space: string): Promise<SyncRe
       const spaceRel = fromKbRel(r.new);
       if (spaceRel == null) {
         failed.push({ name: r.new, error: 'rename target not under current space' });
+        continue;
+      }
+      const tooLarge = indexableSizeError(spaceRel);
+      if (tooLarge) {
+        failed.push({ name: r.new, error: tooLarge });
         continue;
       }
       const content = readText(spaceRel);
@@ -206,6 +212,13 @@ async function indexOne(
     try { await indexer.deleteFile(kbRel); } catch { /* best-effort stale cleanup */ }
     return false;
   }
+  const tooLarge = indexableSizeError(spaceRel);
+  if (tooLarge) {
+    try { await indexer.deleteFile(kbRel); } catch { /* best-effort stale cleanup */ }
+    failed.push({ name: kbRel, error: tooLarge });
+    log.warn(`skipped ${kbRel}: ${tooLarge}`);
+    return false;
+  }
   const content = readText(spaceRel);
   if (content == null) {
     failed.push({ name: kbRel, error: 'read returned null' });
@@ -220,4 +233,10 @@ async function indexOne(
     log.warn(`failed ${kbRel}: ${msg}`);
     return false;
   }
+}
+
+function indexableSizeError(spaceRel: string): string | null {
+  const root = getCurrentSpace();
+  if (!root) return 'no space open';
+  return indexableFileSizeError(path.join(root, spaceRel));
 }

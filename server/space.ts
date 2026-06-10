@@ -20,6 +20,7 @@ import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { logger, errorMessage } from './log.ts';
 import { moveDirectory } from './fs-move.ts';
+import { isIndexExcludedDirName } from './indexable.ts';
 
 const log = logger('space');
 
@@ -265,11 +266,13 @@ export async function setKbRoot(
     }
   }
   currentSpaces.clear();
-  await Promise.all(kbRootListeners.map(async (fn) => {
-    try { await fn(root); } catch (err) {
-      log.warn(`kbRoot listener threw: ${(err as any)?.message ?? err}`);
-    }
-  }));
+  for (const fn of kbRootListeners) {
+    void Promise.resolve()
+      .then(() => fn(root))
+      .catch((err) => {
+        log.warn(`kbRoot listener threw: ${(err as any)?.message ?? err}`);
+      });
+  }
   return { warnings };
 }
 
@@ -353,7 +356,11 @@ function listSpaceNamesUnder(root: string): string[] {
   try { entries = fs.readdirSync(root, { withFileTypes: true }); }
   catch { return []; }
   return entries
-    .filter((e) => e.isDirectory() && !e.name.startsWith('.') && validateSpaceName(e.name) == null)
+    .filter((e) =>
+      e.isDirectory() &&
+      !e.name.startsWith('.') &&
+      !isIndexExcludedDirName(e.name) &&
+      validateSpaceName(e.name) == null)
     .map((e) => e.name)
     .sort();
 }
