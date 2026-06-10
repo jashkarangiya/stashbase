@@ -106,9 +106,11 @@ export function saveBytes(relPath: string, bytes: Buffer): void {
   const target = resolveSafe(relPath);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const tmp = target + '.tmp';
-  // Tell the fs.watch layer "this is us writing, don't trigger a sync"
-  // — the in-app save path already updates the index synchronously, so
-  // a watcher-triggered re-sync would be wasted work.
+  // Tell the fs.watch layer "this is us writing, don't trigger a sync".
+  // Both the .tmp write and the rename-to-target fire watcher events;
+  // suppress both or the .tmp event escapes the TTL window and triggers
+  // a spurious syncIndex that can briefly add the file to `pendingNames`.
+  noteSelfWrite(tmp);
   noteSelfWrite(target);
   fs.writeFileSync(tmp, bytes);
   fs.renameSync(tmp, target);
