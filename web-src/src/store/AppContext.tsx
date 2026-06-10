@@ -22,6 +22,7 @@ import {
 import {
   api,
   ApiError,
+  type SearchHit,
 } from '../api';
 import {
   getActiveTab,
@@ -58,6 +59,12 @@ export interface EditorHandle {
   getValue: () => string;
   focus: () => void;
 }
+
+const SEMANTIC_SEARCH_CANDIDATES = 30;
+const SEMANTIC_SEARCH_MAX_VISIBLE = 8;
+const SEMANTIC_MIN_TOP_RATIO = 0.8;
+const SEMANTIC_KNEE_DROP_RATIO = 0.18;
+const SEMANTIC_KNEE_TOP_RATIO = 0.88;
 
 /** Per-view find driver. Whichever view is currently rendered (CM
  *  editor, MD preview iframe, HTML preview iframe) registers one of
@@ -250,6 +257,37 @@ function shallowEqualConversionFailures(
   return a.every((f, i) =>
     f.path === b[i].path && f.attempts === b[i].attempts && f.lastError === b[i].lastError,
   );
+}
+
+function filterGuiSemanticHits(hits: SearchHit[]): SearchHit[] {
+  if (hits.length <= 1) return hits;
+  const top = hits[0]?.score ?? 0;
+  if (!Number.isFinite(top) || top <= 0) {
+    return hits.slice(0, SEMANTIC_SEARCH_MAX_VISIBLE);
+  }
+
+  let cutoff = Math.min(hits.length, SEMANTIC_SEARCH_MAX_VISIBLE);
+  for (let i = 1; i < hits.length; i++) {
+    const current = hits[i]?.score ?? 0;
+    const previous = hits[i - 1]?.score ?? top;
+    const topRatio = current / top;
+    const prevDrop = previous > 0 ? (previous - current) / previous : 0;
+
+    if (topRatio < SEMANTIC_MIN_TOP_RATIO) {
+      cutoff = Math.min(cutoff, i);
+      break;
+    }
+    if (i >= 2 && prevDrop >= SEMANTIC_KNEE_DROP_RATIO && topRatio < SEMANTIC_KNEE_TOP_RATIO) {
+      cutoff = Math.min(cutoff, i);
+      break;
+    }
+  }
+
+  return hits.slice(0, Math.max(1, cutoff));
+}
+
+function keywordFindCaseSensitive(query: string, caseStrict: boolean): boolean {
+  return caseStrict || query !== query.toLowerCase();
 }
 
 const SIDEBAR_VIEW_STORAGE_KEY = 'stashbase.sidebarView';
@@ -605,9 +643,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           });
           return;
         }
-        const { hits } = await api.search(q, 15);
+        const { hits } = await api.search(q, SEMANTIC_SEARCH_CANDIDATES);
         if (myGen !== searchGen.current) return;
-        dispatch({ type: 'SEARCH_HITS', hits });
+        dispatch({ type: 'SEARCH_HITS', hits: filterGuiSemanticHits(hits) });
       }
     } catch (err) {
       if (myGen !== searchGen.current) return;
@@ -805,7 +843,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // pending query and primes the new controller immediately —
     // matches show up without the user re-typing.
     if (hit.openFindBar && hit.chunkText) {
-      dispatch({ type: 'FIND_SET', patch: { query: hit.chunkText } });
+      const s = stateRef.current;
+      dispatch({
+        type: 'FIND_SET',
+        patch: {
+          query: hit.chunkText,
+          wholeWord: s.wholeWord,
+          caseSensitive: keywordFindCaseSensitive(hit.chunkText, s.caseStrict),
+        },
+      });
       dispatch({ type: 'FIND_OPEN' });
     }
   }, [selectFile]);

@@ -750,8 +750,9 @@ interface RipgrepOpts {
   /** false → `--smart-case` (case-insensitive unless query has caps);
    *  true → `--case-sensitive` regardless of query shape. */
   caseStrict: boolean;
-  /** true → `--word-regexp` (only match whole words, so "agent" won't
-   *  match "agents"). */
+  /** true → Unicode-aware app-side whole-token filtering. We do not use
+   *  ripgrep's `--word-regexp`: its boundary semantics do not line up
+   *  with the renderer and are especially poor for CJK text. */
   wholeWord: boolean;
 }
 
@@ -763,6 +764,7 @@ function runRipgrep(query: string, cwd: string, opts: RipgrepOpts): Promise<Keyw
     const args = [
       '--json',
       opts.caseStrict ? '--case-sensitive' : '--smart-case',
+      '--fixed-strings',
       '--max-count', String(RG_PER_FILE_CAP),
       '--max-filesize', '5M',
       '--glob', '*.md',
@@ -770,7 +772,6 @@ function runRipgrep(query: string, cwd: string, opts: RipgrepOpts): Promise<Keyw
       '--glob', '*.html',
       '--glob', '*.htm',
     ];
-    if (opts.wholeWord) args.push('--word-regexp');
     args.push('-e', query, '.');
     execFile(rgPath, args, {
       cwd,
@@ -810,13 +811,16 @@ function runRipgrep(query: string, cwd: string, opts: RipgrepOpts): Promise<Keyw
         // Drop trailing newline that ripgrep includes in `lines.text`.
         const stripped = rawText.replace(/\r?\n$/, '');
         const subs = Array.isArray(evt.data?.submatches) ? evt.data.submatches : [];
+        const matchRanges = normalizeRipgrepSubmatches(stripped, subs)
+          .filter(([start, end]) => !opts.wholeWord || hasWholeTokenBoundaries(stripped, start, end));
+        if (matchRanges.length === 0) continue;
         // Center the visible snippet around the first match so highlight
         // ranges stay inside the window for long lines (e.g. 500-char
         // markdown paragraphs). Without this, a match at position 400
         // gets truncated away and the user sees no `<mark>`.
         let windowStart = 0;
-        if (stripped.length > RG_MAX_LINE_CHARS && subs.length > 0) {
-          const firstStart = typeof subs[0]?.start === 'number' ? subs[0].start : 0;
+        if (stripped.length > RG_MAX_LINE_CHARS && matchRanges.length > 0) {
+          const firstStart = matchRanges[0]?.[0] ?? 0;
           windowStart = Math.max(0, Math.min(
             stripped.length - RG_MAX_LINE_CHARS,
             firstStart - Math.floor(RG_MAX_LINE_CHARS / 3),
@@ -827,12 +831,11 @@ function runRipgrep(query: string, cwd: string, opts: RipgrepOpts): Promise<Keyw
         const trailing = windowEnd < stripped.length ? '…' : '';
         const text = leading + stripped.slice(windowStart, windowEnd) + trailing;
         const ranges: Array<[number, number]> = [];
-        for (const s of subs) {
-          if (typeof s?.start !== 'number' || typeof s?.end !== 'number') continue;
+        for (const [start, end] of matchRanges) {
           // Shift each match into snippet-local coordinates and skip
           // anything that fell entirely outside the visible window.
-          const localStart = s.start - windowStart + leading.length;
-          const localEnd = s.end - windowStart + leading.length;
+          const localStart = start - windowStart + leading.length;
+          const localEnd = end - windowStart + leading.length;
           if (localEnd <= leading.length) continue;
           if (localStart >= text.length - trailing.length) continue;
           ranges.push([
@@ -845,10 +848,10 @@ function runRipgrep(query: string, cwd: string, opts: RipgrepOpts): Promise<Keyw
           bucket = { path: relPath, matches: [], totalMatches: 0 };
           byFile.set(relPath, bucket);
         }
-        bucket.totalMatches += 1;
+        bucket.totalMatches += matchRanges.length;
         if (total < RG_TOTAL_CAP) {
           bucket.matches.push({ line: lineNum, text, ranges });
-          total += 1;
+          total += matchRanges.length;
         } else {
           truncated = true;
         }
@@ -857,6 +860,56 @@ function runRipgrep(query: string, cwd: string, opts: RipgrepOpts): Promise<Keyw
       resolve({ files, totalMatches: total, truncated });
     });
   });
+}
+
+function normalizeRipgrepSubmatches(line: string, subs: unknown[]): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  for (const s of subs) {
+    if (!s || typeof s !== 'object') continue;
+    const start = (s as { start?: unknown }).start;
+    const end = (s as { end?: unknown }).end;
+    if (typeof start !== 'number' || typeof end !== 'number') continue;
+    ranges.push([
+      utf8ByteOffsetToUtf16Index(line, start),
+      utf8ByteOffsetToUtf16Index(line, end),
+    ]);
+  }
+  return ranges;
+}
+
+function utf8ByteOffsetToUtf16Index(text: string, byteOffset: number): number {
+  if (byteOffset <= 0) return 0;
+  let bytes = 0;
+  let index = 0;
+  for (const ch of text) {
+    const next = bytes + Buffer.byteLength(ch, 'utf8');
+    if (next > byteOffset) return index;
+    index += ch.length;
+    bytes = next;
+    if (bytes === byteOffset) return index;
+  }
+  return text.length;
+}
+
+function hasWholeTokenBoundaries(text: string, start: number, end: number): boolean {
+  const before = charBefore(text, start);
+  const after = charAt(text, end);
+  return !isKeywordWordChar(before) && !isKeywordWordChar(after);
+}
+
+function charBefore(text: string, index: number): string {
+  if (index <= 0) return '';
+  const prev = Array.from(text.slice(0, index)).pop();
+  return prev ?? '';
+}
+
+function charAt(text: string, index: number): string {
+  if (index >= text.length) return '';
+  return Array.from(text.slice(index))[0] ?? '';
+}
+
+function isKeywordWordChar(ch: string): boolean {
+  return ch !== '' && /[\p{L}\p{N}_]/u.test(ch);
 }
 
 // ---------- recent-files walk ----------

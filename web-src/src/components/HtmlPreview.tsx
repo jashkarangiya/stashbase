@@ -26,6 +26,7 @@ export function HtmlPreview({ name }: { name: string }) {
   const pendingHighlight = activeTab?.pendingHighlight ?? null;
   const content = activeTab?.file?.content ?? '';
   const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const chunkReqRef = useRef(0);
   // Tracks which `name` the iframe has finished loading. We only post
   // the scroll message when this matches the current `name` — otherwise
   // the message lands on the previous file's content and the pending
@@ -70,13 +71,13 @@ export function HtmlPreview({ name }: { name: string }) {
   function postChunkHighlight() {
     if (!pendingHighlight) return;
     if (loadedNameRef.current !== name) return;
+    const reqId = ++chunkReqRef.current;
     try {
       frameRef.current?.contentWindow?.postMessage(
-        { type: 'stashbase-chunk-highlight', text: pendingHighlight.chunkText },
+        { type: 'stashbase-chunk-highlight', reqId, text: pendingHighlight.chunkText },
         '*',
       );
     } catch { /* swallow */ }
-    actions.consumePendingHighlight();
   }
 
   function onLoad() {
@@ -133,6 +134,10 @@ export function HtmlPreview({ name }: { name: string }) {
         if (r) {
           pending.delete(d.reqId);
           r({ current: d.current ?? 0, total: d.total ?? 0 });
+        }
+      } else if (d.type === 'stashbase-chunk-highlight-result' && typeof d.reqId === 'number') {
+        if (d.reqId === chunkReqRef.current && d.ok === true) {
+          actions.consumePendingHighlight();
         }
       } else if (d.type === 'stashbase-open-find') {
         actions.openFind();

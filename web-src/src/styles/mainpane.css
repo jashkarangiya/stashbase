@@ -556,11 +556,29 @@
       width: 100%;
     }
     .pdf-page-wrap {
+      position: relative;
       background: #fff;
       box-shadow: 0 1px 3px rgba(0,0,0,0.12);
     }
     .pdf-page-canvas {
       display: block;
+    }
+    .pdf-page-highlight-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 2;
+    }
+    .pdf-page-highlight {
+      position: absolute;
+      border-radius: 3px;
+      background: rgba(46, 116, 230, 0.18);
+      box-shadow: 0 0 0 2px rgba(46, 116, 230, 0.42);
+      animation: pdf-hit-pulse 1.6s ease-out 1;
+    }
+    @keyframes pdf-hit-pulse {
+      0% { background: rgba(46, 116, 230, 0.34); box-shadow: 0 0 0 3px rgba(46, 116, 230, 0.56); }
+      100% { background: rgba(46, 116, 230, 0.18); box-shadow: 0 0 0 2px rgba(46, 116, 230, 0.42); }
     }
     .pdf-page-placeholder {
       display: flex;

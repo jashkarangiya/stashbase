@@ -61,9 +61,28 @@ function foldPdfText(s: string): string {
 
 interface FlatPage {
   flat: string;
-  items: { str: string; transform: number[] }[];
+  items: PdfFlatItem[];
   itemStarts: number[];
   viewport1x: { width: number; height: number };
+}
+
+interface PdfFlatItem {
+  str: string;
+  transform: number[];
+  width?: number;
+  height?: number;
+}
+
+interface PdfHighlightRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface PdfPageHighlight {
+  page: number;
+  rects: PdfHighlightRect[];
 }
 
 /** Flatten a pdfjs page's text items into one folded string, tracking
@@ -72,8 +91,8 @@ interface FlatPage {
  *  used to inline this same ~30-line pass. */
 async function flattenPageText(page: PDFPageProxy): Promise<FlatPage> {
   const tc = await page.getTextContent();
-  type StrItem = { str: string; transform: number[] };
-  const items: StrItem[] = [];
+  type StrItem = { str: string; transform: number[]; width?: number; height?: number };
+  const items: PdfFlatItem[] = [];
   const itemStarts: number[] = [];
   const segments: string[] = [];
   let pos = 0;
@@ -101,14 +120,63 @@ async function flattenPageText(page: PDFPageProxy): Promise<FlatPage> {
 /** y-ratio (0 = page top, 1 = bottom) of the text item covering the
  *  flat-string index `idx` — for scroll-to-match positioning. */
 function yRatioForIndex(p: FlatPage, idx: number): number {
+  const itemIdx = itemIndexForFlatIndex(p, idx);
+  const m = p.items[itemIdx];
+  const yFromTop = p.viewport1x.height - (m.transform[5] ?? 0);
+  return Math.max(0, Math.min(1, yFromTop / p.viewport1x.height));
+}
+
+function itemIndexForFlatIndex(p: FlatPage, idx: number): number {
   let itemIdx = 0;
   for (let k = 0; k < p.itemStarts.length; k++) {
     if (p.itemStarts[k] > idx) break;
     itemIdx = k;
   }
-  const m = p.items[itemIdx];
-  const yFromTop = p.viewport1x.height - (m.transform[5] ?? 0);
-  return Math.max(0, Math.min(1, yFromTop / p.viewport1x.height));
+  return itemIdx;
+}
+
+function highlightRectsForMatch(p: FlatPage, idx: number, length: number): PdfHighlightRect[] {
+  if (p.items.length === 0 || length <= 0) return [];
+  const startItem = itemIndexForFlatIndex(p, idx);
+  const endItem = itemIndexForFlatIndex(p, idx + length - 1);
+  const groups: Array<{ top: number; bottom: number; left: number; right: number }> = [];
+  const pageW = Math.max(1, p.viewport1x.width);
+  const pageH = Math.max(1, p.viewport1x.height);
+
+  for (let i = startItem; i <= endItem; i++) {
+    const item = p.items[i];
+    if (!item) continue;
+    const x = Number(item.transform[4] ?? 0);
+    const baselineY = Number(item.transform[5] ?? 0);
+    const h = Math.max(8, Number(item.height ?? Math.abs(item.transform[3] ?? 0) ?? 10));
+    const w = Math.max(2, Number(item.width ?? item.str.length * h * 0.45));
+    const top = pageH - baselineY - h * 0.9;
+    const bottom = pageH - baselineY + h * 0.25;
+    const existing = groups.find((g) => Math.abs((g.top + g.bottom) / 2 - (top + bottom) / 2) < h * 0.8);
+    if (existing) {
+      existing.top = Math.min(existing.top, top);
+      existing.bottom = Math.max(existing.bottom, bottom);
+      existing.left = Math.min(existing.left, x);
+      existing.right = Math.max(existing.right, x + w);
+    } else {
+      groups.push({ top, bottom, left: x, right: x + w });
+    }
+  }
+
+  return groups.map((g) => {
+    const padX = 4;
+    const padY = 3;
+    const left = Math.max(0, g.left - padX);
+    const top = Math.max(0, g.top - padY);
+    const right = Math.min(pageW, g.right + padX);
+    const bottom = Math.min(pageH, g.bottom + padY);
+    return {
+      x: left / pageW,
+      y: top / pageH,
+      width: Math.max(0.01, (right - left) / pageW),
+      height: Math.max(0.008, (bottom - top) / pageH),
+    };
+  });
 }
 
 export function pdfConversionFailureMessage(raw: string): string {
@@ -131,6 +199,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
   const [retryBusy, setRetryBusy] = useState(false);
   const [retryStarted, setRetryStarted] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [pageHighlight, setPageHighlight] = useState<PdfPageHighlight | null>(null);
   const failure = state.conversionFailures.find((f) => f.path === name);
   const failureMessage = failure ? pdfConversionFailureMessage(failure.lastError) : '';
   const retryInProgress = retryBusy || retryStarted;
@@ -154,6 +223,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
     setError(null);
     setDoc(null);
     setNumPages(0);
+    setPageHighlight(null);
     loadingTask = getDocument({ url: fileUrl, worker: pdfWorker });
     loadingTask.promise.then(
       (pdf) => {
@@ -235,18 +305,23 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
     if (anchors.length === 0) { actions.consumePendingHighlight(); return; }
 
     void (async () => {
+      let found = false;
       for (let i = 0; i < numPages; i++) {
         if (cancelled) return;
         try {
           const page = await doc.getPage(i + 1);
           const fp = await flattenPageText(page);
           let idx = -1;
+          let anchorLength = 0;
           for (const a of anchors) {
-            const found = fp.flat.indexOf(a);
-            if (found >= 0) { idx = found; break; }
+            const pos = fp.flat.indexOf(a);
+            if (pos >= 0) { idx = pos; anchorLength = a.length; break; }
           }
           if (idx < 0) continue;
+          found = true;
           const yRatio = yRatioForIndex(fp, idx);
+          const rects = highlightRectsForMatch(fp, idx, anchorLength);
+          setPageHighlight(rects.length > 0 ? { page: i + 1, rects } : null);
           const root = containerRef.current;
           const target = root?.querySelector(`[data-page="${i + 1}"]`) as HTMLElement | null;
           if (!root || !target) break;
@@ -258,7 +333,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
           break;
         } catch { /* skip page */ }
       }
-      if (!cancelled) actions.consumePendingHighlight();
+      if (!cancelled && found) actions.consumePendingHighlight();
     })();
     return () => { cancelled = true; };
   }, [doc, numPages, pendingHighlight, actions]);
@@ -274,7 +349,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
   useEffect(() => {
     if (!doc) return;
     let cancelled = false;
-    type PdfMatch = { page: number; yRatio: number };
+    type PdfMatch = { page: number; yRatio: number; rects: PdfHighlightRect[] };
     const state: { matches: PdfMatch[]; current: number } = { matches: [], current: 0 };
 
     function escapeRegExp(s: string): string {
@@ -286,6 +361,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
       if (!root || !target) return;
       const rendered = target.offsetHeight;
       const desired = target.offsetTop + m.yRatio * rendered - root.clientHeight * 0.3;
+      setPageHighlight(m.rects.length > 0 ? { page: m.page, rects: m.rects } : null);
       root.scrollTo({ top: Math.max(0, desired), behavior: 'smooth' });
     }
     async function rebuild(query: string, wholeWord: boolean, caseSensitive: boolean): Promise<void> {
@@ -302,14 +378,18 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
           const page = await doc!.getPage(i + 1);
           const fp = await flattenPageText(page);
           const flat = fp.flat;
-          function emit(idx: number) {
-            state.matches.push({ page: i + 1, yRatio: yRatioForIndex(fp, idx) });
+          function emit(idx: number, length: number) {
+            state.matches.push({
+              page: i + 1,
+              yRatio: yRatioForIndex(fp, idx),
+              rects: highlightRectsForMatch(fp, idx, length),
+            });
           }
           if (re) {
             re.lastIndex = 0;
             let m: RegExpExecArray | null;
             while ((m = re.exec(flat)) !== null) {
-              emit(m.index);
+              emit(m.index, m[0].length);
               if (re.lastIndex === m.index) re.lastIndex += 1;
             }
           } else {
@@ -319,7 +399,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
             while (true) {
               const idx = flatCmp.indexOf(needleCmp, from);
               if (idx === -1) break;
-              emit(idx);
+              emit(idx, needle.length);
               from = idx + needleCmp.length;
             }
           }
@@ -349,6 +429,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
       close: () => {
         state.matches = [];
         state.current = 0;
+        setPageHighlight(null);
       },
     });
 
@@ -401,7 +482,14 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
       />
       <div className="pdf-pages">
         {doc && Array.from({ length: numPages }, (_, i) => (
-          <PdfPage key={`p-${i}`} doc={doc} pageIndex={i} scale={scale} placeholderHeight={pageMetrics ? pageMetrics.height * scale : 800} />
+          <PdfPage
+            key={`p-${i}`}
+            doc={doc}
+            pageIndex={i}
+            scale={scale}
+            placeholderHeight={pageMetrics ? pageMetrics.height * scale : 800}
+            highlight={pageHighlight?.page === i + 1 ? pageHighlight : null}
+          />
         ))}
       </div>
     </div>
@@ -452,7 +540,14 @@ function PdfPage({
   pageIndex,
   scale,
   placeholderHeight,
-}: { doc: PDFDocumentProxy; pageIndex: number; scale: number; placeholderHeight: number }) {
+  highlight,
+}: {
+  doc: PDFDocumentProxy;
+  pageIndex: number;
+  scale: number;
+  placeholderHeight: number;
+  highlight: PdfPageHighlight | null;
+}) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [visible, setVisible] = useState(pageIndex < 2); // eager-render first 2 pages
@@ -541,6 +636,22 @@ function PdfPage({
     >
       {visible ? <canvas ref={canvasRef} className="pdf-page-canvas" /> : (
         <div className="pdf-page-placeholder">Page {pageIndex + 1}</div>
+      )}
+      {visible && renderedSize && highlight && (
+        <div className="pdf-page-highlight-layer" aria-hidden="true">
+          {highlight.rects.map((rect, i) => (
+            <div
+              key={i}
+              className="pdf-page-highlight"
+              style={{
+                left: `${rect.x * renderedSize.width}px`,
+                top: `${rect.y * renderedSize.height}px`,
+                width: `${rect.width * renderedSize.width}px`,
+                height: `${rect.height * renderedSize.height}px`,
+              }}
+            />
+          ))}
+        </div>
       )}
     </div>
   );
