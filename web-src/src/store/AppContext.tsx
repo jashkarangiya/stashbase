@@ -276,6 +276,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Last `treeVersion` we saw from `/api/index-status`. Any bump means
   // the watcher detected a disk change since last poll → refetch files.
   const lastTreeVersion = useRef<number>(-1);
+  /** Optimistically-stashing imports awaiting server confirmation:
+   *  space-relative path → grace deadline (ms). On import we mark a
+   *  convertible file stashing immediately, but the server only
+   *  registers the conversion *after* responding, so an index poll that
+   *  lands in that gap would otherwise report it absent and wipe the
+   *  mark. `refreshIndexState` keeps these in `pendingConversions` until
+   *  the server starts reporting them (hand-off) or the grace expires. */
+  const importStashingGrace = useRef<Map<string, number>>(new Map());
   /** Promise resolver for the pending cascade dialog. Set when the
    *  rename action asks the user; cleared once they pick. */
   const cascadeResolveRef = useRef<((d: CascadeDecision) => void) | null>(null);
@@ -460,7 +468,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const s = await api.indexStatus();
       const indexReady = s.indexReady !== false;
       const newPending = indexReady ? new Set(s.pending ?? []) : new Set<string>();
-      const newConv = s.pendingConversions ?? [];
+      let newConv = s.pendingConversions ?? [];
+      // Fold in optimistically-marked imports the server hasn't started
+      // reporting yet (it registers the conversion only after responding
+      // to the upload). Hand off once the server tracks a path; expire
+      // the grace otherwise so a never-converted file doesn't stick.
+      if (importStashingGrace.current.size > 0) {
+        const now = Date.now();
+        const stillGracing: string[] = [];
+        for (const [name, deadline] of importStashingGrace.current) {
+          if (newConv.includes(name)) {
+            importStashingGrace.current.delete(name); // server owns it now
+          } else if (now <= deadline) {
+            stillGracing.push(name);
+          } else {
+            importStashingGrace.current.delete(name); // grace expired
+          }
+        }
+        if (stillGracing.length) {
+          newConv = [...new Set([...newConv, ...stillGracing])].sort();
+        }
+      }
       const prev = stateRef.current;
       // Trigger a `/api/files` refresh whenever the indexer's
       // awareness of the disk grew or shrank — covers new files
@@ -648,6 +676,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       anchor?: string;
       restoreScrollY?: number;
       cursor?: number;
+      /** Open an empty placeholder when the file isn't on disk yet
+       *  (instead of erroring) — used to pop a recording's tab the
+       *  instant it's stopped, before its OCR note has been written. */
+      placeholderIfMissing?: boolean;
     },
   ) => {
     const cur = getActiveTab(stateRef.current)?.file ?? null;
@@ -670,9 +702,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         body = await api.getFile(name);
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        dispatch({ type: 'SAVE_STATUS', status: { text: msg, cls: 'error' } });
-        return;
+        // A recording note doesn't exist on disk until its OCR finishes.
+        // For such a placeholder open, synthesize an empty body so the
+        // tab pops immediately; the content fills in once the note lands
+        // (see `openRecordingPlaceholder`).
+        if (opts.placeholderIfMissing) {
+          body = { name, format: 'md' as const, content: '' };
+        } else {
+          const msg = e instanceof Error ? e.message : String(e);
+          dispatch({ type: 'SAVE_STATUS', status: { text: msg, cls: 'error' } });
+          return;
+        }
       }
     }
     const scrollY = opts.newTab ? null : captureCurrentScrollY();
@@ -1223,15 +1263,47 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
       await loadFiles();
+      // Optimistically light up the stashing indicator (sidebar pill +
+      // the opened tab's logo) the instant the drop lands. The server
+      // registers each conversion only *after* it has responded, so the
+      // immediate poll below races it — a user-initiated import
+      // shouldn't wait a poll round-trip to show it's stashing. Limited
+      // to the convertible+viewable formats (PDF / image); md/html are
+      // indexed, not converted, so they never enter `pendingConversions`.
+      // The poll reconciles: it keeps these while in-flight and drops
+      // them when the derived note lands. Sorted to match the server's
+      // `getInFlightConversions` ordering so the next poll is a no-op.
+      const stashing = (j.files || [])
+        .filter((x) => !x.error && /\.(pdf|png|jpe?g|webp)$/i.test(x.file))
+        .map((x) => x.file);
+      if (stashing.length) {
+        // Protect the optimistic entries from being wiped by an index
+        // poll that lands before the server registers the conversion.
+        const deadline = Date.now() + 6000;
+        for (const name of stashing) importStashingGrace.current.set(name, deadline);
+        const merged = [...new Set([...stateRef.current.pendingConversions, ...stashing])].sort();
+        dispatch({ type: 'PENDING_CONVERSIONS', paths: merged });
+      }
       // Now the server has fired any PDF conversions and updated its
-      // `pendingConversions` set. Poll immediately so the sidebar
-      // banner shows even when the conversion is fast enough to
-      // finish inside the regular poll window.
+      // `pendingConversions` set. Poll immediately so the indicator
+      // reconciles even when the conversion is fast enough to finish
+      // inside the regular poll window.
       void refreshIndexState();
+      // Auto-open the first viewable file the drop produced — the
+      // import was a deliberate user action, so showing what landed is
+      // expected (mirrors dropping a file into an editor). Limited to
+      // formats the viewer can actually render (md/html via getFile,
+      // pdf + image synthesized in `loadFile`); a dropped PDF/image
+      // opens its body immediately and carries the stashing mark on its
+      // tab while it converts. Opens at most ONE file, so a batch drop
+      // doesn't explode into tabs.
       const first = j.files?.find(
-        (x) => !x.error && /\.(md|markdown|html|htm)$/i.test(x.file),
+        (x) => !x.error && /\.(md|markdown|html|htm|pdf|png|jpe?g|webp)$/i.test(x.file),
       );
-      if (first) void selectFile(first.file);
+      // Pinned, not preview: a drop is a deliberate, committed gesture
+      // (the double-click analog), so the imported file should stay open
+      // rather than be a tentative tab the next sidebar click evicts.
+      if (first) void openInNewTab(first.file);
       const failed = (j.files || []).filter((x) => x.error);
       if (failed.length) {
         console.warn('[upload] failed:', failed);
@@ -1243,11 +1315,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast('Upload failed — see console.', { level: 'error' });
       return false;
     }
-  }, [loadFiles, refreshIndexState, selectFile, showAlert]);
+  }, [loadFiles, refreshIndexState, openInNewTab, showAlert]);
+
+  /** Stop-recording UX: pop a pinned placeholder tab for the (not-yet-
+   *  written) `recording-<ts>.md` the instant the upload returns, so the
+   *  user lands in their recording immediately instead of staring at
+   *  nothing for the length of the OCR. The tab carries the stashing
+   *  mark (the note is in `pendingConversions`); its content fills in the
+   *  moment the OCR writes the note to disk — `refreshActiveTabFromDisk`
+   *  catches it on the next poll, and the loop below is an explicit
+   *  backstop in case the placeholder is the active tab. Bounded so a
+   *  failed / stuck job never leaks the watcher. */
+  const openRecordingPlaceholder = useCallback(async (name: string) => {
+    // Already open (double-stop / retry) → just surface it.
+    if (stateRef.current.tabs.some((t) => t.file?.name === name)) {
+      await openInNewTab(name);
+      return;
+    }
+    await loadFile(name, { push: true, newTab: true, placeholderIfMissing: true });
+    const deadline = Date.now() + 5 * 60_000;
+    while (Date.now() < deadline) {
+      if (stateRef.current.files.some((f) => f.name === name)) {
+        // Note landed. Pull real content into the placeholder if it's
+        // still the active, still-empty tab; if the user navigated away
+        // or closed it, leave it be.
+        const active = getActiveTab(stateRef.current);
+        if (active?.file?.name === name && !active.file.content) {
+          await loadFile(name, { push: false });
+        }
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }, [loadFile, openInNewTab]);
 
   /** Send a screen recording for OCR. The webm is NOT stored — it's
    *  transcribed into a visible `recording-<ts>.md` note in the background
-   *  (the "Converting…" banner tracks it; the note appears when done).
+   *  (the stashing indicator tracks it; the note appears when done, at
+   *  which point `openRecordingWhenReady` opens it).
    *  Mirrors `upload`'s lost-binding self-heal. */
   const recordVideo = useCallback(async (file: File, dir: string): Promise<boolean> => {
     try {
@@ -1264,15 +1369,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
         toast(`Recording failed: ${j.error}`, { level: 'error' });
         return false;
       }
-      // Poll now so the "Converting…" banner shows the pending note.
+      if (j.file && !stateRef.current.pendingConversions.includes(j.file)) {
+        // Optimistically mark the note as stashing so the placeholder
+        // tab's logo + the SPACE pill show instantly, instead of one
+        // index-poll round-trip later. The poll reconciles from here —
+        // the server reports it in-flight through OCR, then drops it.
+        dispatch({
+          type: 'PENDING_CONVERSIONS',
+          paths: [...stateRef.current.pendingConversions, j.file],
+        });
+      }
+      // Poll now so the stashing indicator reconciles with the server.
       void refreshIndexState();
+      // Pop a placeholder tab immediately; it fills when the OCR lands.
+      if (j.file) void openRecordingPlaceholder(j.file);
       return true;
     } catch (e: unknown) {
       console.warn('[recordVideo] request failed:', e);
       toast('Recording failed — see console.', { level: 'error' });
       return false;
     }
-  }, [refreshIndexState]);
+  }, [refreshIndexState, openRecordingPlaceholder]);
 
   const runSync = useCallback(async () => {
     if (stateRef.current.syncRunning) return;

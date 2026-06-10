@@ -291,16 +291,23 @@ export function CheckIcon({ className }: IconProps) {
 export function StashBaseIcon({ className }: IconProps) {
   return (
     <svg className={className} viewBox="31 25 450 450" fill="none">
-      <g stroke="#6b7280" strokeWidth={26} strokeLinecap="round" strokeLinejoin="round">
+      <g stroke="#6b7280" strokeWidth={16} strokeLinecap="round" strokeLinejoin="round">
         <path d="M92 158 L92 342" />
         <path d="M92 342 L256 436" />
       </g>
-      <g stroke="#0891b2" strokeWidth={32} strokeLinecap="round" strokeLinejoin="round">
-        <path d="M92 158 L256 64 L338 111" />
+      <g stroke="#6b7280" strokeWidth={16} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M338 111 L256 64 L92 158" />
         <path d="M92 158 L256 252 L420 158" />
         <path d="M420 158 L420 342" />
-        <path d="M256 436 L420 342" />
-        <path d="M256 342 L256 436" />
+        <path d="M420 342 L256 436" />
+        <path d="M256 436 L256 342" />
+      </g>
+      <g className="s-cyan" stroke="#0891b2" strokeWidth={32} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M338 111 L256 64 L92 158" />
+        <path d="M92 158 L256 252 L420 158" />
+        <path d="M420 158 L420 342" />
+        <path d="M420 342 L256 436" />
+        <path d="M256 436 L256 342" />
       </g>
     </svg>
   );
@@ -365,7 +372,7 @@ export function SettingsIcon({ className }: IconProps) {
 }
 
 /** Start a visual capture — viewfinder corner marks framing the classic
- *  record symbol (ring + filled dot): "frame this region and capture it".
+ *  record symbol (a single filled dot): "frame this region and capture it".
  *  The brackets carry the screen-capture metaphor, the record dot the
  *  start-recording affordance. Pairs with StopIcon as the capture⇄stop
  *  transport metaphor. */
@@ -376,8 +383,7 @@ export function RecordIcon({ className }: IconProps) {
       <path d="M16 3 H19 A2 2 0 0 1 21 5 V8" />
       <path d="M8 21 H5 A2 2 0 0 1 3 19 V16" />
       <path d="M16 21 H19 A2 2 0 0 0 21 19 V16" />
-      <circle cx="12" cy="12" r="5.5" />
-      <circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="4.5" fill="currentColor" stroke="none" />
     </svg>
   );
 }

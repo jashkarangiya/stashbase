@@ -680,6 +680,17 @@
       text-overflow: ellipsis;
     }
 
+    /* SPACE header: keep the "SPACE" label content-width so the stashing
+     * pill sits snug to its right, and push the ⋯ actions to the far
+     * right edge (they're hover-only, so left-aligning the pill is the
+     * only stable layout). */
+    .space-section-head .panel-section-title {
+      flex: 0 0 auto;
+    }
+    .space-section-head .side-actions {
+      margin-left: auto;
+    }
+
     .side-head {
       display: flex;
       align-items: center;
@@ -822,45 +833,202 @@
       animation: sync-spin 0.7s linear infinite;
     }
 
-    /* Conversion indicator. Sits above the file tree while the server is
-     * running pymupdf / marker on a dropped PDF or RapidOCR on an image
-     * — gives the user visible "something's happening" feedback. Auto-
-     * dismisses when the conversion finishes (the index-status poll
-     * drops the entry from `pendingConversions`). */
-    .conversion-processing-banner {
-      padding: 4px 14px 6px;
-      border-bottom: 1px solid var(--border);
-      background: rgba(8, 145, 178, 0.04);
-      font-size: 12px;
+    /* Stashing indicator. A file is "stashing" while the server is still
+     * converting it into searchable content (pymupdf / marker on a PDF,
+     * RapidOCR on an image, transcode on a recording) — the slow, user-
+     * visible phase. The "N stashing" pill lives in the SPACE header
+     * (left of ⋯) and stays visible at all times; clicking it opens the
+     * `.stashing-list` dropdown. Auto-dismisses when the conversion
+     * finishes (the index-status poll drops the entry from
+     * `pendingConversions`).
+     *
+     * Each of the 5 cyan paths draws in sequence (stroke-dashoffset),
+     * with the stagger baked into the keyframe percentages rather than
+     * animation-delay. That way all 5 paths hit their snap-off keyframe
+     * at the same point in the shared 3 s cycle and vanish together.
+     * steps(1, end) at 74% makes the wipe instantaneous.
+     *
+     */
+    @keyframes s-draw-1 {
+      0%   { stroke-dashoffset: 300; opacity: 0; animation-timing-function: ease-in-out; }
+      5%   { opacity: 1; }
+      12%  { stroke-dashoffset: 0; }
+      82%  { stroke-dashoffset: 0; opacity: 1; }
+      90%  { stroke-dashoffset: 0; opacity: 0; }
+      91%  { stroke-dashoffset: 300; opacity: 0; }
+      100% { stroke-dashoffset: 300; opacity: 0; }
+    }
+    @keyframes s-draw-2 {
+      0%   { stroke-dashoffset: 400; opacity: 0; }
+      12%  { stroke-dashoffset: 400; opacity: 0; animation-timing-function: ease-in-out; }
+      17%  { opacity: 1; }
+      24%  { stroke-dashoffset: 0; }
+      82%  { stroke-dashoffset: 0; opacity: 1; }
+      90%  { stroke-dashoffset: 0; opacity: 0; }
+      91%  { stroke-dashoffset: 400; opacity: 0; }
+      100% { stroke-dashoffset: 400; opacity: 0; }
+    }
+    @keyframes s-draw-3 {
+      0%   { stroke-dashoffset: 190; opacity: 0; }
+      24%  { stroke-dashoffset: 190; opacity: 0; animation-timing-function: ease-in-out; }
+      29%  { opacity: 1; }
+      36%  { stroke-dashoffset: 0; }
+      82%  { stroke-dashoffset: 0; opacity: 1; }
+      90%  { stroke-dashoffset: 0; opacity: 0; }
+      91%  { stroke-dashoffset: 190; opacity: 0; }
+      100% { stroke-dashoffset: 190; opacity: 0; }
+    }
+    @keyframes s-draw-4 {
+      0%   { stroke-dashoffset: 200; opacity: 0; }
+      36%  { stroke-dashoffset: 200; opacity: 0; animation-timing-function: ease-in-out; }
+      41%  { opacity: 1; }
+      48%  { stroke-dashoffset: 0; }
+      82%  { stroke-dashoffset: 0; opacity: 1; }
+      90%  { stroke-dashoffset: 0; opacity: 0; }
+      91%  { stroke-dashoffset: 200; opacity: 0; }
+      100% { stroke-dashoffset: 200; opacity: 0; }
+    }
+    @keyframes s-draw-5 {
+      0%   { stroke-dashoffset: 100; opacity: 0; }
+      48%  { stroke-dashoffset: 100; opacity: 0; animation-timing-function: ease-in-out; }
+      53%  { opacity: 1; }
+      60%  { stroke-dashoffset: 0; }
+      82%  { stroke-dashoffset: 0; opacity: 1; }
+      90%  { stroke-dashoffset: 0; opacity: 0; }
+      91%  { stroke-dashoffset: 100; opacity: 0; }
+      100% { stroke-dashoffset: 100; opacity: 0; }
+    }
+    .stashing-pill-logo,
+    .stashing-list-logo,
+    .tab-stashing-logo {
+      flex-shrink: 0;
+    }
+    .stashing-pill-logo .s-cyan > path:nth-child(1),
+    .stashing-list-logo .s-cyan > path:nth-child(1),
+    .tab-stashing-logo .s-cyan > path:nth-child(1) {
+      stroke-dasharray: 300; animation: s-draw-1 2s linear infinite;
+    }
+    .stashing-pill-logo .s-cyan > path:nth-child(2),
+    .stashing-list-logo .s-cyan > path:nth-child(2),
+    .tab-stashing-logo .s-cyan > path:nth-child(2) {
+      stroke-dasharray: 400; animation: s-draw-2 2s linear infinite;
+    }
+    .stashing-pill-logo .s-cyan > path:nth-child(3),
+    .stashing-list-logo .s-cyan > path:nth-child(3),
+    .tab-stashing-logo .s-cyan > path:nth-child(3) {
+      stroke-dasharray: 190; animation: s-draw-3 2s linear infinite;
+    }
+    .stashing-pill-logo .s-cyan > path:nth-child(4),
+    .stashing-list-logo .s-cyan > path:nth-child(4),
+    .tab-stashing-logo .s-cyan > path:nth-child(4) {
+      stroke-dasharray: 200; animation: s-draw-4 2s linear infinite;
+    }
+    .stashing-pill-logo .s-cyan > path:nth-child(5),
+    .stashing-list-logo .s-cyan > path:nth-child(5),
+    .tab-stashing-logo .s-cyan > path:nth-child(5) {
+      stroke-dasharray: 100; animation: s-draw-5 2s linear infinite;
+    }
+    /* Freeze paths fully assembled while hovering the pill. */
+    .stashing-pill:hover .s-cyan > path {
+      animation: none;
+      stroke-dashoffset: 0;
+      opacity: 1;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .stashing-pill-logo .s-cyan > path,
+      .stashing-list-logo .s-cyan > path,
+      .tab-stashing-logo .s-cyan > path {
+        animation: none;
+        stroke-dashoffset: 0;
+        opacity: 0.7;
+      }
+    }
+
+    .stashing-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      flex-shrink: 0;
+      border: 0;
+      background: transparent;
+      cursor: pointer;
       color: var(--muted);
+      font-size: 11px;
+      font-weight: 400;
+      letter-spacing: 0.02em;
+      padding: 2px 7px;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    .stashing-pill:hover {
+      background: var(--hover);
+      color: var(--fg);
+    }
+    .stashing-pill-logo {
+      width: 13px;
+      height: 13px;
+    }
+
+    /* Chrome-downloads-style dropdown of in-flight stashing files.
+     * Mirrors `.menu`'s card / fade-in treatment. */
+    .stashing-list {
+      z-index: 100;
+      min-width: 220px;
+      max-width: 320px;
+      padding: 5px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      box-shadow:
+        0 10px 30px rgba(0, 0, 0, 0.14),
+        0 2px 6px rgba(0, 0, 0, 0.07);
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 1px;
+      font-size: 12.5px;
+      color: var(--fg);
+      opacity: 0;
+      transform: translateY(-2px);
+      pointer-events: none;
     }
-    .conversion-processing-row {
+    .stashing-list.ready {
+      opacity: 1;
+      transform: none;
+      pointer-events: auto;
+      transition:
+        opacity 0.09s ease-out,
+        transform 0.09s ease-out;
+    }
+    .stashing-list-head {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding: 4px 8px 6px;
+    }
+    .stashing-list-row {
       display: flex;
       align-items: center;
       gap: 8px;
+      padding: 5px 8px;
+      border-radius: 6px;
       min-width: 0;
     }
-    .conversion-processing-label {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    .stashing-list-logo {
+      width: 14px;
+      height: 14px;
+    }
+    .stashing-list-name {
       flex: 1;
       min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    .conversion-processing-label strong {
-      color: var(--fg);
-      font-weight: 500;
-    }
-    .conversion-processing-spinner {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      border: 1.5px solid rgba(8, 145, 178, 0.25);
-      border-top-color: var(--accent);
-      animation: sync-spin 0.85s linear infinite;
+    .stashing-list-phase {
+      color: var(--muted);
+      font-size: 11px;
       flex-shrink: 0;
     }
 

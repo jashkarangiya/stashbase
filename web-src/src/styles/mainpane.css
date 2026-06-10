@@ -678,6 +678,15 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    /* StashBase logo shown before a tab's label while the file is still
+     * stashing (being converted into searchable content). Placeholder
+     * for the eventual animated mark — the breathing pulse + reduced-
+     * motion fallback live with the other stashing styles in
+     * sidebar.css. */
+    .tab-stashing-logo {
+      width: 14px;
+      height: 14px;
+    }
     /* VS Code-style preview tabs: italic label is the visual cue that
      * the tab is "tentative" and the next single-click in the sidebar
      * will replace its content. Promoted to pinned (regular text) by
@@ -757,6 +766,43 @@
       font-size: 13px;
       text-align: center;
       padding: 40px;
+    }
+
+    /* Calm "processing" state for a stashing file opened before its
+     * content exists (a just-stopped recording). Sits in the single
+     * .main-body grid cell and centers; the logo reuses the shared
+     * `stashing-pulse` breathing (defined in sidebar.css). */
+    .stashing-placeholder {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 40px;
+      text-align: center;
+      color: var(--muted);
+      user-select: none;
+    }
+    .stashing-placeholder-logo {
+      width: 40px;
+      height: 40px;
+      animation: stashing-pulse 1.6s ease-in-out infinite;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .stashing-placeholder-logo {
+        animation: none;
+        opacity: 0.7;
+      }
+    }
+    .stashing-placeholder-title {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--fg);
+    }
+    .stashing-placeholder-sub {
+      font-size: 12.5px;
+      color: var(--muted);
     }
 
     /* Obsidian-style "new tab" landing — three stacked shortcut links
@@ -928,6 +974,7 @@
     .drop-veil.hot {
       display: flex;
     }
+
 
     /* Viewers sit in the single grid cell of .main-body and fill it with
      definite dimensions. HTML uses .viewer-shell so read-only preview

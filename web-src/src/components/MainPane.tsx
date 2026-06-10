@@ -8,6 +8,7 @@ import { MarkdownPreview } from './MarkdownPreview';
 import { PathBreadcrumb } from './PathBreadcrumb';
 import { PdfPreview } from './PdfPreview';
 import { Split } from './Split';
+import { StashingPlaceholder } from './StashingPlaceholder';
 import { TabStrip } from './TabStrip';
 
 /**
@@ -35,6 +36,12 @@ export function MainPane() {
   const canForward = navCursor >= 0 && navCursor < navStack.length - 1;
   const hasTabs = state.tabs.length > 0;
   const emptyTab = !!activeTab && !cur;
+  // A recording's tab pops open before its OCR note exists, so its body
+  // is empty while it's still stashing. Show a calm "processing" state
+  // instead of a blank editor; it clears itself the moment the note
+  // lands (content fills) or the conversion drops out of flight.
+  const isStashingPlaceholder =
+    !!cur && cur.format === 'md' && !cur.content && state.pendingConversions.includes(cur.name);
 
   return (
     <main className={'main' + (hasTabs ? '' : ' no-file')}>
@@ -47,7 +54,8 @@ export function MainPane() {
           </div>
         )}
         {emptyTab && <EmptyTabLanding />}
-        {cur && !editMode && cur.format === 'md' && (
+        {isStashingPlaceholder && <StashingPlaceholder />}
+        {cur && !isStashingPlaceholder && !editMode && cur.format === 'md' && (
           <MarkdownPreview name={cur.name} content={cur.content} />
         )}
         {cur && !editMode && cur.format === 'html' && (
@@ -63,7 +71,7 @@ export function MainPane() {
           // Images, like PDFs, are binary — no edit mode.
           <ImagePreview name={cur.name} />
         )}
-        {cur && editMode && cur.format !== 'pdf' && cur.format !== 'image' && (
+        {cur && !isStashingPlaceholder && editMode && cur.format !== 'pdf' && cur.format !== 'image' && (
           <Split name={cur.name} format={cur.format} initialContent={cur.content} />
         )}
       </div>
@@ -96,7 +104,7 @@ export function MainPane() {
         </div>
       )}
       <FindBar />
-      {cur && cur.kind !== 'kb' && cur.format !== 'pdf' && cur.format !== 'image' && (
+      {cur && !isStashingPlaceholder && cur.kind !== 'kb' && cur.format !== 'pdf' && cur.format !== 'image' && (
         <div className={'main-floating-actions' + (editMode ? ' editing' : '')}>
           {editMode && saveStatus.text && (
             <span className={'save-status' + (saveStatus.cls ? ' ' + saveStatus.cls : '')}>

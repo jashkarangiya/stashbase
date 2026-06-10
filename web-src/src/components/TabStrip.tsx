@@ -1,5 +1,6 @@
 import { useRef, useState, type DragEvent } from 'react';
 import { useApp } from '../store/AppContext';
+import { StashBaseIcon } from '../icons';
 
 const TAB_MIME = 'application/x-stashbase-tab';
 
@@ -106,10 +107,16 @@ export function TabStrip() {
           const isActive = t.id === state.activeTabId;
           const label = t.file ? displayBasename(t.file.name) : 'Untitled';
           const isDragging = dragId === t.id;
+          // "stashing" = the file's still being converted into searchable
+          // content. We mark it on its tab with the StashBase logo (a
+          // placeholder for the eventual animated mark) so an opened-but-
+          // not-yet-stashed file reads as "in progress", not broken.
+          const isStashing = !!t.file && state.pendingConversions.includes(t.file.name);
           const dropEdge = dropTarget?.id === t.id ? dropTarget.edge : null;
           const cls = 'tab'
             + (isActive ? ' active' : '')
             + (t.preview ? ' preview' : '')
+            + (isStashing ? ' stashing' : '')
             + (isDragging ? ' dragging' : '')
             + (dropEdge === 'before' ? ' drop-before' : '')
             + (dropEdge === 'after' ? ' drop-after' : '');
@@ -147,6 +154,7 @@ export function TabStrip() {
               }}
               onDrop={(e) => onTabDrop(e, t.id)}
             >
+              {isStashing && <StashBaseIcon className="tab-stashing-logo" />}
               <span className="tab-label">{label}</span>
               <button
                 type="button"
