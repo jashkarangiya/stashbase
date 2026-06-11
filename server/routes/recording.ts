@@ -27,7 +27,6 @@ import { analyzeVideoWithGemini, geminiConfigured } from '../gemini-video.ts';
 import { errorMessage, logger } from '../log.ts';
 import { getCurrentSpace, getGeminiKey, runWithWindowId, setGeminiKey, toKbRel, WINDOW_ID_HEADER } from '../space.ts';
 import { indexer } from '../state.ts';
-import { runVideoOcr } from '../video.ts';
 
 const log = logger('routes/recording');
 
@@ -68,9 +67,9 @@ function recordingStamp(): string {
 }
 
 /** Debug switch (developer-facing env var, like `STASHBASE_PYTHON`). When
- *  on, the recording isn't discarded: the webm + annotated frames + raw
- *  OCR json are kept under `~/.stashbase/recording-debug/recording-<ts>/`
- *  so OCR quality and the fps / diff-threshold sampling can be inspected. */
+ *  on, the recording isn't discarded: the webm + final note are kept under
+ *  `~/.stashbase/recording-debug/recording-<ts>/` so the Gemini output can
+ *  be compared against the source video. */
 function recordingDebugEnabled(): boolean {
   const v = process.env.STASHBASE_RECORDING_DEBUG;
   return v === '1' || v === 'true' || v === 'yes';
@@ -79,6 +78,18 @@ function recordingDebugEnabled(): boolean {
 function handleRecording(req: express.Request, res: express.Response): void {
   const file = req.file;
   if (!file) { res.status(400).json({ error: 'no file' }); return; }
+
+  // Recording is Gemini-only by design — no local frame-OCR fallback.
+  // (2026-06 decision: the feature's promise is a high-quality structured
+  // note; a low-quality offline fallback dilutes it. The renderer
+  // pre-checks the key before recording starts; this is the backstop.)
+  if (!geminiConfigured()) {
+    res.status(412).json({
+      error: 'Screen recording needs a Gemini API key — add one in Settings → Capture.',
+      code: 'GEMINI_KEY_REQUIRED',
+    });
+    return;
+  }
 
   const space = getCurrentSpace();
   if (!space) { res.status(412).json({ error: 'no space open', code: 'NO_SPACE' }); return; }
@@ -121,19 +132,12 @@ function handleRecording(req: express.Request, res: express.Response): void {
   }
 
   const windowId = req.header(WINDOW_ID_HEADER);
-  const tmpNote = tmpVideo + '.md';
   void runBackgroundConversion(kbRel, () => runWithWindowId(windowId, async () => {
     let text: string;
     try {
-      if (geminiConfigured()) {
-        // Gemini video understanding — reads layout / reading order /
-        // temporal flow that per-frame OCR can't (multi-column, dynamic).
-        text = await analyzeVideoWithGemini(tmpVideo, 'video/webm');
-      } else {
-        // No Gemini key → local frame-OCR fallback (offline, free).
-        await runVideoOcr(tmpVideo, tmpNote, debugDir ? { debugDir } : {});
-        text = fs.readFileSync(tmpNote, 'utf8');
-      }
+      // Gemini video understanding — reads layout / reading order /
+      // temporal flow that per-frame OCR can't (multi-column, dynamic).
+      text = await analyzeVideoWithGemini(tmpVideo, 'video/webm');
     } catch (err) {
       // Always leave a visible note — the video is gone, so a silent
       // failure would lose the recording entirely.
@@ -146,7 +150,6 @@ function handleRecording(req: express.Request, res: express.Response): void {
         catch (err) { log.warn(`recording debug copy failed: ${errorMessage(err)}`); }
       }
       try { fs.rmSync(tmpVideo, { force: true }); } catch { /* best-effort */ }
-      try { fs.rmSync(tmpNote, { force: true }); } catch { /* best-effort */ }
     }
     saveText(noteRel, text);
     await indexer.upsertFile(kbRel, text);

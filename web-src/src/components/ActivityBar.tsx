@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { FilesViewIcon, RecordIcon, SearchIcon, SettingsIcon, StopIcon } from '../icons';
 import { useApp } from '../store/AppContext';
+import { api } from '../api';
 import { openSettings } from './SettingsModal';
 
 interface CaptureBridge {
@@ -39,10 +40,19 @@ export function ActivityBar() {
   const isElectron = !!captureBridge();
   useEffect(() => captureBridge()?.onRecordingState?.(setRecording), []);
 
-  function toggleRecording() {
+  async function toggleRecording() {
     const bridge = captureBridge();
-    if (recording) bridge?.stopRecording?.();
-    else bridge?.startRecording?.();
+    if (recording) { bridge?.stopRecording?.(); return; }
+    // Recording is Gemini-only (no local fallback) — check the key BEFORE
+    // capture starts, so the user never loses a recording to a missing key.
+    try {
+      const { hasKey } = await api.getGeminiKey();
+      if (!hasKey) {
+        actions.toast('Screen recording needs a Gemini API key — add one in Settings → Capture.', { level: 'error' });
+        return;
+      }
+    } catch { /* server unreachable — let the route's own guard handle it */ }
+    bridge?.startRecording?.();
   }
 
   /** VSCode rail semantics: clicking the *active* view toggles the
