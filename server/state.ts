@@ -26,6 +26,7 @@ import {
 } from './space.ts';
 import { syncNewFiles } from './sync.ts';
 import { getDaemon } from './mfs-daemon.ts';
+import { clearStaleMilvusLock } from './stale-lock.ts';
 import { logger, errorMessage } from './log.ts';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -115,11 +116,28 @@ export async function bootBindAllSpaces(): Promise<void> {
   }
 }
 
+/** One-shot latch for the stale-flock sweep below. */
+let staleLockSwept = false;
+
 /** Bind the indexer to a space using the OpenAI embedder. Called on
  *  every space switch (idempotent). Doesn't trigger sync — caller's
  *  responsibility via `scheduleIndexerSync`. With no key the space is
  *  still bound but indexing is disabled. */
 export async function bindIndexerForSpace(spaceAbs: string): Promise<void> {
+  // Before the first bind of this process, sweep any stashbase daemon
+  // still holding the Milvus flock: a dirty previous exit (kill -9, OS
+  // shutdown) or another session's leftover embedded daemon would
+  // otherwise wedge our bind, and the loser of a lock fight keeps
+  // "succeeding" while its writes go nowhere (data-layer §8.1). This
+  // call site is deliberately the WEB SERVER's bind path only — the MCP
+  // host must never run the sweep, since the GUI's daemon is the
+  // rightful lock owner it would be killing.
+  if (!staleLockSwept) {
+    staleLockSwept = true;
+    try { clearStaleMilvusLock(getKbRoot()); } catch (err: unknown) {
+      log.warn(`stale-lock sweep failed: ${errorMessage(err)}`);
+    }
+  }
   const cfg = resolveEmbedder();
   const runtime = cfg ?? { provider: 'openai' as const };
   if (!cfg) {
@@ -217,14 +235,77 @@ async function maybeImportSnapshot(spaceAbs: string, spaceName: string): Promise
 const indexerSwitchSeq = new Map<string, number>();
 const indexerSwitchQueues = new Map<string, Promise<void>>();
 
-/** Resolves when the in-flight bind + snapshot-import work has settled.
- *  External callers (notably the fs watcher) await this before kicking
- *  off their own scans so they don't run `scan_diff` against an
- *  unbound — or worse, mid-import — collection, which would wrongly
- *  report every file as `added` and re-embed everything the snapshot
- *  just imported. */
-export function awaitIndexerReady(): Promise<void> {
-  return Promise.all([...indexerSwitchQueues.values()].map((p) => p.catch(() => undefined))).then(() => undefined);
+/** Live bookkeeping behind the gate + watchdog: one record per scheduled
+ *  bind+sync segment, self-removing when the segment settles. Lets the
+ *  gate filter by space and the watchdog name what's stuck. */
+interface PendingSwitch {
+  promise: Promise<void>;
+  spaceRoot: string;
+  reason: string;
+  windowId: string;
+  scheduledAt: number;
+  warned: boolean;
+}
+const pendingSwitches = new Set<PendingSwitch>();
+
+// Watchdog for invariant I4 (data-layer §8.6): every queue entry must
+// settle in bounded time. A hard timeout can't work here — first-index
+// of a large space legitimately runs bind+sync for tens of minutes — so
+// we supervise instead of intervene: any entry older than 15min gets one
+// loud warning with enough context to find the wedge. Lazily started,
+// unref'd so it never keeps the process alive.
+const SWITCH_WATCHDOG_AFTER_MS = 15 * 60_000;
+let switchWatchdog: NodeJS.Timeout | null = null;
+function ensureSwitchWatchdog(): void {
+  if (switchWatchdog) return;
+  switchWatchdog = setInterval(() => {
+    const now = Date.now();
+    for (const p of pendingSwitches) {
+      if (p.warned || now - p.scheduledAt < SWITCH_WATCHDOG_AFTER_MS) continue;
+      p.warned = true;
+      log.warn(
+        `space-open queue entry unsettled after ${Math.round((now - p.scheduledAt) / 60_000)}min ` +
+          `(${p.reason}, space=${p.spaceRoot}, window=${p.windowId}) — bind/import/sync may be wedged ` +
+          '(data-layer §8.6 I4)',
+      );
+    }
+  }, 60_000);
+  switchWatchdog.unref();
+}
+
+/** Resolves when in-flight bind + snapshot-import work has settled.
+ *  External callers (notably the fs watcher) await this before their own
+ *  scans so `scan_diff` can't run against an unbound — or worse,
+ *  mid-import — collection (which would re-embed everything the snapshot
+ *  just imported).
+ *
+ *  That race is **per-space**, so pass `spaceRoot` to wait only for
+ *  segments touching that space — a wedged chain on an unrelated space
+ *  must not dam this one's watcher (the 2026-06-11 failure mode was a
+ *  global version of this gate going permanently shut). No argument =
+ *  global barrier, for boot / kbRoot-migration class callers.
+ *
+ *  Hard timeout backstop (120s): a queue entry with no reply would
+ *  otherwise hold the gate forever; the protected race settles in
+ *  seconds, so past 120s we proceed regardless. */
+const INDEXER_READY_TIMEOUT_MS = 120_000;
+
+export function awaitIndexerReady(spaceRoot?: string): Promise<void> {
+  const relevant = [...pendingSwitches]
+    .filter((p) => spaceRoot === undefined || p.spaceRoot === spaceRoot)
+    .map((p) => p.promise.catch(() => undefined));
+  if (relevant.length === 0) return Promise.resolve();
+  const settled = Promise.all(relevant).then(() => undefined);
+  return Promise.race([
+    settled,
+    new Promise<void>((resolve) => {
+      const t = setTimeout(() => {
+        log.warn('awaitIndexerReady: bind/import still unsettled after 120s — proceeding anyway');
+        resolve();
+      }, INDEXER_READY_TIMEOUT_MS);
+      t.unref();
+    }),
+  ]);
 }
 
 export function scheduleIndexerSync(spaceRoot: string, reason: string, windowId = 'default'): void {
@@ -256,6 +337,12 @@ export function scheduleIndexerSync(spaceRoot: string, reason: string, windowId 
       });
     });
   indexerSwitchQueues.set(windowId, next);
+  const entry: PendingSwitch = {
+    promise: next, spaceRoot, reason, windowId, scheduledAt: Date.now(), warned: false,
+  };
+  pendingSwitches.add(entry);
+  ensureSwitchWatchdog();
+  void next.catch(() => undefined).finally(() => pendingSwitches.delete(entry));
 }
 
 // Fire a queued bind + sync on every space switch. Registered at module

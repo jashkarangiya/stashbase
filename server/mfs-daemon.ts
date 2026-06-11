@@ -18,6 +18,8 @@
  * via `STASHBASE_PYTHON` env var (see `electron/main.cjs`).
  */
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { INDEX_EXCLUDED_DIRS, MAX_INDEXABLE_BYTES } from './indexable.ts';
+import { NOTE_EXTS } from './format.ts';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -39,6 +41,28 @@ interface Pending {
   resolve: (v: unknown) => void;
   reject: (e: Error) => void;
 }
+
+/** Ceiling for one op's reply. A daemon that is alive but never replies
+ *  (main thread stuck inside a C extension — observed during a Milvus
+ *  Lite flock fight with a second StashBase-spawned daemon) used to hang
+ *  its caller forever: `pending` entries only settle on reply, process
+ *  exit, or close(). And since the daemon serialises ops, one wedged op
+ *  wedges everything queued behind it.
+ *
+ *  One generous global ceiling, deliberately NOT per-op tiers: a cheap
+ *  `status` can legitimately sit minutes in the serial queue behind a
+ *  big embed, so tight per-op budgets would false-positive exactly when
+ *  the daemon is busiest. 10 min only catches the genuinely-dead case.
+ *  On timeout we presume the process is wedged for good: reject and run
+ *  close() — its SIGTERM→SIGKILL ladder exists for the stuck-in-C-
+ *  extension case — so the next call respawns and replays bindings. */
+const CALL_TIMEOUT_MS = 10 * 60_000;
+
+/** Ceiling for the `ready` handshake after spawn. A child that starts
+ *  but never prints `ready` (blocked acquiring the Milvus Lite flock
+ *  held by another process) would leave `readyP` — and therefore every
+ *  call() — pending forever. */
+const READY_TIMEOUT_MS = 90_000;
 
 export interface BindSpaceArgs {
   provider: 'openai';
@@ -151,14 +175,26 @@ class MfsDaemon extends EventEmitter {
       this.proc = proc;
       this.generation += 1;
 
+      // Ready-handshake watchdog — see READY_TIMEOUT_MS. SIGKILL (not
+      // SIGTERM): a child stuck acquiring the Milvus flock is blocked in
+      // a C extension and won't run a signal handler. The exit handler
+      // below turns the kill into a rejection callers can observe.
+      const readyTimer = setTimeout(() => {
+        log.warn(`daemon did not report ready within ${READY_TIMEOUT_MS / 1000}s — killing`);
+        try { proc.kill('SIGKILL'); } catch { /* already gone */ }
+      }, READY_TIMEOUT_MS);
+      readyTimer.unref();
+      const onReady = () => { clearTimeout(readyTimer); resolve(); };
+
       const lines = readline.createInterface({ input: proc.stdout });
-      lines.on('line', (line) => this.onLine(line, resolve));
+      lines.on('line', (line) => this.onLine(line, onReady));
 
       proc.stderr.on('data', (chunk: Buffer) => {
         process.stderr.write(`[mfs/py] ${chunk.toString()}`);
       });
 
       proc.on('exit', (code, signal) => {
+        clearTimeout(readyTimer);
         const err = new Error(
           `MFS daemon exited (code=${code}, signal=${signal ?? 'null'})`,
         );
@@ -186,6 +222,21 @@ class MfsDaemon extends EventEmitter {
       this.emit(`daemon:${msg.event}`, msg);
       if (msg.event === 'ready') {
         log.info(`daemon ready: kb_root=${msg.kb_root}`);
+        // Push the indexing rules before anything else: Node is the
+        // single source of truth for admission knowledge
+        // (server/indexable.ts / format.ts) — the daemon's built-in
+        // copies are only fallbacks, and silent drift between the two
+        // produces permanent pending or delete/re-embed oscillation
+        // (data-layer §8.6 I7). An old PyInstaller binary that doesn't
+        // know the op gets a loud warning instead of silent drift.
+        this.call('set_rules', {
+          excluded_dirs: [...INDEX_EXCLUDED_DIRS],
+          max_indexable_bytes: MAX_INDEXABLE_BYTES,
+          include_extensions: NOTE_EXTS.map((e) => `.${e}`),
+        }).catch((err) => log.warn(
+          `set_rules failed — daemon binary may predate rule push, indexing rules can drift ` +
+            `(rebuild with: pnpm build:python-sidecar): ${(err as Error).message}`,
+        ));
         // Replay every space binding the renderer has seen so far so a
         // crash + respawn doesn't strand the daemon empty-handed. Fire-
         // and-forget; if any individual rebind fails, the next user op
@@ -229,7 +280,22 @@ class MfsDaemon extends EventEmitter {
     if (!this.proc) throw new Error('MFS daemon not running');
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+      // No-reply watchdog — see CALL_TIMEOUT_MS. The timer is cleared on
+      // any settle path (reply, daemon exit, close()) via the wrappers.
+      const timer = setTimeout(() => {
+        if (!this.pending.delete(id)) return;
+        log.warn(
+          `daemon op ${op} (id=${id}) got no reply in ${CALL_TIMEOUT_MS / 60_000}min — ` +
+            'presuming wedged, restarting daemon',
+        );
+        reject(new Error(`daemon op ${op} timed out after ${CALL_TIMEOUT_MS / 60_000}min`));
+        void this.close();
+      }, CALL_TIMEOUT_MS);
+      timer.unref();
+      this.pending.set(id, {
+        resolve: (v) => { clearTimeout(timer); resolve(v as T); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
       this.proc!.stdin.write(JSON.stringify({ id, op, args }) + '\n');
     });
   }
@@ -313,10 +379,18 @@ function resolveDaemonCommand(kbRoot: string): { command: string; args: string[]
 function resolveDaemonBinary(): string | null {
   // PyInstaller --onedir output: `python/sidecar/stashbase-daemon/stashbase-daemon`
   // (the outer name is the directory, the inner name is the executable).
+  //
+  // In dev (`pnpm dev` sets STASHBASE_DEV_VITE) skip the PROJECT_ROOT
+  // candidate: a leftover `pnpm build:python-sidecar` output would
+  // otherwise silently shadow `python/stashbase_daemon.py`, and the dev
+  // server ends up running a frozen daemon that's days behind the
+  // source. STASHBASE_DAEMON_BIN still wins when set explicitly.
   const candidates = [
     process.env.STASHBASE_DAEMON_BIN,
     path.join(RESOURCES_ROOT, 'python', 'sidecar', 'stashbase-daemon', 'stashbase-daemon'),
-    path.join(PROJECT_ROOT, 'python', 'sidecar', 'stashbase-daemon', 'stashbase-daemon'),
+    process.env.STASHBASE_DEV_VITE
+      ? undefined
+      : path.join(PROJECT_ROOT, 'python', 'sidecar', 'stashbase-daemon', 'stashbase-daemon'),
   ].filter(Boolean) as string[];
   return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }

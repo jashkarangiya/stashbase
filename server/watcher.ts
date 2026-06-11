@@ -92,7 +92,7 @@ function bindToSpace(indexer: Indexer, root: string | null, windowId: string): v
       // every disk-tree change — including non-indexable files that
       // wouldn't move the indexer's `pending` set.
       fsChangeCounter++;
-      scheduleSync(indexer, windowId);
+      scheduleSync(indexer, windowId, root);
     });
     activeWatchers.set(windowId, watcher);
     log.info(`watching ${root} (${windowId})`);
@@ -101,24 +101,25 @@ function bindToSpace(indexer: Indexer, root: string | null, windowId: string): v
   }
 }
 
-function scheduleSync(indexer: Indexer, windowId: string): void {
+function scheduleSync(indexer: Indexer, windowId: string, root: string): void {
   const existing = debounceHandles.get(windowId);
   if (existing) clearTimeout(existing);
   const handle = setTimeout(() => {
     debounceHandles.delete(windowId);
-    void runSyncAfterReady(indexer, windowId);
+    void runSyncAfterReady(indexer, windowId, root);
   }, DEBOUNCE_MS);
   debounceHandles.set(windowId, handle);
 }
 
-async function runSyncAfterReady(indexer: Indexer, windowId: string): Promise<void> {
-  // Wait for any in-flight bind + snapshot-import to drain. Without
-  // this gate, a clone that fires fs events at the same moment the
-  // user opens the cloned space races: scan_diff runs before the
-  // bind+import finishes, sees an empty collection, reports every
+async function runSyncAfterReady(indexer: Indexer, windowId: string, root: string): Promise<void> {
+  // Wait for any in-flight bind + snapshot-import ON THIS SPACE to
+  // drain. Without this gate, a clone that fires fs events at the same
+  // moment the user opens the cloned space races: scan_diff runs before
+  // the bind+import finishes, sees an empty collection, reports every
   // file as `added`, and re-embeds the very chunks the snapshot just
-  // imported.
-  await awaitIndexerReady();
+  // imported. Scoped to `root` — the race is per-space, and a wedged
+  // chain on an unrelated space must not stall this watcher.
+  await awaitIndexerReady(root);
   await runWithWindowId(windowId, async () => {
     const space = getCurrentSpaceName();
     if (!space) return; // space closed mid-debounce or never opened

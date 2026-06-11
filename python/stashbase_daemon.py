@@ -61,6 +61,10 @@ Supported ops
                           Scoped by ``space`` prefix when given.
 - ``close_store``       — release Milvus Lite's flock so the server can
                           delete or move the DB file.
+- ``set_rules {excluded_dirs?, max_indexable_bytes?, include_extensions?}``
+                        — receive indexing rules from Node (single source
+                          of truth there); built-in constants are only the
+                          fallback for an old Node. Echoes effective rules.
 
 Paths
 -----
@@ -341,6 +345,38 @@ INDEX_EXCLUDED_DIRS = {
 }
 MAX_INDEXABLE_BYTES = 2 * 1024 * 1024
 
+# Mutable copy of the indexing rules. Node is the single source of truth
+# for format/admission knowledge (server/indexable.ts, server/format.ts)
+# and pushes its values via the `set_rules` op right after every spawn;
+# the constants above are only the fallback for an old Node that doesn't
+# know the op. Scanners are created fresh per call (_make_scanner), so a
+# rules update takes effect on the next scan with no cache invalidation.
+_RULES = {
+    "excluded_dirs": set(INDEX_EXCLUDED_DIRS),
+    "max_indexable_bytes": MAX_INDEXABLE_BYTES,
+    "include_extensions": [".html", ".htm"],
+}
+
+
+def op_set_rules(svc: StashbaseStore, args: dict) -> dict:
+    """Receive indexing rules from Node (the single source of truth —
+    see data-layer §8.6 I7). Only supplied keys are updated; the reply
+    echoes the effective rules so Node can verify what landed."""
+    if isinstance(args.get("excluded_dirs"), list):
+        _RULES["excluded_dirs"] = {str(d) for d in args["excluded_dirs"] if d}
+    mib = args.get("max_indexable_bytes")
+    if isinstance(mib, int) and mib > 0:
+        _RULES["max_indexable_bytes"] = mib
+    if isinstance(args.get("include_extensions"), list):
+        _RULES["include_extensions"] = [
+            str(e) for e in args["include_extensions"] if str(e).startswith(".")
+        ]
+    return {
+        "excluded_dirs": sorted(_RULES["excluded_dirs"]),
+        "max_indexable_bytes": _RULES["max_indexable_bytes"],
+        "include_extensions": _RULES["include_extensions"],
+    }
+
 
 def _collection_name(dim: int) -> str:
     """The single collection's name. Encodes dim so a `text-embedding-3-
@@ -600,10 +636,10 @@ def op_upsert(svc: StashbaseStore, args: dict) -> dict:
     _require(args, "path", "content")
     path = args["path"]
     content = args["content"]
-    if len(content.encode("utf-8", errors="replace")) > MAX_INDEXABLE_BYTES:
+    if len(content.encode("utf-8", errors="replace")) > _RULES["max_indexable_bytes"]:
         raise ValueError(
             f"file is too large to index ({len(content):,} chars; "
-            f"limit {MAX_INDEXABLE_BYTES:,} bytes)",
+            f"limit {_RULES['max_indexable_bytes']:,} bytes)",
         )
     ext = args.get("ext", ".md")
     # File-level metadata (user front-matter / HTML <meta> + the agent's
@@ -1003,9 +1039,9 @@ def _make_scanner():
     from mfs.config import Config, IndexingConfig
     from mfs.ingest.scanner import Scanner
     _patch_scanner_blake3()
-    config = Config(indexing=IndexingConfig(include_extensions=[".html", ".htm"]))
+    config = Config(indexing=IndexingConfig(include_extensions=list(_RULES["include_extensions"])))
     extra = []
-    for name in sorted(INDEX_EXCLUDED_DIRS):
+    for name in sorted(_RULES["excluded_dirs"]):
         extra.append(name)
         extra.append(f"{name}/")
     return Scanner(config, extra_excludes=extra)
@@ -1055,7 +1091,7 @@ def _walk_disk(root: Path, rel_prefix: str = "") -> dict:
             continue
         try:
             size = f.path.stat().st_size
-            if size == 0 or size > MAX_INDEXABLE_BYTES:
+            if size == 0 or size > _RULES["max_indexable_bytes"]:
                 continue
         except OSError:
             continue
@@ -1064,7 +1100,7 @@ def _walk_disk(root: Path, rel_prefix: str = "") -> dict:
 
 
 def _has_excluded_segment(rel: str) -> bool:
-    return any(seg in INDEX_EXCLUDED_DIRS for seg in rel.split("/") if seg)
+    return any(seg in _RULES["excluded_dirs"] for seg in rel.split("/") if seg)
 
 
 def _under_bundle(rel: str, note_stems: set) -> bool:
@@ -1375,6 +1411,7 @@ OPS = {
     "load_vector_cache": op_load_vector_cache,
     "clear_vector_cache": op_clear_vector_cache,
     "close_store": op_close_store,
+    "set_rules": op_set_rules,
 }
 
 
@@ -1392,6 +1429,36 @@ def main() -> int:
                         help="Absolute path of the StashBase library root; the daemon "
                              "owns one Milvus DB at <kb_root>/.stashbase/store/milvus.db")
     parsed, _unknown = parser.parse_known_args()
+
+    # Single-instance guard (data-layer §8.6 I3): hold an exclusive flock
+    # on a sidecar lock file for the whole process lifetime. Milvus Lite
+    # has its own LOCK, but the loser of that race doesn't fail — it
+    # half-opens (reads fine, writes silently lost). Failing fast here
+    # turns "second daemon on the same kbRoot" into an explicit startup
+    # error the Node side can surface. The flock dies with the process,
+    # so a dirty exit can never strand it. Best-effort: fcntl missing
+    # (Windows) or fs oddities skip the guard rather than block startup.
+    daemon_lock = None  # noqa: F841 — held open for the process lifetime
+    try:
+        import fcntl
+        lock_path = Path(parsed.kb_root) / ".stashbase" / "store" / "daemon.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        daemon_lock = open(lock_path, "w")
+        try:
+            fcntl.flock(daemon_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            daemon_lock.write(str(os.getpid()))
+            daemon_lock.flush()
+        except BlockingIOError:
+            _emit({
+                "event": "error",
+                "phase": "daemon_lock",
+                "error": f"another stashbase daemon already holds {lock_path} — "
+                         "refusing to run a second instance against the same KB",
+            })
+            return 1
+    except Exception:
+        daemon_lock = None  # unguarded platforms: proceed as before
+
     try:
         svc = StashbaseStore(parsed.kb_root)
     except Exception as exc:

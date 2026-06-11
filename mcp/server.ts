@@ -96,6 +96,21 @@ const WEB_BASE = `http://127.0.0.1:${parsePortArg(process.argv.slice(2), 8090)}`
 let embedded: MfsIndexer | null = null;
 let embeddedReady: Promise<void> | null = null;
 
+/** Tear down the embedded indexer and its daemon child. Fired whenever
+ *  we observe the web app alive: the GUI server's daemon is the
+ *  rightful owner of the store, and a leftover embedded daemon (from an
+ *  earlier GUI-down window) would fight it for the Milvus Lite flock —
+ *  the loser keeps "succeeding" while its writes silently go nowhere.
+ *  Re-spawning later is cheap: getEmbedded() rebuilds and re-binds. */
+function closeEmbedded(reason: string): void {
+  if (!embedded) return;
+  const inst = embedded;
+  embedded = null;
+  embeddedReady = null;
+  process.stderr.write(`[StashBase] closing embedded daemon (${reason})\n`);
+  void inst.close().catch(() => undefined);
+}
+
 function getEmbedded(): { indexer: MfsIndexer; ready: Promise<void> } {
   if (embedded && embeddedReady) return { indexer: embedded, ready: embeddedReady };
   const inst = new MfsIndexer();
@@ -234,12 +249,21 @@ async function tryWebElseEmbedded<T>(
   viaEmbedded: () => Promise<T>,
 ): Promise<T> {
   if (await webIsLive()) {
+    // Web alive ⇒ its daemon owns the store; make sure a leftover
+    // embedded daemon isn't still up competing for the Milvus flock.
+    closeEmbedded('web is live');
     try {
       return await viaWeb();
     } catch (err: unknown) {
+      // Fall back ONLY on transport-level failure (Node fetch rejects
+      // with TypeError on refused/reset/DNS) — that means the web app is
+      // actually gone. An HTTP-status error means the server is alive
+      // and gave a real answer; spawning a second daemon against the
+      // same Milvus Lite store to mask an APPLICATION error is how the
+      // flock fight starts (see closeEmbedded). Rethrow those.
+      if (!(err instanceof TypeError)) throw err;
       invalidateWebLive();
-      const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`[StashBase] web ${label} failed, falling back to embedded: ${msg}\n`);
+      process.stderr.write(`[StashBase] web ${label} unreachable, falling back to embedded: ${err.message}\n`);
     }
   }
   return viaEmbedded();

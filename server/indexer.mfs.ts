@@ -204,9 +204,14 @@ export class MfsIndexer implements Indexer {
     // Mark not-indexed while we re-embed so an in-flight status() during
     // a re-embed doesn't claim the file is up to date.
     this.noteUnindexed(filePath);
-    if (content.length === 0) {
+    // Covers truly empty files AND files whose extractable text is empty
+    // (bundler-format HTML that is one giant <script>, whitespace-only
+    // notes) — embedding either would store 0 chunks, so skip the
+    // round-trip. `/api/index-status` filters the same files out of
+    // `pending` (see `hasNoExtractableText`) so they don't pulse forever.
+    if (text.trim().length === 0) {
       await getDaemon().call('delete', { path: filePath });
-      log.info(`upsert ${filePath}: empty file, skipped embedding`);
+      log.info(`upsert ${filePath}: no extractable text, skipped embedding`);
       return;
     }
     const t0 = Date.now();

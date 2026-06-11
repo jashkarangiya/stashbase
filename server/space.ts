@@ -615,6 +615,12 @@ function readConfig(): ConfigFile {
   }
 }
 
+// SINGLE-WRITER CONSTRAINT: only the web server process writes the
+// config (the :8090 port bind already guarantees one instance). The MCP
+// host (mcp/server.ts) must stay read-only — read-modify-write here is
+// not cross-process safe (last write wins), and the tmp+rename below
+// only protects against torn writes, not lost updates. If the MCP host
+// ever needs to write config, add real cross-process locking first.
 function writeConfig(cfg: ConfigFile): void {
   try {
     fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
