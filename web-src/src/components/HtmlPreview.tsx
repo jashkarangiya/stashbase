@@ -99,6 +99,55 @@ export function HtmlPreview({ name }: { name: string }) {
   useEffect(() => { postScroll(); /* eslint-disable-next-line */ }, [pendingAnchor, name]);
   useEffect(() => { postChunkHighlight(); /* eslint-disable-next-line */ }, [pendingHighlight, name]);
 
+  // Forward OS-file drops out of the iframe. The iframe swallows drag
+  // events, so the window-level listeners in useGlobalDragDrop never
+  // fire while the cursor is over the preview area. `/asset/*` is
+  // same-origin with the app and the sandbox carries
+  // `allow-same-origin`, so the parent can attach to the
+  // contentDocument directly — same relay as MarkdownPreview.
+  useEffect(() => {
+    const iframe = frameRef.current;
+    if (!iframe) return;
+    let installedDoc: Document | null = null;
+
+    function iframeDragOver(e: Event) {
+      const de = e as DragEvent;
+      if (de.dataTransfer?.types.includes('Files')) de.preventDefault();
+    }
+    function iframeDrop(e: Event) {
+      const de = e as DragEvent;
+      if (!de.dataTransfer?.types.includes('Files')) return;
+      de.preventDefault();
+      de.stopPropagation();
+      // Collect entries synchronously before any await — Chromium
+      // invalidates DataTransfer.items on the first await.
+      const entries: FileSystemEntry[] = [];
+      for (let i = 0; i < (de.dataTransfer.items?.length ?? 0); i++) {
+        const entry = de.dataTransfer.items[i].webkitGetAsEntry?.();
+        if (entry) entries.push(entry);
+      }
+      window.dispatchEvent(
+        new CustomEvent('stashbase:iframe-drop', { detail: { entries } }),
+      );
+    }
+
+    function attach() {
+      const doc = iframe?.contentDocument;
+      if (!doc || installedDoc === doc) return;
+      installedDoc = doc;
+      doc.addEventListener('dragover', iframeDragOver);
+      doc.addEventListener('drop', iframeDrop);
+    }
+
+    iframe.addEventListener('load', attach);
+    if (iframe.contentDocument?.readyState === 'complete') attach();
+    return () => {
+      iframe.removeEventListener('load', attach);
+      installedDoc?.removeEventListener('dragover', iframeDragOver);
+      installedDoc?.removeEventListener('drop', iframeDrop);
+    };
+  }, [src]);
+
   // Register a postMessage-based find controller. The iframe runs the
   // walk-and-highlight algorithm itself (sandbox=allow-scripts blocks
   // same-origin DOM access) and replies with the count via reqId.
