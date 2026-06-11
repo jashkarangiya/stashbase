@@ -53,11 +53,7 @@ export const NOTE_EXTS: readonly string[] = NOTE_FORMATS.flatMap((f) => f.exts);
  *  (`report.pdf` → `.report.pdf.md`), so `report.pdf` and `report.png`
  *  don't collide on `.report.md` and the remap back to the source is
  *  deterministic (strip the leading `.` and trailing `.md` — no probing). */
-/** Video source extensions — screen recordings (`.webm`) and dropped-in
- *  clips. Frame-OCR'd into a hidden derived note, same as images. */
-export const VIDEO_SOURCE_EXTS = ['webm', 'mp4', 'mov', 'mkv', 'm4v'] as const;
-
-export const UNSTRUCTURED_SOURCE_EXTS = ['pdf', 'png', 'jpg', 'jpeg', 'webp', ...VIDEO_SOURCE_EXTS] as const;
+export const UNSTRUCTURED_SOURCE_EXTS = ['pdf', 'png', 'jpg', 'jpeg', 'webp'] as const;
 
 const NOTE_EXT_ALT = NOTE_EXTS.join('|');
 const SRC_EXT_ALT = UNSTRUCTURED_SOURCE_EXTS.join('|');
@@ -125,17 +121,6 @@ const VIEWER_ONLY_FORMATS: Array<{ pattern: RegExp; format: ViewerFormat }> = [
  *  derived-note remap to probe for an image original. */
 export function isImageFile(name: string): boolean {
   return IMAGE_PATTERN.test(name);
-}
-
-/** Video extensions the frame-OCR pipeline handles — built from the same
- *  `VIDEO_SOURCE_EXTS` baked into the derived-note regexes, so the set has
- *  a single home (`.webm` is the recorder's output; the rest are drop-ins). */
-const VIDEO_PATTERN = new RegExp(`\\.(${VIDEO_SOURCE_EXTS.join('|')})$`, 'i');
-
-/** True for videos the OCR pipeline handles. Used by the upload route to
- *  decide whether to spawn `ocr_video.py`. */
-export function isVideoFile(name: string): boolean {
-  return VIDEO_PATTERN.test(name);
 }
 
 const NOTE_FORMAT_RES: Array<{ re: RegExp; format: FileFormat }> = NOTE_FORMATS.map((f) => ({

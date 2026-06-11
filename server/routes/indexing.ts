@@ -20,9 +20,8 @@ import { HIDDEN_DOT_DIRS } from '../files.ts';
 import { hasNoExtractableText, indexableFileSizeError } from '../indexable.ts';
 import { derivedPathsForPdf, displayPathForHit, maybeConvertPdf } from '../pdf.ts';
 import { derivedNotePathForImage, maybeConvertImage } from '../image.ts';
-import { derivedNotePathForVideo, maybeConvertVideo } from '../video.ts';
 import { getInFlightConversions } from '../conversion.ts';
-import { isImageFile, isNoteName, isUnstructuredSource, isVideoFile } from '../format.ts';
+import { isImageFile, isNoteName, isUnstructuredSource } from '../format.ts';
 import { clearRecord, listByStatus, readAll as readConversionStatus } from '../conversion-status.ts';
 import { getFsChangeCounter } from '../watcher.ts';
 import { getDaemon } from '../mfs-daemon.ts';
@@ -250,9 +249,8 @@ export function mount(app: express.Express): void {
       if (!rel) return res.status(400).json({ error: 'path required' });
       const isPdf = /\.pdf$/i.test(rel);
       const isImage = isImageFile(rel);
-      const isVideo = isVideoFile(rel);
-      if (!isPdf && !isImage && !isVideo) {
-        return res.status(400).json({ error: 'not a convertible file (expected PDF, image, or video)' });
+      if (!isPdf && !isImage) {
+        return res.status(400).json({ error: 'not a convertible file (expected PDF or image)' });
       }
       const space = getCurrentSpace();
       if (!space) return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
@@ -280,9 +278,6 @@ export function mount(app: express.Express): void {
         try { fs.rmSync(staleNote, { force: true }); } catch { /* no stale to remove */ }
         try { fs.rmSync(staleBundle, { recursive: true, force: true }); } catch { /* no bundle */ }
         maybeConvertPdf(abs, rel);
-      } else if (isVideo) {
-        try { fs.rmSync(derivedNotePathForVideo(abs), { force: true }); } catch { /* no stale */ }
-        maybeConvertVideo(abs, rel);
       } else {
         try { fs.rmSync(derivedNotePathForImage(abs), { force: true }); } catch { /* no stale */ }
         maybeConvertImage(abs, rel);

@@ -24,7 +24,7 @@
  * has a different space open), where the ambient `fromKbRel`/`readText`
  * answer would be null and every file would spuriously fail.
  *
- * The only ambient-context consumers left are the PDF/image/video
+ * The only ambient-context consumers left are the PDF/image
  * conversion discovery calls — the conversion layer still thinks in
  * window context, so those degrade gracefully (skipped) when none is
  * open. Indexing itself never skips.
@@ -34,7 +34,6 @@ import path from 'node:path';
 import { reclaimInterruptedConversions } from './conversion.ts';
 import { discoverNewImages } from './image.ts';
 import { discoverNewPdfs } from './pdf.ts';
-import { discoverNewVideos } from './video.ts';
 import { getCurrentSpace, getKbRoot } from './space.ts';
 import type { Indexer } from './indexer.ts';
 import { logger, errorMessage } from './log.ts';
@@ -125,7 +124,7 @@ export async function syncIndex(indexer: Indexer, space: string): Promise<SyncRe
   // queue, or drop) instead of seeing a stuck record and skipping.
   reclaimInterruptedConversions();
   const cur = getCurrentSpace();
-  if (cur) { discoverNewPdfs(cur); discoverNewImages(cur); discoverNewVideos(cur); }
+  if (cur) { discoverNewPdfs(cur); discoverNewImages(cur); }
 
   const diff = await indexer.syncDiff(space);
   const failed: { name: string; error: string }[] = [];
@@ -214,7 +213,7 @@ export async function syncNewFiles(indexer: Indexer, space: string): Promise<Syn
   // crash-orphaned in-flight rows before the discovery walk re-decides.
   reclaimInterruptedConversions();
   const cur = getCurrentSpace();
-  if (cur) { discoverNewPdfs(cur); discoverNewImages(cur); discoverNewVideos(cur); }
+  if (cur) { discoverNewPdfs(cur); discoverNewImages(cur); }
 
   const status = await indexer.status(space);
   if (status.pending.length === 0 && status.orphaned.length === 0) {
