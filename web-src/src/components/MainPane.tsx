@@ -6,7 +6,7 @@ import { HtmlPreview } from './HtmlPreview';
 import { ImagePreview } from './ImagePreview';
 import { MarkdownPreview } from './MarkdownPreview';
 import { PathBreadcrumb } from './PathBreadcrumb';
-import { PdfSourceSplit } from './PdfSourceSplit';
+import { PdfPreview } from './PdfPreview';
 import { Split } from './Split';
 import { StashingPlaceholder } from './StashingPlaceholder';
 import { TabStrip } from './TabStrip';
@@ -63,11 +63,12 @@ export function MainPane() {
           <HtmlPreview name={cur.name} />
         )}
         {cur && cur.format === 'pdf' && (
-          // PDFs have no edit mode — the source is a binary file.
-          // Show the extracted markdown side-by-side with the original
-          // PDF so "Show original" keeps the searchable derived note in
-          // view instead of replacing it with the binary-only viewer.
-          <PdfSourceSplit name={cur.name} />
+          // PDFs have no edit mode — the source is a binary file. Only
+          // the original PDF is shown: the extracted `.md` is a hidden
+          // implementation detail (search hits remap back to the PDF;
+          // the derived note must never surface as content). The
+          // conversion failure banner + Retry live inside PdfPreview.
+          <PdfPreview name={cur.name} />
         )}
         {cur && cur.format === 'image' && (
           // Images, like PDFs, are binary — no edit mode.
