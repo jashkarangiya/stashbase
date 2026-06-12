@@ -11,7 +11,24 @@ module.exports = async function afterPack(context) {
     throw new Error(`Expected macOS app bundle was not found: ${appPath}`);
   }
 
-  execFileSync('/usr/bin/xattr', ['-cr', appPath], { stdio: 'inherit' });
+  // The repo lives under ~/Documents, which iCloud syncs. fileproviderd
+  // tags bundle directories with FinderInfo / fileprovider xattrs that
+  // `xattr -cr` cannot reliably strip (it re-applies them to tracked
+  // inodes), and codesign refuses to sign with them present ("resource
+  // fork, Finder information, or similar detritus not allowed"). A
+  // `ditto --noextattr` clone writes fresh inodes carrying none of the
+  // strippable attrs — only the kernel-applied com.apple.provenance
+  // survives, which codesign tolerates. Clone, swap, then sign.
+  const cleanPath = `${appPath}.clean`;
+  fs.rmSync(cleanPath, { recursive: true, force: true });
+  execFileSync('/usr/bin/ditto', ['--noextattr', '--noacl', '--norsrc', appPath, cleanPath], {
+    stdio: 'inherit',
+  });
+  fs.rmSync(appPath, { recursive: true, force: true });
+  fs.renameSync(cleanPath, appPath);
+
+  // Ad-hoc signature is mandatory: Apple Silicon refuses to execute
+  // completely unsigned binaries, "unsigned distribution" or not.
   execFileSync('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', appPath], {
     stdio: 'inherit',
   });
