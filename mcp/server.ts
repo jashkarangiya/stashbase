@@ -44,13 +44,12 @@ import {
 import { MfsIndexer } from '../server/indexer.mfs.ts';
 import {
   ensureKbRoot,
-  getApiKey,
   getKbRoot,
   isInsideKbRoot,
   listKnownSpaces,
-  migrateLegacyEmbedderConfig,
   needsKbRootPicker,
 } from '../server/space.ts';
+import { getApiKey, migrateLegacyEmbedderConfig } from '../server/app-config.ts';
 import { getDaemon } from '../server/mfs-daemon.ts';
 import {
   ensureKbOverview,

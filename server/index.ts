@@ -31,10 +31,10 @@ import {
   onClose,
   onKbRootChange,
   onSwitch,
-  migrateLegacyEmbedderConfig,
   ensureKbRoot,
   needsKbRootPicker,
 } from './space.ts';
+import { migrateLegacyEmbedderConfig } from './app-config.ts';
 import { bootBindAllSpaces } from './state.ts';
 import { ensureKbOverview } from './kb.ts';
 import { logger } from './log.ts';

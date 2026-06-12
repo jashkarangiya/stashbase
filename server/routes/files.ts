@@ -28,7 +28,8 @@ import {
 import { isNoteName } from '../format.ts';
 import { readFileOrder, setFolderOrder } from '../file-order.ts';
 import { cascadeRenameLinks, planRenameLinks, type RenameEntry } from '../links.ts';
-import { getApiKey, getCurrentSpace, toKbRel } from '../space.ts';
+import { getCurrentSpace, toKbRel } from '../space.ts';
+import { getApiKey } from '../app-config.ts';
 import { errorMessage, logger } from '../log.ts';
 import { indexer } from '../state.ts';
 import { sendError, revealInOsFileManager } from '../http.ts';

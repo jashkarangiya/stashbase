@@ -13,7 +13,8 @@ import {
   sanitizeFilename,
 } from '../files.ts';
 import { cascadeRenameLinks } from '../links.ts';
-import { getApiKey, toKbRel } from '../space.ts';
+import { toKbRel } from '../space.ts';
+import { getApiKey } from '../app-config.ts';
 import { errorMessage, logger } from '../log.ts';
 import { indexer } from '../state.ts';
 import { sendError } from '../http.ts';

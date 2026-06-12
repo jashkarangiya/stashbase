@@ -1,14 +1,9 @@
 /**
- * Space registry + config persistence.
+ * Space registry, window context, and KB-root management.
  *
- * Single layer of persistent config — everything lives in the global
- * `~/.stashbase/config.json` (0600):
- *   - `recentSpaces`      most-recent first, capped at MAX_RECENT
- *   - `apiKey`            user-level OpenAI key
- *
- * V1 fixes the embedder to OpenAI — there's no provider switching. If no
- * key is configured, indexing/search are disabled until the user adds
- * one (the UI pops a gate asking for it); files still save and preview.
+ * Persistence reuses `app-config.ts`'s `~/.stashbase/config.json`
+ * primitives for the kbRoot / recents fields; credentials and user
+ * preferences (API keys, terminal CLI) live in app-config.ts entirely.
  *
  * The currently-open space is in-memory only — server restart goes
  * back to the welcome screen. Other modules subscribe to switches via
@@ -21,11 +16,19 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { logger, errorMessage } from './log.ts';
 import { moveDirectory } from './fs-move.ts';
 import { isIndexExcludedDirName } from './indexable.ts';
+import {
+  readAppConfig as readConfig,
+  writeAppConfig as writeConfig,
+  type AppConfigFile,
+  type RecentSpace,
+} from './app-config.ts';
+
+// Type re-exports so existing `from './space.ts'` type imports keep
+// working; the values live in app-config.ts.
+export type { EmbedderProvider, RecentSpace } from './app-config.ts';
 
 const log = logger('space');
 
-const CONFIG_DIR = path.join(os.homedir(), '.stashbase');
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const MAX_RECENT = 50;
 
 /** Default KB root: `~/Documents/StashBase/`. All spaces must live
@@ -33,16 +36,6 @@ const MAX_RECENT = 50;
  *  KB location" UI can edit it; for now it's just the constant. */
 const DEFAULT_KB_ROOT = path.join(os.homedir(), 'Documents', 'StashBase');
 export const WINDOW_ID_HEADER = 'x-stashbase-window-id';
-
-export interface RecentSpace {
-  path: string;
-  openedAt: string;
-}
-
-/** V1 is OpenAI-only. Kept as a one-member type so the surrounding
- *  config plumbing reads clearly and a future provider re-introduction
- *  has an obvious seam. */
-export type EmbedderProvider = 'openai';
 
 export interface McpServerConfig {
   command: string;
@@ -53,32 +46,6 @@ export interface McpServerConfig {
 export interface SpaceConfigFile {
   mcpServers?: Record<string, McpServerConfig>;
   skillsDirs?: string[];
-}
-
-interface ConfigFile extends SpaceConfigFile {
-  /** Absolute path of the KB root. All spaces must live under it.
-   *  Defaults to `~/Documents/StashBase/`; persisted so a future UI
-   *  can rebase it without changing code. */
-  kbRoot?: string;
-  recentSpaces?: RecentSpace[];
-  /** Legacy field from when the concept was called "vault". Read for
-   *  back-compat (existing users keep their recents) and rewritten as
-   *  `recentSpaces` on the next write. */
-  recentVaults?: RecentSpace[];
-  apiKey?: string;
-  /** Gemini API key for video analysis in the recording pipeline. When
-   *  absent, recording falls back to local frame-OCR. */
-  geminiKey?: string;
-  /** Embedder provider is KB-wide (one collection family per
-   *  provider on the daemon). `openaiKey` is a leftover from the very
-   *  first global-config schema — its content moved into the top-level
-   *  `apiKey` on read; we keep the type loose so legacy reads don't
-   *  trip the parser. */
-  embedder?: { provider?: EmbedderProvider; openaiKey?: string };
-  /** Currently selected CLI for the right-side terminal panel. The
-   *  server knows the canonical registry; this just records which
-   *  entry the user last picked. Defaults to 'claude'. */
-  terminalCli?: string;
 }
 
 const DEFAULT_WINDOW_ID = 'default';
@@ -462,19 +429,12 @@ export function ensureKbRoot(): void {
   if (dirty) writeConfig(cfg);
 }
 
-export function getSpaceRootPath(spaceName: string): string {
+function getSpaceRootPath(spaceName: string): string {
   const bad = validateSpaceName(spaceName);
   if (bad) throw new Error(bad);
   return path.join(getKbRoot(), spaceName);
 }
 
-export function spaceExists(spaceName: string): boolean {
-  try {
-    return fs.statSync(getSpaceRootPath(spaceName)).isDirectory();
-  } catch {
-    return false;
-  }
-}
 
 export function requireSpaceExistsByName(spaceName: string): string {
   const root = getSpaceRootPath(spaceName);
@@ -560,7 +520,7 @@ export function setCurrentSpace(absPath: string, opts?: { create?: boolean; excl
   }
 }
 
-export function clearCurrentSpace(windowId = currentWindowId()): void {
+function clearCurrentSpace(windowId = currentWindowId()): void {
   const id = normalizeWindowId(windowId);
   const oldRoot = currentSpaces.get(id);
   currentSpaces.delete(id);
@@ -645,40 +605,6 @@ function pushRecent(absPath: string): void {
   // Drop the legacy field once we've migrated its content forward.
   delete cfg.recentVaults;
   writeConfig(cfg);
-}
-
-function readConfig(): ConfigFile {
-  try {
-    const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return {};
-    // Migrate `recentVaults` → `recentSpaces` on read so legacy users
-    // don't lose their list when the rename rolls out.
-    if (parsed.recentVaults && !parsed.recentSpaces) {
-      parsed.recentSpaces = parsed.recentVaults;
-    }
-    return parsed as ConfigFile;
-  } catch {
-    return {};
-  }
-}
-
-// SINGLE-WRITER CONSTRAINT: only the web server process writes the
-// config (the :8090 port bind already guarantees one instance). The MCP
-// host (mcp/server.ts) must stay read-only — read-modify-write here is
-// not cross-process safe (last write wins), and the tmp+rename below
-// only protects against torn writes, not lost updates. If the MCP host
-// ever needs to write config, add real cross-process locking first.
-function writeConfig(cfg: ConfigFile): void {
-  try {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-    const tmp = CONFIG_FILE + '.tmp';
-    // 0600 — config may carry the OpenAI key; keep it owner-only.
-    fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2), { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(tmp, CONFIG_FILE);
-  } catch (err: any) {
-    log.warn(`failed to persist config: ${errorMessage(err)}`);
-  }
 }
 
 export function getSpaceConfigPath(spaceName: string): string {
@@ -814,71 +740,3 @@ function ensureKbMetadata(root: string): void {
 // ---------- API key (global) ----------
 
 /** Returns the user's stored OpenAI key, or undefined if none. */
-export function getApiKey(): string | undefined {
-  const k = readConfig().apiKey;
-  return k && typeof k === 'string' && k.trim() ? k : undefined;
-}
-
-/** Persist (or clear, when `key` is falsy) the user's OpenAI key. */
-export function setApiKey(key: string | undefined): void {
-  const cfg = readConfig();
-  if (key && key.trim()) cfg.apiKey = key.trim();
-  else delete cfg.apiKey;
-  writeConfig(cfg);
-}
-
-/** Returns the user's stored Gemini API key, or undefined if none. */
-export function getGeminiKey(): string | undefined {
-  const k = readConfig().geminiKey;
-  return k && typeof k === 'string' && k.trim() ? k : undefined;
-}
-
-/** Persist (or clear, when `key` is falsy) the user's Gemini key. */
-export function setGeminiKey(key: string | undefined): void {
-  const cfg = readConfig();
-  if (key && key.trim()) cfg.geminiKey = key.trim();
-  else delete cfg.geminiKey;
-  writeConfig(cfg);
-}
-
-/** Currently selected CLI for the terminal panel. Defaults to
- *  'claude' so a fresh install opens the most popular option. */
-export function getTerminalCli(): string {
-  const v = readConfig().terminalCli;
-  return typeof v === 'string' && v ? v : 'claude';
-}
-
-export function setTerminalCli(id: string): void {
-  if (typeof id !== 'string' || !id) throw new Error('cli id required');
-  const cfg = readConfig();
-  cfg.terminalCli = id;
-  writeConfig(cfg);
-}
-
-// ---------- Embedder provider (global) ----------
-
-/** The embedder provider. V1 is fixed to OpenAI — there's no switching,
- *  so this is a constant. Kept as a function so call sites that surface
- *  "which provider" in info payloads don't need to special-case. */
-export function getEmbedderProvider(): EmbedderProvider {
-  return 'openai';
-}
-
-// ---------- Legacy migration ----------
-
-/** One-time upgrade from the very first global-embedder schema, when
- *  the OpenAI key lived under `embedder.openaiKey` instead of the
- *  top-level `apiKey`. Migrates that key forward and drops the
- *  sub-field. The `embedder.provider` field is preserved — it's the
- *  canonical store again. Safe to call repeatedly. */
-export function migrateLegacyEmbedderConfig(): void {
-  const cfg = readConfig();
-  if (!cfg.embedder?.openaiKey) return;
-  const oldKey = cfg.embedder.openaiKey;
-  if (typeof oldKey === 'string' && oldKey.trim() && !cfg.apiKey) {
-    cfg.apiKey = oldKey.trim();
-  }
-  delete cfg.embedder.openaiKey;
-  writeConfig(cfg);
-  log.info('migrated legacy embedder.openaiKey into top-level apiKey');
-}

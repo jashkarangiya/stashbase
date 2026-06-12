@@ -25,7 +25,8 @@ import { runBackgroundConversion } from '../conversion.ts';
 import { sanitizeFilename, saveText } from '../files.ts';
 import { analyzeVideoWithGemini, geminiConfigured } from '../gemini-video.ts';
 import { errorMessage, logger } from '../log.ts';
-import { getCurrentSpace, getGeminiKey, runWithWindowId, setGeminiKey, toKbRel, WINDOW_ID_HEADER } from '../space.ts';
+import { getCurrentSpace, runWithWindowId, toKbRel, WINDOW_ID_HEADER } from '../space.ts';
+import { getGeminiKey, setGeminiKey } from '../app-config.ts';
 import { indexer } from '../state.ts';
 
 const log = logger('routes/recording');

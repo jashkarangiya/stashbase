@@ -8,7 +8,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { rgPath } from '@vscode/ripgrep';
 import { errorMessage, logger } from '../log.ts';
-import { fromKbRel, getApiKey, getCurrentSpace, getCurrentSpaceName, getKbRoot, isInsideKbRoot, toKbRel } from '../space.ts';
+import { fromKbRel, getCurrentSpace, getCurrentSpaceName, getKbRoot, isInsideKbRoot, toKbRel } from '../space.ts';
+import { getApiKey } from '../app-config.ts';
 import { syncIndex } from '../sync.ts';
 import { extractEmbeddedResources } from '../resources.ts';
 import {

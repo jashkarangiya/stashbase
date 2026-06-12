@@ -6,7 +6,7 @@
  */
 import express from 'express';
 import { checkCliInstalled, CLIS, launchCommandFor } from '../terminal.ts';
-import { setTerminalCli, getTerminalCli } from '../space.ts';
+import { setTerminalCli, getTerminalCli } from '../app-config.ts';
 
 export function mount(app: express.Express): void {
   // Agent CLI registry + user preference. The renderer reads this to

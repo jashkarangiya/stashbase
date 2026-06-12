@@ -26,12 +26,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { logger, errorMessage } from './log.ts';
 import {
-  getEmbedderProvider,
   getKbRoot,
   listKnownSpaces,
   requireSpaceExistsByName,
   validateSpaceName,
 } from './space.ts';
+import { getEmbedderProvider } from './app-config.ts';
 import { indexer } from './state.ts';
 
 const log = logger('kb');

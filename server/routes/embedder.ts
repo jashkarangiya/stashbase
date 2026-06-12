@@ -9,12 +9,8 @@
  */
 import express from 'express';
 import { logger, errorMessage } from '../log.ts';
-import {
-  getApiKey,
-  getCurrentSpace,
-  getEmbedderProvider,
-  setApiKey,
-} from '../space.ts';
+import { getCurrentSpace } from '../space.ts';
+import { getApiKey, getEmbedderProvider, setApiKey } from '../app-config.ts';
 import { bindIndexerForSpace } from '../state.ts';
 import { validateOpenAIKey } from '../http.ts';
 

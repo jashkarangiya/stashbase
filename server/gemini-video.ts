@@ -21,7 +21,7 @@
  */
 import { readFile } from 'node:fs/promises';
 import { logger } from './log.ts';
-import { getGeminiKey } from './space.ts';
+import { getGeminiKey } from './app-config.ts';
 
 const log = logger('gemini-video');
 const BASE = 'https://generativelanguage.googleapis.com';

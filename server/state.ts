@@ -15,7 +15,6 @@
 import { MfsIndexer } from './indexer.mfs.ts';
 import type { Indexer, EmbedderRuntimeConfig } from './indexer.ts';
 import {
-  getApiKey,
   getCurrentSpace,
   getCurrentSpaceName,
   getKbRoot,
@@ -24,6 +23,7 @@ import {
   onSwitch,
   runWithWindowId,
 } from './space.ts';
+import { getApiKey } from './app-config.ts';
 import { syncNewFiles } from './sync.ts';
 import { getDaemon } from './mfs-daemon.ts';
 import { clearStaleMilvusLock } from './stale-lock.ts';
