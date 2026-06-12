@@ -4,7 +4,7 @@
  * The image analogue of `pdf.ts`: whenever a `.png` / `.jpg` / `.jpeg`
  * / `.webp` lands in a space (drag-in, clipboard paste, in-app capture)
  * we spawn RapidOCR in the background. It writes `.<sourceBasename>.md` alongside
- * the image, then the fs.watch debounce picks it up and the indexer
+ * the image; on completion the note is pushed into the index directly and the indexer
  * embeds the note — so a screenshot's text becomes searchable. The
  * image itself stays on disk as the user-facing file.
  *
@@ -35,7 +35,7 @@ export function derivedNotePathForImage(imageAbsPath: string): string {
 /** Run the OCR extractor on a single image. Resolves with the note path
  *  on success; rejects with the extractor's stderr tail on failure.
  *  Does not throw synchronously — fire-and-forget at the call site. */
-export function convertImage(imageAbsPath: string): Promise<{ notePath: string }> {
+function convertImage(imageAbsPath: string): Promise<{ notePath: string }> {
   const notePath = derivedNotePathForImage(imageAbsPath);
   return new Promise((resolve, reject) => {
     const { cmd, args } = extractorSpawn('ocr', 'ocr_extract.py', [imageAbsPath, notePath]);
@@ -72,8 +72,8 @@ const IMAGE_SPEC: ConversionSpec = {
 /** Fire-and-forget OCR used by the upload route. Skips if the note
  *  already exists; persists in-flight → done/failed to `state.db`
  *  (shared with PDFs) so the UI can show status. */
-export function maybeConvertImage(imageAbsPath: string, spaceRelative: string): void {
-  maybeConvert(imageAbsPath, spaceRelative, IMAGE_SPEC);
+export function maybeConvertImage(imageAbsPath: string): void {
+  maybeConvert(imageAbsPath, IMAGE_SPEC);
 }
 
 /** Reconcile hook: OCR any untracked image under the space (added via git

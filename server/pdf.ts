@@ -3,7 +3,7 @@
  *
  * Wired from the upload route: whenever a `.pdf` lands in a space we
  * spawn the extractor in the background. It writes `.<sourceBasename>.md` and
- * `.<sourceBasename>_files/` alongside the PDF, then the fs.watch debounce picks
+ * `.<sourceBasename>_files/` alongside the PDF; on completion the note is pushed into the index directly and the pipeline picks
  * them up and the indexer embeds the new note. Both the derived note
  * and its bundle are dot-prefixed — they're app-maintained artifacts,
  * not user content, so they sit alongside `.stashbase/` / `.claude/`
@@ -64,7 +64,7 @@ export function derivedPathsForPdf(pdfAbsPath: string): { notePath: string; bund
  *  rewrite hits so users see the PDF / image row rather than the hidden
  *  derived note. `baseAbs` is the root the relative path resolves against
  *  (space root for /api/search, kb root for /api/kb/search). */
-export function originalForDerivedNote(noteRel: string, baseAbs: string): string | null {
+function originalForDerivedNote(noteRel: string, baseAbs: string): string | null {
   // The derived name encodes the full source filename, so the source is
   // read straight off it — no extension probing.
   const m = matchDerivedNote(noteRel);
@@ -96,7 +96,7 @@ export function displayPathForHit(rel: string, baseAbs: string): string | null {
  *  rejects with the extractor's stderr tail on failure. Fire-and-
  *  forget at the call site if you don't want to block — `convertPdf`
  *  itself does not throw synchronously. */
-export function convertPdf(pdfAbsPath: string): Promise<ConvertResult> {
+function convertPdf(pdfAbsPath: string): Promise<ConvertResult> {
   const { notePath, bundleDir } = derivedPathsForPdf(pdfAbsPath);
   const converter = process.env.STASHBASE_PDF_CONVERTER === 'marker' ? 'marker' : 'pymupdf';
 
@@ -130,8 +130,8 @@ const PDF_SPEC: ConversionSpec = {
 /** Fire-and-forget convert used by the upload route. Skips if the note
  *  already exists; persists in-flight → done/failed to `state.db` so the
  *  UI can show "Converting…" and a Retry banner even after restart. */
-export function maybeConvertPdf(pdfAbsPath: string, spaceRelative: string): void {
-  maybeConvert(pdfAbsPath, spaceRelative, PDF_SPEC);
+export function maybeConvertPdf(pdfAbsPath: string): void {
+  maybeConvert(pdfAbsPath, PDF_SPEC);
 }
 
 /** Reconcile hook: convert any untracked `.pdf` under the space (dropped

@@ -1,15 +1,25 @@
 /**
- * Conversion status (PDF + image) backed by `<KB>/.stashbase/state.db`.
+ * Conversion status (PDF + image + recording) — split by durability:
  *
- * A small domain wrapper over the `state-db.ts` row primitives: the
- * conversion / UI pipeline speaks `markInFlight` / `markDone` /
- * `markFailed` / `hasRecord` etc., this maps them onto the `conversions`
- * table. Both unstructured kinds (pdf_extract, ocr_extract) share it.
+ *   - **in-flight: process memory only.** A conversion's subprocess is
+ *     our child; if this process dies, the conversion dies with it, so
+ *     persisting "in-flight" only ever produced corpses that needed a
+ *     reclaim pass on every reconcile. Memory state can't outlive the
+ *     truth it describes. After a crash, an unconverted source is simply
+ *     rediscovered ("source exists, derived note doesn't, no failure
+ *     record → queue") — conversions are idempotent.
+ *
+ *   - **failures: persisted** (`<KB>/.stashbase/state.db`, `conversions`
+ *     table) — the Retry banner needs the reason and attempt count to
+ *     survive restarts, and a persistent failure must NOT be silently
+ *     re-queued by the next discovery walk.
+ *
+ * "Done" is not a state we record: the derived note on disk IS the
+ * record (discovery skips sources whose note exists).
  */
 import {
   clearConversionStatus,
   getConversionStatus,
-  hasConversionStatus,
   listConversionStatus,
   readConversionStatusMap,
   setConversionStatus,
@@ -20,34 +30,47 @@ import {
 export type { ConversionStatus, ConversionStatusEntry };
 export type ConversionStatusMap = Record<string, ConversionStatusEntry>;
 
+const inFlight = new Set<string>();
+
+/** Persisted failures only (the Retry surface). */
 export function readAll(): ConversionStatusMap {
   return readConversionStatusMap();
 }
 
-export function getEntry(kbRel: string): ConversionStatusEntry | undefined {
-  return getConversionStatus(kbRel);
-}
 
-export function hasRecord(kbRel: string): boolean {
-  return hasConversionStatus(kbRel);
+/** True when this source needs no (re)queue decision: either a
+ *  conversion is running right now, or a persisted failure says a human
+ *  must press Retry first. */
+export function isPendingOrFailed(kbRel: string): boolean {
+  return inFlight.has(kbRel) || getConversionStatus(kbRel) !== undefined;
 }
 
 export function markInFlight(kbRel: string): void {
-  setConversionStatus(kbRel, 'in-flight', { incrementAttempts: true });
+  inFlight.add(kbRel);
 }
 
+/** Success: drop the in-flight marker and clear any stale failure row
+ *  from a previous attempt. */
 export function markDone(kbRel: string): void {
-  setConversionStatus(kbRel, 'done');
-}
-
-export function markFailed(kbRel: string, errorMsg: string): void {
-  setConversionStatus(kbRel, 'failed', { error: errorMsg });
-}
-
-export function clearRecord(kbRel: string): void {
+  inFlight.delete(kbRel);
   clearConversionStatus(kbRel);
 }
 
-export function listByStatus(status: ConversionStatus): Array<{ path: string; entry: ConversionStatusEntry }> {
-  return listConversionStatus(status);
+export function markFailed(kbRel: string, errorMsg: string): void {
+  inFlight.delete(kbRel);
+  setConversionStatus(kbRel, 'failed', { error: errorMsg, incrementAttempts: true });
+}
+
+export function clearRecord(kbRel: string): void {
+  inFlight.delete(kbRel);
+  clearConversionStatus(kbRel);
+}
+
+export function listFailed(): Array<{ path: string; entry: ConversionStatusEntry }> {
+  return listConversionStatus('failed');
+}
+
+/** kbRels with a conversion running in this process right now. */
+export function listInFlight(): string[] {
+  return [...inFlight];
 }

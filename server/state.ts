@@ -14,17 +14,9 @@
  */
 import { MfsIndexer } from './indexer.mfs.ts';
 import type { Indexer, EmbedderRuntimeConfig } from './indexer.ts';
-import {
-  getCurrentSpace,
-  getCurrentSpaceName,
-  getKbRoot,
-  listKnownSpaces,
-  onClose,
-  onSwitch,
-  runWithWindowId,
-} from './space.ts';
+import { getCurrentSpace, getCurrentSpaceName, getKbRoot, listKnownSpaces, onClose, onSwitch, runWithWindowId } from './space.ts';
 import { getApiKey } from './app-config.ts';
-import { syncNewFiles } from './sync.ts';
+import { syncIndex } from './sync.ts';
 import { getDaemon } from './mfs-daemon.ts';
 import { clearStaleMilvusLock } from './stale-lock.ts';
 import { logger, errorMessage } from './log.ts';
@@ -86,7 +78,7 @@ async function clearSnapshotCacheIfLoaded(spaceAbs: string): Promise<void> {
  *  when no API key is set — the caller still binds the space (so it's
  *  registered) but indexing stays disabled until the user adds a key
  *  (graceful no-key degrade). */
-export function resolveEmbedder(): EmbedderRuntimeConfig | null {
+function resolveEmbedder(): EmbedderRuntimeConfig | null {
   const apiKey = getApiKey();
   if (!apiKey) return null;
   return { provider: 'openai', apiKey };
@@ -160,7 +152,7 @@ export async function bindIndexerForSpace(spaceAbs: string): Promise<void> {
  *  cache into the daemon so the import-time reindex reuses vectors
  *  instead of re-embedding — lets a freshly-cloned starter (e.g. cs183b)
  *  come pre-indexed cheaply. The actual chunk rows are produced by the
- *  normal reindex (`syncNewFiles`) that follows; this only primes the
+ *  normal reindex (`syncIndex`) that follows; this only primes the
  *  cache. The cache is cleared by `clearSnapshotCacheIfLoaded` once that
  *  reindex drains.
  *
@@ -273,42 +265,7 @@ function ensureSwitchWatchdog(): void {
   switchWatchdog.unref();
 }
 
-/** Resolves when in-flight bind + snapshot-import work has settled.
- *  External callers (notably the fs watcher) await this before their own
- *  scans so `scan_diff` can't run against an unbound — or worse,
- *  mid-import — collection (which would re-embed everything the snapshot
- *  just imported).
- *
- *  That race is **per-space**, so pass `spaceRoot` to wait only for
- *  segments touching that space — a wedged chain on an unrelated space
- *  must not dam this one's watcher (the 2026-06-11 failure mode was a
- *  global version of this gate going permanently shut). No argument =
- *  global barrier, for boot / kbRoot-migration class callers.
- *
- *  Hard timeout backstop (120s): a queue entry with no reply would
- *  otherwise hold the gate forever; the protected race settles in
- *  seconds, so past 120s we proceed regardless. */
-const INDEXER_READY_TIMEOUT_MS = 120_000;
-
-export function awaitIndexerReady(spaceRoot?: string): Promise<void> {
-  const relevant = [...pendingSwitches]
-    .filter((p) => spaceRoot === undefined || p.spaceRoot === spaceRoot)
-    .map((p) => p.promise.catch(() => undefined));
-  if (relevant.length === 0) return Promise.resolve();
-  const settled = Promise.all(relevant).then(() => undefined);
-  return Promise.race([
-    settled,
-    new Promise<void>((resolve) => {
-      const t = setTimeout(() => {
-        log.warn('awaitIndexerReady: bind/import still unsettled after 120s — proceeding anyway');
-        resolve();
-      }, INDEXER_READY_TIMEOUT_MS);
-      t.unref();
-    }),
-  ]);
-}
-
-export function scheduleIndexerSync(spaceRoot: string, reason: string, windowId = 'default'): void {
+function scheduleIndexerSync(spaceRoot: string, reason: string, windowId = 'default'): void {
   const seq = (indexerSwitchSeq.get(windowId) ?? 0) + 1;
   indexerSwitchSeq.set(windowId, seq);
   const prev = indexerSwitchQueues.get(windowId) ?? Promise.resolve();
@@ -320,13 +277,14 @@ export function scheduleIndexerSync(spaceRoot: string, reason: string, windowId 
         try {
           await bindIndexerForSpace(spaceRoot);
           if (getCurrentSpace() !== spaceRoot || seq !== indexerSwitchSeq.get(windowId)) return;
-          // Name-only diff: trust existing rows, only embed new files
-          // and drop orphans. Reopening a fully-indexed space costs zero
-          // tokens. The full content-hash diff lives behind the manual
-          // /api/sync button for the rare case where the user edited
-          // files externally with the app closed.
+          // Full content-hash diff — the only reconcile tier. Hashing
+          // is milliseconds for a personal KB; embedding still only
+          // happens for changed hashes, so reopening a fully-indexed
+          // space costs zero tokens, AND external edits made while the
+          // app was closed are caught right here instead of waiting for
+          // a manual sync.
           const spaceName = getCurrentSpaceName();
-          if (spaceName) await syncNewFiles(indexer, spaceName);
+          if (spaceName) await syncIndex(indexer, spaceName);
         } catch (err: unknown) {
           log.warn(`${reason}: index sync failed for ${spaceRoot}: ${errorMessage(err)}`);
         } finally {

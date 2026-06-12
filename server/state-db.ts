@@ -38,7 +38,7 @@ function stateDbPath(): string {
   return path.join(getKbRoot(), '.stashbase', 'state.db');
 }
 
-export function getStateDb(): Database.Database {
+function getStateDb(): Database.Database {
   const target = stateDbPath();
   if (db && dbPath === target) return db;
   if (db) {
@@ -74,6 +74,12 @@ function migrate(conn: Database.Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS conversions_status_idx ON conversions(status, last_attempt_at);
+
+    -- 2026-06: only failures are persisted now. in-flight lives in
+    -- process memory (a crash kills the conversion with us — persisting
+    -- it only produced corpses needing a reclaim pass), and "done" is
+    -- recorded by the derived note's existence on disk. Shed legacy rows.
+    DELETE FROM conversions WHERE status != 'failed';
 
     -- Drop legacy tables on open so existing installs shed dead schema:
     --   'pdf_conversions'  → renamed to 'conversions' (covers PDF + image
@@ -174,10 +180,6 @@ export function getConversionStatus(pathKey: string): ConversionStatusEntry | un
   return readConversionStatusMap()[pathKey];
 }
 
-export function hasConversionStatus(pathKey: string): boolean {
-  const row = getStateDb().prepare('SELECT 1 FROM conversions WHERE path = ?').get(pathKey);
-  return row != null;
-}
 
 export function setConversionStatus(pathKey: string, status: ConversionStatus, opts: { error?: string; incrementAttempts?: boolean } = {}): void {
   const prev = getConversionStatus(pathKey);

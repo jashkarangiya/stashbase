@@ -15,7 +15,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { onSwitch, requireCurrentSpace } from './space.ts';
-import { noteSelfWrite } from './watcher.ts';
 import { decodeEntities } from './html.ts';
 import { errorCode, errorMessage, logger } from './log.ts';
 
@@ -106,12 +105,6 @@ export function saveBytes(relPath: string, bytes: Buffer): void {
   const target = resolveSafe(relPath);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const tmp = target + '.tmp';
-  // Tell the fs.watch layer "this is us writing, don't trigger a sync".
-  // Both the .tmp write and the rename-to-target fire watcher events;
-  // suppress both or the .tmp event escapes the TTL window and triggers
-  // a spurious syncIndex that can briefly add the file to `pendingNames`.
-  noteSelfWrite(tmp);
-  noteSelfWrite(target);
   fs.writeFileSync(tmp, bytes);
   fs.renameSync(tmp, target);
 }
@@ -123,7 +116,6 @@ export function saveBytes(relPath: string, bytes: Buffer): void {
 export function createTextExclusive(relPath: string, content: string): boolean {
   const target = resolveSafe(relPath);
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  noteSelfWrite(target);
   try {
     fs.writeFileSync(target, content, { encoding: 'utf8', flag: 'wx' });
     return true;
@@ -139,8 +131,6 @@ export function renameOnDisk(oldRel: string, newRel: string): void {
   const o = resolveSafe(oldRel);
   const n = resolveSafe(newRel);
   fs.mkdirSync(path.dirname(n), { recursive: true });
-  noteSelfWrite(o);
-  noteSelfWrite(n);
   fs.renameSync(o, n);
   // Notes carry an implicit "<stem>_files/" attachment bundle (browser
   // "Save Page As Complete" output for HTML, paste/drag image targets
@@ -191,7 +181,6 @@ export function resolveExisting(relPath: string): string | null {
  *  reporting success while the file stays on disk. */
 export function deleteFile(relPath: string): boolean {
   const target = resolveSafe(relPath);
-  noteSelfWrite(target);
   let removed = false;
   try {
     fs.unlinkSync(target);

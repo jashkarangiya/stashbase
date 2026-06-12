@@ -1676,6 +1676,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Reconcile on window focus — the replacement for the old fs.watch
+  // layer. External edits made while StashBase wasn't focused (vim, git
+  // checkout, scripts) fold in the moment the user comes back; while the
+  // app IS focused, in-app and agent writes index on their own write
+  // paths, so nothing is lost by not watching. Throttled so rapid
+  // focus/blur cycles don't stack syncs; results surface through the
+  // regular index-status poll (treeVersion bumps server-side).
+  useEffect(() => {
+    let lastFocusSync = 0;
+    function onFocus() {
+      if (!stateRef.current.space) return;
+      const now = Date.now();
+      if (now - lastFocusSync < 5000) return;
+      lastFocusSync = now;
+      void api.sync().catch(() => { /* surfaced by the next status poll */ });
+    }
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
+
   // Best-effort flush before unload. `sendBeacon` keeps the PUT alive
   // past page teardown.
   useEffect(() => {

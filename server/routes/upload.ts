@@ -110,11 +110,11 @@ async function handleUpload(req: express.Request, res: express.Response): Promis
       } else if (spaceAbs && /\.pdf$/i.test(name)) {
         // PDFs run through the pymupdf / marker pipeline so the
         // user gets a readable note + image bundle they can preview
-        // and that the indexer can pick up via the watcher.
+        // and that the converter pushes into the index on completion.
         toConvertPdf.push({ abs: path.join(spaceAbs, name), rel: name });
       } else if (spaceAbs && isImageFile(name)) {
         // Images run through RapidOCR so any text in a screenshot /
-        // photo becomes a hidden `.<sourceBasename>.md` note the watcher picks
+        // photo becomes a hidden `.<sourceBasename>.md` note the converter indexes
         // up and indexes — mirrors the PDF path, minus the bundle.
         toOcrImage.push({ abs: path.join(spaceAbs, name), rel: name });
       }
@@ -139,10 +139,10 @@ async function handleUpload(req: express.Request, res: express.Response): Promis
   // kickoff (the response is already sent, so it'd otherwise be an
   // unhandled error) — same discipline as the index loop above.
   for (const { abs, rel } of toConvertPdf) {
-    try { maybeConvertPdf(abs, rel); } catch (err: unknown) { log.warn(`upload: pdf convert kickoff failed for ${rel}: ${errorMessage(err)}`); }
+    try { maybeConvertPdf(abs); } catch (err: unknown) { log.warn(`upload: pdf convert kickoff failed for ${rel}: ${errorMessage(err)}`); }
   }
   for (const { abs, rel } of toOcrImage) {
-    try { maybeConvertImage(abs, rel); } catch (err: unknown) { log.warn(`upload: image OCR kickoff failed for ${rel}: ${errorMessage(err)}`); }
+    try { maybeConvertImage(abs); } catch (err: unknown) { log.warn(`upload: image OCR kickoff failed for ${rel}: ${errorMessage(err)}`); }
   }
 }
 

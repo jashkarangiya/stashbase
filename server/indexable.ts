@@ -42,7 +42,7 @@ export function isIndexExcludedDirName(name: string): boolean {
   return INDEX_EXCLUDED_DIRS.has(name);
 }
 
-export function dipsIntoIndexExcludedDir(relPath: string): boolean {
+function dipsIntoIndexExcludedDir(relPath: string): boolean {
   return relPath
     .replace(/\\/g, '/')
     .split('/')

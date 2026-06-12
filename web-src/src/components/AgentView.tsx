@@ -262,6 +262,11 @@ export function AgentView({ active, title }: { active: boolean; title: string })
       case 'turn-end':
         openKind.current = null;
         setTurnActive(false);
+        // The agent may have written files via shell during the turn —
+        // reconcile now (deterministic, replaces fs.watch). MCP writes
+        // already index on their own path; this catches `Bash`/editor
+        // writes the moment the turn finishes.
+        void api.sync().catch(() => { /* next status poll surfaces it */ });
         break;
       case 'error':
         openKind.current = null;

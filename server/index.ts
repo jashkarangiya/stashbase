@@ -28,6 +28,7 @@ import {
 } from './agent.ts';
 import { stopSpaceMcpServers, switchSpaceMcpServers } from './mcp-host.ts';
 import {
+  getKbRoot,
   onClose,
   onKbRootChange,
   onSwitch,
@@ -35,10 +36,11 @@ import {
   needsKbRootPicker,
 } from './space.ts';
 import { migrateLegacyEmbedderConfig } from './app-config.ts';
+import { setDerivedNoteIndexer } from './conversion.ts';
+import { noteTreeChanged } from './watcher.ts';
 import { bootBindAllSpaces } from './state.ts';
 import { ensureKbOverview } from './kb.ts';
 import { logger } from './log.ts';
-import { startWatcher, stopWatcher } from './watcher.ts';
 import { indexer } from './state.ts';
 import { closeStateDb } from './state-db.ts';
 import { requireSpace, withWindowContext } from './http.ts';
@@ -50,11 +52,22 @@ import { mount as mountUploadRoutes } from './routes/upload.ts';
 import { mount as mountRecordingRoutes } from './routes/recording.ts';
 import { mount as mountAttachRoutes } from './routes/attach.ts';
 import { mount as mountIndexingRoutes } from './routes/indexing.ts';
+import { mount as mountKbRoutes } from './routes/kb.ts';
 import { mount as mountTerminalRoutes } from './routes/terminal.ts';
 import { mount as mountMcpRoutes } from './routes/mcp.ts';
 import { mount as mountSessionsRoutes } from './routes/sessions.ts';
 
 const log = logger('server');
+
+// Converters push their derived notes straight into the index on
+// completion — there is no fs-watcher intermediary anymore. Wired here
+// (not inside conversion.ts) to avoid a conversion ↔ state module cycle.
+setDerivedNoteIndexer(async (noteAbs) => {
+  const kbRel = path.relative(getKbRoot(), noteAbs).split(path.sep).join('/');
+  const content = fs.readFileSync(noteAbs, 'utf8');
+  await indexer.upsertFile(kbRel, content);
+  noteTreeChanged();
+});
 
 function parsePortArg(argv: string[], fallback: number): number {
   for (let i = 0; i < argv.length; i++) {
@@ -97,10 +110,6 @@ if (kbRootReadyAtBoot) {
     log.warn(`bootBindAllSpaces failed: ${err?.message ?? err}`),
   );
 
-  // fs.watch the space root so external edits (vim / git / Dropbox)
-  // trigger a debounced re-sync. Self-writes are suppressed inside
-  // `files.ts:saveText` etc.
-  startWatcher(indexer);
 } else {
   log.info('kbRoot is not initialised; waiting for first-run picker');
 }
@@ -221,6 +230,7 @@ mountUploadRoutes(app);
 mountRecordingRoutes(app);
 mountAttachRoutes(app);
 mountIndexingRoutes(app);
+mountKbRoutes(app);
 mountTerminalRoutes(app);
 mountMcpRoutes(app);
 mountSessionsRoutes(app); // global (no requireSpace) — lists all local sessions
@@ -335,14 +345,12 @@ onClose((_oldRoot, windowId) => {
   void stopSpaceMcpServers(windowId);
 });
 onKbRootChange(async () => {
-  stopWatcher();
   await stopSpaceMcpServers();
   killActiveAgent();
   await indexer.close();
   closeStateDb();
   ensureKbOverview();
   await bootBindAllSpaces();
-  startWatcher(indexer);
 });
 
 // Hook WebSocket upgrades. `/ws/agent` goes to our agent-session bridge;
@@ -393,7 +401,6 @@ async function shutdown(reason: string): Promise<void> {
   log.info(`shutdown: ${reason}`);
   // Stop accepting new connections immediately; in-flight ones drain.
   try { server.close(); } catch { /* already gone */ }
-  try { stopWatcher(); } catch { /* swallow */ }
   try { await stopSpaceMcpServers(); } catch { /* swallow */ }
   try { closeStateDb(); } catch { /* swallow */ }
   // Hard ceiling: if the indexer's close ladder can't unstick the

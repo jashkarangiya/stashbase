@@ -2,39 +2,25 @@
  * Space sync: reconcile the index with whatever note files are
  * currently on disk in the space.
  *
- * Two flavours:
+ * ONE flavour (2026-06 simplification): `syncIndex` — full content-hash
+ * diff via the daemon's `scan_diff` op. Hashing a personal-KB-sized tree
+ * is milliseconds; embedding only happens for changed hashes, so a
+ * cheaper name-only tier bought nothing but a second semantics. Called
+ * on space open/switch, window focus, agent turn end, the manual
+ * `POST /api/sync` button, and MCP `update_index`.
  *
- *   - `syncIndex`     — full content-hash diff via the daemon's
- *                       `scan_diff` op. Catches external edits done
- *                       behind StashBase's back (vim / git checkout /
- *                       Dropbox). Called by the fs.watch debounce and
- *                       by the manual `POST /api/sync` button.
- *
- *   - `syncNewFiles`  — name-only diff via `indexer.status()`. Embeds
- *                       files not yet in the index, drops orphans, but
- *                       does NOT re-embed existing rows. Used on
- *                       startup / space-switch so re-opening a fully-
- *                       indexed space costs zero embed tokens.
- *
- * Both scoped to ONE space at a time, and BOTH context-free: the target
- * space arrives as an explicit argument and every path is resolved
- * against it (or against kbRoot directly) — never against the ambient
- * window context. Sync runs in contexts that have no space open at all
- * (MCP host embedded path, `POST /api/sync?space=X` from a window that
- * has a different space open), where the ambient `fromKbRel`/`readText`
- * answer would be null and every file would spuriously fail.
- *
- * The only ambient-context consumers left are the PDF/image
- * conversion discovery calls — the conversion layer still thinks in
- * window context, so those degrade gracefully (skipped) when none is
- * open. Indexing itself never skips.
+ * Scoped to ONE space at a time and fully context-free: the target
+ * space arrives as an explicit argument and every path (including the
+ * PDF/image conversion discovery below) is resolved against kbRoot —
+ * never against the ambient window context. Sync runs in contexts that
+ * have no space open at all (headless server, `POST /api/sync?space=X`
+ * from a window that has a different space open).
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { reclaimInterruptedConversions } from './conversion.ts';
 import { discoverNewImages } from './image.ts';
 import { discoverNewPdfs } from './pdf.ts';
-import { getCurrentSpace, getKbRoot } from './space.ts';
+import { getKbRoot } from './space.ts';
 import type { Indexer } from './indexer.ts';
 import { logger, errorMessage } from './log.ts';
 import { hasNoExtractableText, indexableFileSizeError, shouldIndexFilePath } from './indexable.ts';
@@ -115,16 +101,14 @@ export interface SyncResult {
  *  them straight. */
 export async function syncIndex(indexer: Indexer, space: string): Promise<SyncResult> {
   // Surface untracked PDFs / images before running the index diff. We
-  // don't await individual conversions — the converter (pdf_extract /
-  // ocr_extract) writes the derived .md to disk and the fs.watch
-  // debounce will catch it on its next tick. We just want the queueing
-  // to start so the user sees pendingConversions populate.
-  // Reclaim any in-flight conversions orphaned by a prior crash/restart
-  // first, so the discovery walk below can re-decide them (finish, re-
-  // queue, or drop) instead of seeing a stuck record and skipping.
-  reclaimInterruptedConversions();
-  const cur = getCurrentSpace();
-  if (cur) { discoverNewPdfs(cur); discoverNewImages(cur); }
+  // don't await individual conversions — each converter indexes its
+  // derived note directly on completion; here we just start the queueing
+  // so the user sees pendingConversions populate. Discovery is decided
+  // from disk + memory truth alone (note exists / failure recorded /
+  // running now), so it is safe and idempotent on every sync.
+  const spaceAbs = path.join(getKbRoot(), space);
+  discoverNewPdfs(spaceAbs);
+  discoverNewImages(spaceAbs);
 
   const diff = await indexer.syncDiff(space);
   const failed: { name: string; error: string }[] = [];
@@ -205,55 +189,6 @@ export async function syncIndex(indexer: Indexer, space: string): Promise<SyncRe
     modified: modifiedDone.map((p) => spaceRelOf(space, p) ?? p),
     removed: diff.deleted.map((p) => spaceRelOf(space, p) ?? p),
     renamed: renamedDone.map((p) => spaceRelOf(space, p) ?? p),
-    failed,
-  };
-}
-
-/** Name-only diff for one space. Skips content hashing for speed;
- *  the manual sync button (POST /api/sync) handles drift. */
-export async function syncNewFiles(indexer: Indexer, space: string): Promise<SyncResult> {
-  // Same rationale as syncIndex: queue untracked PDFs / images first so
-  // the sidebar's "Converting…" indicator shows up on space open.
-  // Same reclaim-then-discover order as syncIndex (see there): clear
-  // crash-orphaned in-flight rows before the discovery walk re-decides.
-  reclaimInterruptedConversions();
-  const cur = getCurrentSpace();
-  if (cur) { discoverNewPdfs(cur); discoverNewImages(cur); }
-
-  const status = await indexer.status(space);
-  if (status.pending.length === 0 && status.orphaned.length === 0) {
-    log.info('index up to date (name-only check)');
-    return { added: [], modified: [], removed: [], renamed: [], failed: [] };
-  }
-
-  const failed: { name: string; error: string }[] = [];
-
-  if (status.orphaned.length) {
-    log.info(`removing ${status.orphaned.length} orphan(s) from index`);
-    for (const kbRel of status.orphaned) {
-      try { await indexer.deleteFile(kbRel); }
-      catch (err: any) { failed.push({ name: kbRel, error: errorMessage(err) }); }
-    }
-  }
-
-  if (status.pending.length) {
-    log.info(`indexing ${status.pending.length} new file(s) [hash check skipped — call POST /api/sync for full re-check]`);
-  }
-  const addedDone: string[] = [];
-  for (const kbRel of status.pending) {
-    if (await indexOne(indexer, space, kbRel, failed)) addedDone.push(kbRel);
-  }
-
-  log.info(
-    `done. added=${addedDone.length}/${status.pending.length} ` +
-      `removed=${status.orphaned.length} failed=${failed.length}`,
-  );
-  await assertSyncConverged(indexer, space, addedDone);
-  return {
-    added: addedDone.map((p) => spaceRelOf(space, p) ?? p),
-    modified: [],
-    removed: status.orphaned.map((p) => spaceRelOf(space, p) ?? p),
-    renamed: [],
     failed,
   };
 }
