@@ -12,10 +12,12 @@
  * plain `curl`: resumable Files upload → poll until ACTIVE → generateContent
  * → delete the uploaded file.
  *
- * Opt-in: key is configured in Settings → Capture (stored in
- * `~/.stashbase/config.json`). Falls back to `GEMINI_API_KEY` / `GOOGLE_API_KEY`
- * env vars for backward compatibility. When absent, the recording route falls
- * back to local frame-OCR. Model override: `GEMINI_VIDEO_MODEL` (default flash).
+ * Opt-in: the key comes from Settings → Capture (stored in
+ * `~/.stashbase/config.json`) — the ONLY source; env-var keys are
+ * deliberately not honoured (credentials live in app settings, not the
+ * environment). When absent, the recording route refuses with
+ * GEMINI_KEY_REQUIRED — there is no offline fallback. Model override:
+ * `GEMINI_VIDEO_MODEL` (default flash, a dev knob not a credential).
  * Privacy: this uploads the recording to Google — a deliberate departure from
  * the otherwise local-first path.
  */
@@ -42,14 +44,10 @@ Output only the Markdown note — no preamble and no surrounding code fence.`;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function apiKey(): string | undefined {
-  return getGeminiKey() || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || undefined;
-}
-
-/** True when a Gemini key is configured — the recording route uses this to
- *  choose Gemini vs the local frame-OCR fallback. */
+/** True when a Gemini key is configured in Settings → Capture — the
+ *  recording route refuses without one (no fallback). */
 export function geminiConfigured(): boolean {
-  return Boolean(apiKey());
+  return Boolean(getGeminiKey());
 }
 
 interface GeminiFile {
@@ -99,8 +97,8 @@ async function uploadFile(key: string, bytes: Uint8Array, mimeType: string): Pro
 /** Upload `videoAbsPath` to Gemini, get the structured Markdown note, then
  *  delete the uploaded file. Rejects on any failure. */
 export async function analyzeVideoWithGemini(videoAbsPath: string, mimeType: string): Promise<string> {
-  const key = apiKey();
-  if (!key) throw new Error('GEMINI_API_KEY not set');
+  const key = getGeminiKey();
+  if (!key) throw new Error('Gemini key not configured (Settings → Capture)');
   const model = process.env.GEMINI_VIDEO_MODEL || 'gemini-2.5-flash';
 
   const bytes = await readFile(videoAbsPath);

@@ -15,7 +15,6 @@
  *   6. Vite dev-only proxy (last — it swallows /everything/)
  *   7. `listen` + WebSocket upgrade handler
  */
-import './load-env.ts'; // MUST be first — populates process.env from .env before any env reads
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,20 +26,13 @@ import {
   killActiveAgent,
 } from './agent.ts';
 import { stopSpaceMcpServers, switchSpaceMcpServers } from './mcp-host.ts';
-import {
-  getKbRoot,
-  onClose,
-  onKbRootChange,
-  onSwitch,
-  ensureKbRoot,
-  needsKbRootPicker,
-} from './space.ts';
+import { getKbRoot, onClose, onKbRootChange, onSwitch, ensureKbRoot, needsKbRootPicker } from './space.ts';
 import { migrateLegacyEmbedderConfig } from './app-config.ts';
-import { setDerivedNoteIndexer } from './conversion.ts';
-import { noteTreeChanged } from './watcher.ts';
 import { bootBindAllSpaces } from './state.ts';
 import { ensureKbOverview } from './kb.ts';
 import { logger } from './log.ts';
+import { setDerivedNoteIndexer } from './conversion.ts';
+import { noteTreeChanged } from './watcher.ts';
 import { indexer } from './state.ts';
 import { closeStateDb } from './state-db.ts';
 import { requireSpace, withWindowContext } from './http.ts';
