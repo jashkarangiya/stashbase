@@ -97,8 +97,7 @@
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "target": [
-        "dmg",
-        "zip"
+        "dmg"
       ]
     },
     "dmg": {
