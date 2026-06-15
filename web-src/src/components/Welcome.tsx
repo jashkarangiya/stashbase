@@ -317,7 +317,7 @@ function KbRootPickerModal({
   }
 
   return (
-    <ModalShell onCancel={() => { /* first-run picker is required */ }}>
+    <ModalShell closeOnBackdrop={false} onCancel={() => { /* first-run picker is required */ }}>
       <h3>Choose root folder</h3>
       <p className="modal-hint">
         Spaces will live as folders inside <code>{display}</code>.
@@ -660,7 +660,7 @@ function NewSpaceModal({
   }
 
   return (
-    <ModalShell onCancel={busy ? () => { /* swallow during create */ } : onClose}>
+    <ModalShell closeOnBackdrop={false} onCancel={busy ? () => { /* swallow during create */ } : onClose}>
       <h3>New space</h3>
       <p className="modal-hint">
         Creates{' '}
@@ -811,7 +811,7 @@ function OpenSpaceModal({
   }
 
   return (
-    <ModalShell onCancel={busy ? () => { /* swallow during open */ } : onClose}>
+    <ModalShell closeOnBackdrop={false} onCancel={busy ? () => { /* swallow during open */ } : onClose}>
       <h3>Open space</h3>
       <p className="modal-hint">
         Spaces in <code>{rootDisplay}</code>.
