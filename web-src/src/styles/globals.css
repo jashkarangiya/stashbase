@@ -128,21 +128,27 @@
     }
 
     /* Custom hover tooltip (see `useHoverTip`) — replaces the native
-     * `title`, which never appears in this Electron window. `fixed` so it
-     * escapes the sidebar's `overflow: hidden`; the hook sets top/left to
-     * the trigger's edge and the transform centers it on that edge. */
+     * `title`, which is unreliable in this Electron window (never shows on
+     * the rail, and is swallowed entirely inside the `app-chrome` drag
+     * region, so the top-right agent launchers had no hint at all). Styled
+     * LIGHT to match the OS-native tooltip the rest of the app still uses
+     * (plain `title` on the sidebar buttons / tree rows), so every hint
+     * reads the same. `fixed` so it escapes the sidebar's
+     * `overflow: hidden`; the hook sets top/left to the trigger's edge and
+     * the transform centers it on that edge. */
     .hover-tip {
       position: fixed;
       z-index: 1000;
       pointer-events: none;
-      background: var(--fg);
-      color: var(--pane);
+      background: var(--pane);
+      color: var(--fg);
+      border: 1px solid var(--border);
       font-size: 12px;
-      line-height: 1;
-      padding: 5px 8px;
-      border-radius: 5px;
+      line-height: 1.2;
+      padding: 4px 8px;
+      border-radius: 6px;
       white-space: nowrap;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
       /* Fixed-positioned: never a drag region (it's transient + tiny). */
       -webkit-app-region: no-drag;
     }

@@ -9,10 +9,11 @@
  * The clicked agent becomes the remembered default (`state.agent`), so
  * the chat panel's split button and a `+` there default to it next.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ComponentType } from 'react';
 import { api, type AgentsResponse } from '../api';
 import { ClaudeIcon, CodexIcon } from '../icons';
 import { useApp } from '../store/AppContext';
+import { useHoverTip } from '../hooks/useHoverTip';
 import type { ChatTab } from '../store/state';
 
 /** Agents that get their own chrome launcher, in left→right display
@@ -62,20 +63,45 @@ export function ChatLaunchButtons() {
 
   return (
     <div className="chat-launchers">
-      {LAUNCHERS.map(({ id, label, Icon }) => {
-        const showing = state.chatOpen && activeTab?.agent === id;
-        return (
-          <button
-            key={id}
-            className={'icon-btn chat-launch' + (showing ? ' active' : '')}
-            type="button"
-            title={`New ${label} chat`}
-            onClick={() => launch(id)}
-          >
-            <Icon />
-          </button>
-        );
-      })}
+      {LAUNCHERS.map(({ id, label, Icon }) => (
+        <LaunchButton
+          key={id}
+          label={`New ${label} chat`}
+          Icon={Icon}
+          active={state.chatOpen && activeTab?.agent === id}
+          onClick={() => launch(id)}
+        />
+      ))}
     </div>
+  );
+}
+
+/** One launcher. Its own component so `useHoverTip` isn't called in a map
+ *  callback. Uses the shared custom tooltip because these live in the
+ *  `app-chrome` drag region, where the native `title` tooltip never
+ *  appears. Tip drops below — they sit at the top-right of the window. */
+function LaunchButton({
+  label,
+  Icon,
+  active,
+  onClick,
+}: {
+  label: string;
+  Icon: ComponentType;
+  active: boolean;
+  onClick: () => void;
+}) {
+  const { tipProps, tip } = useHoverTip(label, 'bottom');
+  return (
+    <button
+      className={'icon-btn chat-launch' + (active ? ' active' : '')}
+      type="button"
+      aria-label={label}
+      onClick={onClick}
+      {...tipProps}
+    >
+      <Icon />
+      {tip}
+    </button>
   );
 }
