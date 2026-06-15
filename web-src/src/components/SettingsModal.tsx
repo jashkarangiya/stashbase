@@ -101,7 +101,11 @@ function SettingsModal({
   }, [interactionLocked, onClose]);
 
   return (
-    <div className="modal-veil" onClick={interactionLocked ? undefined : onClose}>
+    // Backdrop click deliberately does NOT close — Settings holds
+    // in-progress config (the Storage kbRoot path, an API key being
+    // typed) that a stray click outside shouldn't discard. Close via the
+    // × button or Esc only, matching the Welcome config modals.
+    <div className="modal-veil">
       <div
         className="modal-card settings-card"
         onClick={(e) => e.stopPropagation()}
