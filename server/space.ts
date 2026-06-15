@@ -44,7 +44,6 @@ export interface McpServerConfig {
 
 export interface SpaceConfigFile {
   mcpServers?: Record<string, McpServerConfig>;
-  skillsDirs?: string[];
 }
 
 const DEFAULT_WINDOW_ID = 'default';
@@ -632,7 +631,6 @@ export function writeSpaceConfig(spaceName: string, cfg: SpaceConfigFile): void 
 
 export interface ResolvedSpaceConfig {
   mcpServers: Record<string, McpServerConfig>;
-  skillsDirs: string[];
 }
 
 export function resolveSpaceConfig(spaceName: string): ResolvedSpaceConfig {
@@ -640,21 +638,7 @@ export function resolveSpaceConfig(spaceName: string): ResolvedSpaceConfig {
   const local = readSpaceConfig(spaceName);
   return {
     mcpServers: { ...(base.mcpServers ?? {}), ...(local.mcpServers ?? {}) },
-    skillsDirs: mergeSkillsDirs(base.skillsDirs, local.skillsDirs),
   };
-}
-
-function mergeSkillsDirs(base: string[] | undefined, local: string[] | undefined): string[] {
-  const out: string[] = [];
-  const push = (value: string) => {
-    const v = value.trim();
-    if (!v || path.isAbsolute(v) || v.includes('\0')) return;
-    if (!out.includes(v)) out.push(v);
-  };
-  for (const v of base ?? []) push(v);
-  for (const v of local ?? []) push(v);
-  if (out.length === 0) out.push('skills');
-  return out;
 }
 
 function sanitizeSpaceConfig(raw: unknown): SpaceConfigFile {
@@ -680,9 +664,6 @@ function sanitizeSpaceConfig(raw: unknown): SpaceConfigFile {
     }
     out.mcpServers = servers;
   }
-  if (Array.isArray(obj.skillsDirs)) {
-    out.skillsDirs = obj.skillsDirs.filter((v): v is string => typeof v === 'string');
-  }
   return out;
 }
 
@@ -691,7 +672,7 @@ function ensureSpaceMetadata(spaceRoot: string): void {
   fs.mkdirSync(stash, { recursive: true });
   const config = path.join(stash, 'config.json');
   if (!fs.existsSync(config)) {
-    fs.writeFileSync(config, JSON.stringify({ mcpServers: {}, skillsDirs: ['skills'] }, null, 2) + '\n', {
+    fs.writeFileSync(config, JSON.stringify({ mcpServers: {} }, null, 2) + '\n', {
       encoding: 'utf8',
       mode: 0o600,
     });

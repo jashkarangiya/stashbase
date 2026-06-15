@@ -205,7 +205,6 @@ app.use([
   '/api/upload',
   '/api/rename-preview',
   '/api/file-order',
-  '/api/skills',
   '/api/reveal',
   '/asset',
 ], requireSpace);

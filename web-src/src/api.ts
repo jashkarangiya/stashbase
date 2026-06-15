@@ -37,7 +37,6 @@ export interface SpaceState {
 
 export interface SpaceConfig {
   mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
-  skillsDirs?: string[];
 }
 
 export type ImportFolderMode = 'copy' | 'move';
