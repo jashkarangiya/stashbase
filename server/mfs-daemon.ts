@@ -8,11 +8,11 @@
  *
  * The daemon is anchored at the **KB root**: every space lives under
  * `<kb_root>/<space>/...` and one `milvus.db` at
- * `<kb_root>/.stashbase/store/milvus.db` holds every collection. The
+ * `<kb_root>/.stashbase/store.nosync/milvus.db` holds every collection. The
  * Node side ensures each known space is `bind_space`-ed (recorded
  * here so a respawn can replay them).
  *
- * Python lives in `<project>/python/.venv/bin/python` after the user
+ * Python lives in `<project>/python/.venv.nosync/bin/python` after the user
  * runs `pnpm setup:python`. In packaged Electron a portable Python
  * runtime is bundled via `extraResources` and the path is overridden
  * via `STASHBASE_PYTHON` env var (see `electron/main.cjs`).
@@ -336,7 +336,7 @@ class MfsDaemon extends EventEmitter {
 /** Locate the Python binary. Precedence:
  *   1. ``STASHBASE_PYTHON`` env (used by packaged Electron to point at the
  *      bundled portable runtime under ``process.resourcesPath``).
- *   2. ``python/.venv/bin/python`` populated by ``pnpm setup:python``.
+ *   2. ``python/.venv.nosync/bin/python`` populated by ``pnpm setup:python``.
  *   3. system ``python3`` — last resort, gives a clearer error if mfs-cli
  *      isn't installed than just failing to spawn. */
 function resolvePythonBin(): string {
@@ -346,9 +346,9 @@ function resolvePythonBin(): string {
     if (existsSync(packagedRuntime)) return packagedRuntime;
     const packagedVenv = path.join(RESOURCES_ROOT, 'python', '.venv', 'bin', 'python');
     if (existsSync(packagedVenv)) return packagedVenv;
-    const venvBin = path.join(PROJECT_ROOT, 'python', '.venv', 'bin', 'python');
+    const venvBin = path.join(PROJECT_ROOT, 'python', '.venv.nosync', 'bin', 'python');
     if (existsSync(venvBin)) return venvBin;
-    log.warn('python/.venv not found, falling back to system `python3`');
+    log.warn('python/.venv.nosync not found, falling back to system `python3`');
     return 'python3';
   })();
 
@@ -377,8 +377,10 @@ function resolveDaemonCommand(kbRoot: string): { command: string; args: string[]
 }
 
 function resolveDaemonBinary(): string | null {
-  // PyInstaller --onedir output: `python/sidecar/stashbase-daemon/stashbase-daemon`
+  // PyInstaller --onedir output: `python/sidecar.nosync/stashbase-daemon/stashbase-daemon`
   // (the outer name is the directory, the inner name is the executable).
+  // Repo build dir carries `.nosync` so iCloud leaves it intact; inside the
+  // packaged .app it's plain `sidecar` (Resources isn't synced).
   //
   // In dev (`pnpm dev` sets STASHBASE_DEV_VITE) skip the PROJECT_ROOT
   // candidate: a leftover `pnpm build:python-sidecar` output would
@@ -390,7 +392,7 @@ function resolveDaemonBinary(): string | null {
     path.join(RESOURCES_ROOT, 'python', 'sidecar', 'stashbase-daemon', 'stashbase-daemon'),
     process.env.STASHBASE_DEV_VITE
       ? undefined
-      : path.join(PROJECT_ROOT, 'python', 'sidecar', 'stashbase-daemon', 'stashbase-daemon'),
+      : path.join(PROJECT_ROOT, 'python', 'sidecar.nosync', 'stashbase-daemon', 'stashbase-daemon'),
   ].filter(Boolean) as string[];
   return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }

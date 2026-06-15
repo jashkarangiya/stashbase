@@ -9,7 +9,7 @@ test/
 web/dist-app/
 models/
 python/runtime/
-python/sidecar/
+python/sidecar.nosync/
 *.log
 .DS_Store
 dev-docs/
@@ -37,3 +37,4 @@ __pycache__/
 
 # TypeScript
 *.tsbuildinfo
+python/.venv.nosync/

@@ -79,9 +79,12 @@
           "pdf_extract.py",
           "ocr_extract.py",
           "requirements.txt",
-          "runtime/**/*",
-          "sidecar/**/*"
+          "runtime/**/*"
         ]
+      },
+      {
+        "from": "python/sidecar.nosync",
+        "to": "python/sidecar"
       }
     ],
     "asar": true,

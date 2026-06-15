@@ -4,7 +4,8 @@
  * 1. Find a Python >= 3.10 on PATH (preferring `python3.13` / `python3.12`
  *    / `python3.11` / `python3.10` over a bare `python3` whose version
  *    might be 3.9 — that combo silently fails on `mfs-cli` install).
- * 2. Create `python/.venv` if missing.
+ * 2. Create `python/.venv.nosync` if missing (the `.nosync` suffix keeps
+ *    iCloud Drive from corrupting it when the repo is under ~/Documents).
  * 3. `pip install -r python/requirements.txt` into it.
  *
  * Fails loudly with an actionable message rather than letting the
@@ -17,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const VENV = path.join(ROOT, 'python', '.venv');
+const VENV = path.join(ROOT, 'python', '.venv.nosync');
 const REQS = path.join(ROOT, 'python', 'requirements.txt');
 
 const MIN_MAJOR = 3;

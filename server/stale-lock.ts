@@ -3,7 +3,7 @@
  * space. The story we keep hitting:
  *
  *   1. Previous StashBase session held the lock on
- *      `<KB>/.stashbase/store/milvus.db`.
+ *      `<KB>/.stashbase/store.nosync/milvus.db`.
  *   2. It exited dirtily — `kill -9`, force-quit, OS shutdown, or a
  *      shutdown that ran past our 4 s `indexer.close()` ceiling on a
  *      big library where Milvus's own flush takes longer.
@@ -37,6 +37,7 @@ const log = logger('stale-lock');
 export function clearStaleMilvusLock(kbRoot: string): void {
   if (process.platform === 'win32') return;
   const candidates = [
+    path.join(kbRoot, '.stashbase', 'store.nosync', 'milvus.db'),
     path.join(kbRoot, '.stashbase', 'store', 'milvus.db'),
     path.join(kbRoot, '.stashbase', 'mfs', 'milvus.db'),
   ].filter((p) => fs.existsSync(p));

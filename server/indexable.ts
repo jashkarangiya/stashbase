@@ -17,6 +17,7 @@ export const INDEX_EXCLUDED_DIRS = new Set<string>([
   '.svelte-kit',
   '.turbo',
   '.venv',
+  '.venv.nosync',
   '.vite',
   '.yarn',
   '__pycache__',

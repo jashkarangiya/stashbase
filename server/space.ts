@@ -302,7 +302,7 @@ export function validateSpaceName(name: string): string | null {
  *  Shared by the clone and import-folder flows so a rename here only
  *  happens once. (`mfs` is the pre-rename store dir, kept until legacy
  *  spaces age out.) */
-export const STASHBASE_PER_MACHINE_ENTRIES = ['config.json', 'store', 'mfs', 'cache', 'state.db'];
+export const STASHBASE_PER_MACHINE_ENTRIES = ['config.json', 'store.nosync', 'store', 'mfs', 'cache', 'state.db'];
 
 /** Selectively delete per-machine internal state out of a space's
  *  `.stashbase/` directory, leaving portable artefacts (notably
@@ -715,6 +715,7 @@ function ensureKbMetadata(root: string): void {
   fs.mkdirSync(stash, { recursive: true });
   const ignore = path.join(stash, '.gitignore');
   const ignoreEntries = [
+    'store.nosync/',
     'store/',
     'mfs/',
     'cache/',

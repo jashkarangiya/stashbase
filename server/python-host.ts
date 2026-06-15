@@ -6,7 +6,7 @@
  *
  * The packaged app ships a relocated runtime under
  * `<resources>/python/runtime/`; in dev we fall back to the project's
- * `python/.venv/`, then to a bare `python3` on PATH.
+ * `python/.venv.nosync/`, then to a bare `python3` on PATH.
  */
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -30,7 +30,7 @@ export function pythonBin(): string {
   for (const candidate of [
     path.join(RESOURCES_ROOT, 'python', 'runtime', 'bin', 'python'),
     path.join(RESOURCES_ROOT, 'python', '.venv', 'bin', 'python'),
-    path.join(PROJECT_ROOT, 'python', '.venv', 'bin', 'python'),
+    path.join(PROJECT_ROOT, 'python', '.venv.nosync', 'bin', 'python'),
   ]) {
     if (existsSync(candidate)) return candidate;
   }

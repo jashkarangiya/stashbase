@@ -5,16 +5,19 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
-const python = path.join(root, 'python', '.venv', 'bin', 'python');
+// `.nosync` suffix keeps iCloud Drive from mangling these build artifacts
+// when the repo lives under ~/Documents (it flattens PyInstaller's symlinks
+// and evicts the bundled dylibs → the daemon binary stops loading).
+const python = path.join(root, 'python', '.venv.nosync', 'bin', 'python');
 const entry = path.join(root, 'python', 'stashbase_daemon.py');
-const distPath = path.join(root, 'python', 'sidecar');
+const distPath = path.join(root, 'python', 'sidecar.nosync');
 const buildPath = path.join(root, 'dist', 'pyinstaller');
 const specPath = path.join(root, 'dist', 'pyinstaller');
 const buildReqs = path.join(root, 'python', 'build-requirements.txt');
 const setupPython = path.join(root, 'scripts', 'setup-python.mjs');
 
 if (!fs.existsSync(python)) {
-  console.log('[build:python-sidecar] python/.venv is missing; running setup:python');
+  console.log('[build:python-sidecar] python/.venv.nosync is missing; running setup:python');
   execFileSync(process.execPath, [setupPython], {
     cwd: root,
     stdio: 'inherit',
@@ -22,7 +25,7 @@ if (!fs.existsSync(python)) {
 }
 
 if (!fs.existsSync(python)) {
-  throw new Error('python/.venv setup did not produce python/.venv/bin/python.');
+  throw new Error('python/.venv.nosync setup did not produce python/.venv.nosync/bin/python.');
 }
 
 const probe = spawnSync(python, ['-m', 'PyInstaller', '--version'], {
@@ -104,8 +107,9 @@ console.log('[build:python-sidecar] done ->', outBin);
 // its ONNX models as package data and pymupdf ships layout resources that
 // PyInstaller's static analysis misses, so the frozen binary errors at
 // runtime ("No such file or directory: .../models/*.onnx" / pymupdf
-// resources) without them. Both bundles share `python/sidecar/` and ride
-// to the app via electron-builder's `extraResources` (`sidecar/**/*`).
+// resources) without them. Both bundles share `python/sidecar.nosync/` and
+// ride to the app via electron-builder's `extraResources`
+// (`from: python/sidecar.nosync` → `to: python/sidecar` inside the .app).
 const extractEntry = path.join(root, 'python', 'extract_main.py');
 execFileSync(
   python,

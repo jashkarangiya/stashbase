@@ -37,7 +37,7 @@ function clearQuarantine(extraCandidates = []) {
     'web',
     'python/stashbase_daemon.py',
     'python/requirements.txt',
-    'python/sidecar',
+    'python/sidecar.nosync',
     'package.json',
     'package-lock.json',
     'node_modules',
@@ -69,10 +69,10 @@ function runElectronBuilder() {
 
 function assertWindowsSidecar() {
   if (platform !== 'win') return;
-  const sidecar = path.join(root, 'python', 'sidecar', 'stashbase-daemon.exe');
+  const sidecar = path.join(root, 'python', 'sidecar.nosync', 'stashbase-daemon.exe');
   if (!fs.existsSync(sidecar)) {
     throw new Error(
-      'Windows packaging requires python/sidecar/stashbase-daemon.exe. ' +
+      'Windows packaging requires python/sidecar.nosync/stashbase-daemon.exe. ' +
         'Build the Windows Python sidecar on Windows before running `pnpm dist:win`.',
     );
   }
