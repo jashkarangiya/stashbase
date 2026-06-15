@@ -39,13 +39,18 @@ brew install --cask liliu-z/stashbase/stashbase
 
 Once the app is running:
 
-1. Start with the CS183B starter — Stanford's 20 startup lectures, embeddings included:
+1. Start with the [CS183B starter](https://github.com/0-bingwu-0/stashbase-cs183b) — Stanford's **How to Start a Startup** course: full transcripts of all 20 lectures plus a `founder_playbook.html` distilled from them, embeddings included so search works the moment you import:
    ```bash
    git clone https://github.com/0-bingwu-0/stashbase-cs183b
    ```
-   Then on the Welcome screen: **Import folder** → pick the cloned `stashbase-cs183b`.
-2. Open **Settings → MCP**, click **Connector** for your AI client, restart that client, then ask `@stashbase what's the best time to start a startup?`.
+   Then on the Welcome screen: **Import folder** → pick the cloned `stashbase-cs183b`. Open `founder_playbook.html` to read the playbook rendered inline.
+2. Open the **built-in Claude agent** panel and ask away — it searches across the playbook and all 20 transcripts to answer. Three to start with:
+   - *"How do I find a startup idea?"*
+   - *"How do I know if I have product-market fit?"*
+   - *"Should I worry about competitors and being copied?"*
 3. Then bring your own: hit **New space** and drag in your files — Markdown, HTML, PDFs, images — or record your screen and get back a structured note.
+
+Want this memory in Claude Desktop, ChatGPT, or Codex too? **Settings → MCP** → click **Connector** for your client, restart it, then `@stashbase` from there.
 
 **Embeddings.** StashBase asks for an OpenAI API key when you open your first space — used **only for embeddings** (no chat completions). `text-embedding-3-small` is only $0.02 per 1M tokens. [Create a key.](https://platform.openai.com/api-keys) Without a key, files still save, preview, and stay searchable by exact keyword — only semantic search waits for the key.
 
