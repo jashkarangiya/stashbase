@@ -464,6 +464,32 @@ function offerClipboardImage(win) {
   });
 }
 
+// Poll the clipboard while a StashBase window is focused so a system
+// screenshot taken *while browsing* (⌘⇧⌃4 copies to the clipboard) is
+// offered the instant macOS finishes writing it. The bare 'focus' read
+// alone raced that async write — the bytes often land just after focus
+// returns, so the single read came up empty and the offer didn't appear
+// until the user manually clicked away and back. The timer self-stops
+// once focus leaves a main window, so we never poll while the user is in
+// another app. `offerClipboardImage` already dedups by hash, so a clip
+// sitting in the clipboard is encoded+offered once, not every tick.
+let clipboardPollTimer = null;
+const CLIPBOARD_POLL_MS = 600;
+function startClipboardPolling() {
+  if (clipboardPollTimer || !clipboardWatchEnabled) return;
+  clipboardPollTimer = setInterval(() => {
+    const win = BrowserWindow.getFocusedWindow();
+    if (win && mainWindows.has(win) && !win.isDestroyed()) offerClipboardImage(win);
+    else stopClipboardPolling();
+  }, CLIPBOARD_POLL_MS);
+}
+function stopClipboardPolling() {
+  if (clipboardPollTimer) {
+    clearInterval(clipboardPollTimer);
+    clipboardPollTimer = null;
+  }
+}
+
 function getScreenPermission() {
   if (process.platform !== 'darwin') {
     return {
@@ -1000,9 +1026,9 @@ function createRecorderWindow() {
   return win;
 }
 
-// Entry point from the floating ball / menu. macOS 15+ goes straight to
-// the system picker (it can list fullscreen apps); older macOS opens our
-// own windows-only picker.
+// Entry point from the renderer's recording control. macOS 15+ goes
+// straight to the system picker (it can list fullscreen apps); older
+// macOS opens our own windows-only picker.
 function beginRecording() {
   if (recordingActive || recordingPending) return;
   if (supportsSystemPicker()) startRecordingSystemPicker();
@@ -1137,6 +1163,7 @@ async function createWindow(initialSpace) {
   win.on('focus', () => {
     lastMainWindow = win;
     offerClipboardImage(win);
+    startClipboardPolling();
   });
   win.on('closed', () => {
     mainWindows.delete(win);
@@ -1257,7 +1284,13 @@ ipcMain.handle('capture:openScreenPermissionSettings', async () => openScreenPer
 // clipboard image becomes eligible again.
 ipcMain.handle('clipboard:setWatch', (_event, enabled) => {
   clipboardWatchEnabled = enabled !== false;
-  if (clipboardWatchEnabled) lastClipboardOfferHash = null;
+  if (clipboardWatchEnabled) {
+    lastClipboardOfferHash = null;
+    const win = BrowserWindow.getFocusedWindow();
+    if (win && mainWindows.has(win)) { offerClipboardImage(win); startClipboardPolling(); }
+  } else {
+    stopClipboardPolling();
+  }
   return clipboardWatchEnabled;
 });
 
@@ -1274,7 +1307,7 @@ ipcMain.on('capture:startRecording', () => {
 });
 
 // Older-macOS picker handed us the chosen window — start recording it and
-// dismiss the picker (the floating ball is now the stop control).
+// dismiss the picker (the recording indicator pill is the stop control).
 ipcMain.handle('recorder:recordWindow', (event, sourceId) => {
   if (typeof sourceId !== 'string' || !sourceId) return { ok: false, error: 'Nothing was selected.' };
   if (recordingActive) return { ok: false, error: 'A recording is already in progress.' };
@@ -1341,8 +1374,8 @@ ipcMain.on('recorder:meta', (event, meta) => {
 });
 
 // Recorder window handed back a finished clip — forward it to the main
-// window on the same `capture:created` path screenshots use, so it gets
-// saved into the active space.
+// window via the `capture:created` path so it gets saved into the active
+// space.
 ipcMain.on('recorder:result', (event, payload) => {
   if (recorderWindow && event.sender !== recorderWindow.webContents) return;
   finishScreenRecording();
