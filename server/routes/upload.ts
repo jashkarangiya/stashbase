@@ -146,13 +146,17 @@ async function handleUpload(req: express.Request, res: express.Response): Promis
   }
 }
 
-/** Compute the on-disk paths for a batch up front so any top-level file
- *  that would clash with an existing file gets a `-2` / `-3` suffix —
+/** Compute the on-disk paths for a batch up front so any top-level entry
+ *  that would clash with an existing one gets a `-2` / `-3` suffix —
  *  a drag means "add this", so we keep both rather than silently
  *  overwriting (which `saveBytes` would otherwise do for non-note
- *  files). Notes additionally reserve against their `<stem>_files/`
- *  bundle and carry it along when renamed. Files dropped inside a
- *  subfolder keep their layout verbatim. */
+ *  files). This applies to BOTH top-level files AND top-level folders:
+ *  re-dropping the same folder lands a fresh `<folder>-2/` copy instead
+ *  of overwriting the first in place — folder-nested paths previously
+ *  fell through verbatim, so a second drop silently merged on top.
+ *  Notes additionally reserve against their `<stem>_files/` bundle and
+ *  carry it along when renamed. A renamed folder moves as a unit, so any
+ *  bundle that lives *inside* it follows along untouched. */
 function computeFinalNames(
   files: Express.Multer.File[],
   paths: string[],
@@ -166,10 +170,11 @@ function computeFinalNames(
   // Step 1: reserve a non-colliding name for every TOP-LEVEL file (any
   // type). "Top-level" = no folder separator (so it lives directly at
   // the drop target, alongside its `<stem>_files/` bundle if it's a
-  // note). Bundle members (rel contains `/`) are handled in step 2.
-  const reserved = new Set<string>();             // finalName (stem+ext) taken this batch
+  // note). Bundle members (rel contains `/`) are handled in step 3.
+  const reserved = new Set<string>();             // finalName (stem+ext) / dir name taken this batch
   const finalByIndex = new Map<number, string>(); // idx → final top-level name
   const noteStemRenames = new Map<string, string>(); // note origStem → finalStem (for bundles)
+  const topLevelNoteStems = new Set<string>();    // stems of top-level notes (to spot their bundles)
   for (let i = 0; i < files.length; i++) {
     const rel = relForFile(i);
     if (rel.includes('/')) continue;
@@ -177,6 +182,7 @@ function computeFinalNames(
     const dot = rel.lastIndexOf('.');
     const origStem = dot > 0 ? rel.slice(0, dot) : rel;
     const ext = dot > 0 ? rel.slice(dot) : ''; // includes leading dot, '' if none
+    if (isNote) topLevelNoteStems.add(origStem);
     let finalStem = origStem;
     let n = 2;
     while (
@@ -191,9 +197,33 @@ function computeFinalNames(
     finalByIndex.set(i, finalStem + ext);
     if (isNote && finalStem !== origStem) noteStemRenames.set(origStem, finalStem);
   }
-  // Step 2: rewrite every file's path. Top-level files use their
-  // reserved final name; bundle files under a renamed note's
-  // `<stem>_files/...` track the renumbered stem.
+  // Step 2: renumber each distinct TOP-LEVEL folder that collides, as a
+  // unit. A note's `<stem>_files/` bundle is NOT a folder here — it
+  // tracks its note via `noteStemRenames` (step 3) — so skip those.
+  const dirRenames = new Map<string, string>(); // origTopDir → finalTopDir
+  const seenDirs = new Set<string>();
+  for (let i = 0; i < files.length; i++) {
+    const rel = relForFile(i);
+    const dirEnd = rel.indexOf('/');
+    if (dirEnd < 0) continue; // top-level file, handled above
+    const top = rel.slice(0, dirEnd);
+    if (seenDirs.has(top)) continue;
+    seenDirs.add(top);
+    const bm = top.match(/^(.+)_files$/);
+    if (bm && topLevelNoteStems.has(bm[1])) continue; // a note bundle, not a folder
+    let finalDir = top;
+    let n = 2;
+    while (pathExists(prefix + finalDir) || reserved.has(finalDir)) {
+      finalDir = `${top}-${n}`;
+      n++;
+    }
+    reserved.add(finalDir);
+    if (finalDir !== top) dirRenames.set(top, finalDir);
+  }
+  // Step 3: rewrite every file's path. Top-level files use their
+  // reserved final name; a renamed note's `<stem>_files/...` bundle
+  // tracks the renumbered stem; everything under a renumbered folder
+  // gets its first segment swapped; the rest stay verbatim.
   return files.map((_, i) => {
     const rel = relForFile(i);
     const segments = rel.split('/');
@@ -204,6 +234,10 @@ function computeFinalNames(
     const bm = top.match(/^(.+)_files$/);
     if (bm && noteStemRenames.has(bm[1])) {
       segments[0] = noteStemRenames.get(bm[1])! + '_files';
+      return sanitizeFilename(prefix + segments.join('/'));
+    }
+    if (dirRenames.has(top)) {
+      segments[0] = dirRenames.get(top)!;
       return sanitizeFilename(prefix + segments.join('/'));
     }
     return sanitizeFilename(prefix + rel);
