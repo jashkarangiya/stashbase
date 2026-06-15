@@ -23,9 +23,9 @@ StashBase is a local-first knowledge base that turns documents, screenshots, vid
 
 ## 🚀 Demo
 
-![Demo](.github/assets/demo_0521.gif)
+![Demo](.github/assets/demo_0616.gif)
 
-> Import the CS183B starter — 20 YC startup lectures, embeddings included. Surface ideas in Claude Desktop via `@stashbase`, then use the built-in agent (Claude Code) to organize what resonates into HTML notes.
+> Clone the CS183B starter, import it, and ask the built-in agent — 20 YC startup lectures, embeddings prebuilt.
 
 ---
 
