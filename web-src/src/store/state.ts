@@ -65,16 +65,6 @@ export interface CtxMenu {
   kind: 'file' | 'folder';
 }
 
-/** One entry in the back/forward stack. `anchor` is the slug to scroll
- *  to on revisit (cross-file `[..](file.md#slug)` clicks set this);
- *  `scrollY` snapshots where the user was when they navigated away
- *  (MD only — HTML preview is cross-origin sandboxed). */
-export interface NavEntry {
-  name: string;
-  anchor?: string;
-  scrollY?: number;
-}
-
 /** One open tab. Everything that varies per-document lives here so
  *  switching tabs is just a pointer swap. `file === null` is a blank
  *  tab created by the `+` button — empty pane until the user clicks
@@ -91,10 +81,7 @@ export interface Tab {
   file: OpenFile | null;
   editMode: boolean;
   preview: boolean;
-  navStack: NavEntry[];
-  navCursor: number;
   pendingAnchor: string | null;
-  pendingScrollY: number | null;
   /** Set when a viewer should highlight a specific chunk on next
    *  render — typically after a click on a SearchHitRow. The viewer
    *  reads it, scrolls to the range, paints a fading overlay, and
@@ -405,6 +392,7 @@ export type Action =
   | { type: 'CHAT_TAB_NEW'; tab: ChatTab }
   | { type: 'CHAT_TAB_CLOSE'; id: string }
   | { type: 'CHAT_TAB_ACTIVATE'; id: string }
+  | { type: 'CHAT_TAB_RENAME'; id: string; title: string }
   | { type: 'CHAT_TABS_RESET' }
   | { type: 'ACTIVE_FOLDER'; path: string }
   /** Move the sidebar's single focus to `path`. Pure visual highlight
@@ -429,17 +417,9 @@ export type Action =
   | { type: 'CONVERSION_FAILURES'; failures: ConversionFailure[] }
   | { type: 'CTX_MENU'; menu: CtxMenu | null }
   | { type: 'RENAMING'; renaming: State['renaming'] }
-  /** Push a new entry, truncating any forward history. Updates the
-   *  current entry's `scrollY` snapshot first via `currentScrollY`. */
-  | { type: 'NAV_PUSH'; entry: NavEntry; currentScrollY: number | null }
-  /** Move cursor to a specific index (used by back/forward). The
-   *  caller is responsible for issuing the file load. */
-  | { type: 'NAV_GOTO'; cursor: number; currentScrollY: number | null }
-  /** Update only the scrollY snapshot on the current entry — fired
-   *  just before the file is replaced when no anchor is in play. */
-  | { type: 'NAV_SNAPSHOT_SCROLL'; scrollY: number }
-  | { type: 'NAV_RESET' }
-  | { type: 'PENDING_SCROLL'; anchor: string | null; scrollY: number | null }
+  /** Arm the active tab's pending scroll-to-anchor (cross-file links /
+   *  search hits); the viewer consumes it on next render. */
+  | { type: 'PENDING_SCROLL'; anchor: string | null }
   | { type: 'PENDING_HIGHLIGHT'; highlight: PendingHighlight | null }
   | { type: 'CASCADE_PROMPT'; prompt: CascadePrompt | null }
   | { type: 'MODAL_OPEN'; request: ModalRequest }
@@ -471,10 +451,7 @@ export function makeTab(): Tab {
     file: null,
     editMode: false,
     preview: false,
-    navStack: [],
-    navCursor: -1,
     pendingAnchor: null,
-    pendingScrollY: null,
     pendingHighlight: null,
     saveStatus: { text: '', cls: '' },
   };
@@ -576,11 +553,10 @@ export function reducer(s: State, a: Action): State {
           editMode: false,
           saveStatus: { text: '', cls: '' },
           pendingAnchor: null,
-          pendingScrollY: null,
           pendingHighlight: null,
-          // Only touch `preview` when explicitly asked — back/forward
-          // and in-place anchor nav reuse the same tab and must keep
-          // its existing preview/pinned status.
+          // Only touch `preview` when explicitly asked — in-place anchor
+          // nav reuses the same tab and must keep its existing
+          // preview/pinned status.
           ...(a.preview != null ? { preview: a.preview } : {}),
         }),
         selectedPath: file.kind === 'kb' ? s.selectedPath : file.name,
@@ -709,6 +685,11 @@ export function reducer(s: State, a: Action): State {
     case 'CHAT_TAB_ACTIVATE':
       if (!s.chatTabs.some((t) => t.id === a.id)) return s;
       return { ...s, activeChatTabId: a.id };
+    case 'CHAT_TAB_RENAME':
+      return {
+        ...s,
+        chatTabs: s.chatTabs.map((t) => (t.id === a.id ? { ...t, title: a.title } : t)),
+      };
     case 'CHAT_TABS_RESET':
       // Wipes ALL tabs — called on space switch (the server kills every
       // agent session in that flow; the frontend drops its tab list too
@@ -794,50 +775,8 @@ export function reducer(s: State, a: Action): State {
       const next = [...without.slice(0, insertAt), s.tabs[fromIdx], ...without.slice(insertAt)];
       return { ...s, tabs: next };
     }
-    case 'NAV_PUSH': {
-      const tab = getActiveTab(s);
-      if (!tab) return s;
-      const trimmed = tab.navStack.slice(0, tab.navCursor + 1);
-      if (a.currentScrollY != null && trimmed.length > 0) {
-        const last = trimmed[trimmed.length - 1];
-        trimmed[trimmed.length - 1] = { ...last, scrollY: a.currentScrollY };
-      }
-      trimmed.push(a.entry);
-      return patchActiveTab(s, { navStack: trimmed, navCursor: trimmed.length - 1 });
-    }
-    case 'NAV_GOTO': {
-      const tab = getActiveTab(s);
-      if (!tab) return s;
-      if (a.cursor < 0 || a.cursor >= tab.navStack.length) return s;
-      let next = tab.navStack;
-      if (a.currentScrollY != null && tab.navCursor >= 0 && tab.navCursor < tab.navStack.length) {
-        next = tab.navStack.slice();
-        next[tab.navCursor] = { ...next[tab.navCursor], scrollY: a.currentScrollY };
-      }
-      return patchActiveTab(s, { navStack: next, navCursor: a.cursor });
-    }
-    case 'NAV_SNAPSHOT_SCROLL': {
-      const tab = getActiveTab(s);
-      if (!tab) return s;
-      if (tab.navCursor < 0 || tab.navCursor >= tab.navStack.length) return s;
-      const next = tab.navStack.slice();
-      next[tab.navCursor] = { ...next[tab.navCursor], scrollY: a.scrollY };
-      return patchActiveTab(s, { navStack: next });
-    }
-    case 'NAV_RESET':
-      // Space-switch resets ALL tabs' nav stacks.
-      return {
-        ...s,
-        tabs: s.tabs.map((t) => ({
-          ...t,
-          navStack: [],
-          navCursor: -1,
-          pendingAnchor: null,
-          pendingScrollY: null,
-        })),
-      };
     case 'PENDING_SCROLL':
-      return patchActiveTab(s, { pendingAnchor: a.anchor, pendingScrollY: a.scrollY });
+      return patchActiveTab(s, { pendingAnchor: a.anchor });
     case 'PENDING_HIGHLIGHT':
       return patchActiveTab(s, { pendingHighlight: a.highlight });
     case 'CASCADE_PROMPT':

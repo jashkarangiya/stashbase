@@ -66,7 +66,7 @@ export function ChatPane() {
           >
             {tab.agent === 'codex'
               ? <CodexView title={tab.title} />
-              : <AgentView active={tab.id === activeId} title={tab.title} />}
+              : <AgentView active={tab.id === activeId} id={tab.id} title={tab.title} />}
           </div>
         ))}
         {tabs.length === 0 && (

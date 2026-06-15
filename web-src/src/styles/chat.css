@@ -110,6 +110,10 @@
       flex-shrink: 0;
     }
     .chat-tab-label {
+      /* min-width:0 lets this flex child shrink below its content width
+       * so text-overflow:ellipsis actually renders (flex defaults to
+       * min-width:auto, which clips without the ellipsis). */
+      min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
     }

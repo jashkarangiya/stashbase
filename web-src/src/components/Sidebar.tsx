@@ -381,11 +381,31 @@ function SpaceMenu() {
     if (!ok) await actions.alert('New window is only available in the desktop app.');
   }
 
+  // Bake the space's embeddings into `.stashbase/snapshot.parquet` so the
+  // folder carries reusable vectors when copied / git-cloned (the other
+  // end reuses them by text_hash instead of re-embedding).
+  async function exportSnapshot() {
+    if (!current) return;
+    setBusy(true);
+    try {
+      const r = await api.exportSnapshot();
+      actions.toast(
+        `Embedding snapshot baked — ${r.vectors} vector(s) from ${r.chunks} chunk(s) into ${current}/.stashbase/.`,
+        { level: 'success' },
+      );
+    } catch (err) {
+      actions.toast('Snapshot export failed: ' + errorMessage(err), { level: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const items: MenuItem[] = [
     { label: 'Switch space', onSelect: () => openModal('switch') },
     { label: 'Open in new window', disabled: !current, onSelect: () => { void openCurrentInNewWindow(); } },
     { label: 'New space', onSelect: () => openModal('new') },
     { label: 'Rename space', disabled: !current, onSelect: () => openModal('rename') },
+    { label: 'Export embedding snapshot', detail: 'Bake reusable vectors into .stashbase/', disabled: !current, onSelect: () => { void exportSnapshot(); } },
     { separator: true },
     { label: 'Delete space', danger: true, disabled: !current, onSelect: () => { void deleteCurrent(); } },
   ];

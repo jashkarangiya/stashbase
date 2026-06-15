@@ -87,7 +87,13 @@ type ServerEvent =
 let blockSeq = 0;
 const nextId = () => `b${++blockSeq}`;
 
-export function AgentView({ active, title }: { active: boolean; title: string }) {
+/** A chat tab still wearing its auto-generated placeholder name, so we
+ *  know it's safe to overwrite with the session's derived title. */
+function isDefaultChatTitle(t: string): boolean {
+  return /^Untitled( \d+)?$/.test(t.trim());
+}
+
+export function AgentView({ active, id, title }: { active: boolean; id: string; title: string }) {
   const { state, dispatch, actions } = useApp();
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [turnActive, setTurnActive] = useState(false);
@@ -116,6 +122,12 @@ export function AgentView({ active, title }: { active: boolean; title: string })
   // (like effort) and is consumed-and-cleared there.
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const resumeIdRef = useRef<string | null>(null);
+  // Refs mirror the live session id + this tab's id/title so the WS
+  // message handler (bound once per connection) reads current values
+  // when it renames the tab on the first turn-end.
+  const sessionIdRef = useRef<string | null>(null);
+  const idRef = useRef(id); idRef.current = id;
+  const titleRef = useRef(title); titleRef.current = title;
   const [historyOpen, setHistoryOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const readyRef = useRef(false);
@@ -168,6 +180,7 @@ export function AgentView({ active, title }: { active: boolean; title: string })
     setFatal(null);
     setTurnActive(false);
     setCurrentSessionId(null);
+    sessionIdRef.current = null;
     toolNamesRef.current.clear();
     openKind.current = null;
     setPhase('connecting');
@@ -191,9 +204,15 @@ export function AgentView({ active, title }: { active: boolean; title: string })
     setFatal(null);
     setTurnActive(false);
     setCurrentSessionId(id);
+    sessionIdRef.current = id;
     toolNamesRef.current.clear();
     openKind.current = null;
     resumeIdRef.current = id;
+    // Name the tab from the resumed session right away — otherwise a tab
+    // opened to a past session stays "Untitled" until the user sends a
+    // new prompt (the `turn-end` path that usually renames never fires on
+    // a pure load). Safe: `maybeNameTab` only overwrites a placeholder.
+    void maybeNameTab();
     setPhase('connecting');
     setNonce((n) => n + 1);
   }
@@ -210,6 +229,7 @@ export function AgentView({ active, title }: { active: boolean; title: string })
         break;
       case 'session-id':
         setCurrentSessionId(ev.id);
+        sessionIdRef.current = ev.id;
         break;
       case 'turn-start':
         openKind.current = null;
@@ -262,6 +282,10 @@ export function AgentView({ active, title }: { active: boolean; title: string })
       case 'turn-end':
         openKind.current = null;
         setTurnActive(false);
+        // Name the tab from the session's derived title (first prompt /
+        // SDK summary) once the first turn lands — keeps it in sync with
+        // the History list instead of staying "Untitled".
+        void maybeNameTab();
         // The agent may have written files via shell during the turn —
         // reconcile now (deterministic, replaces fs.watch). MCP writes
         // already index on their own path; this catches `Bash`/editor
@@ -389,6 +413,24 @@ export function AgentView({ active, title }: { active: boolean; title: string })
     setEffort(level);
     effortRef.current = level;
     if (blocks.length === 0) reconnect();
+  }
+
+  /** Rename this tab from the session's server-derived title once the
+   *  first turn lands. Only fires while the tab still wears its
+   *  "Untitled" placeholder, so a user-set name (or a later turn) never
+   *  clobbers it. Uses the same source as the History list, so the two
+   *  stay consistent. */
+  async function maybeNameTab() {
+    const tabId = idRef.current;
+    const sid = sessionIdRef.current;
+    if (!tabId || !sid || !isDefaultChatTitle(titleRef.current)) return;
+    try {
+      const sessions = await api.listSessions();
+      const t = sessions.find((x) => x.id === sid)?.title?.trim();
+      if (t && !isDefaultChatTitle(t)) {
+        dispatch({ type: 'CHAT_TAB_RENAME', id: tabId, title: t.length > 60 ? t.slice(0, 60).trimEnd() + '…' : t });
+      }
+    } catch { /* leave the placeholder if the lookup fails */ }
   }
 
   /** Spawn a fresh Claude chat tab (the in-panel `+`, mirroring the

@@ -2,12 +2,13 @@
  * Claude session-history routes for the chat panel's History dropdown.
  *
  * These wrap the Agent SDK's on-disk session store (`~/.claude/projects/`,
- * the same transcripts the `claude` CLI writes) — they are GLOBAL, not
- * scoped to the open space, so they sit OUTSIDE the `requireSpace` gate:
- * the dropdown lists every local session regardless of which space (if
- * any) is open.
+ * the same transcripts the `claude` CLI writes). They sit OUTSIDE the
+ * `requireSpace` gate (no 412 when spaceless), but the LIST is filtered to
+ * the current space by session `cwd` — the panel belongs to one space, so
+ * its History shows only that space's conversations (falls back to all
+ * when no space is open). `:id` reads/rename/delete stay global by id.
  *
- *   GET    /api/agent/sessions             → list all local sessions
+ *   GET    /api/agent/sessions             → list this space's sessions
  *   GET    /api/agent/sessions/:id/messages→ a session's transcript as
  *                                            renderable panel blocks
  *   PATCH  /api/agent/sessions/:id { title }→ rename
@@ -18,6 +19,7 @@
  * the transcript the client paints before reconnecting.
  */
 import express from 'express';
+import path from 'node:path';
 import {
   listSessions,
   getSessionMessages,
@@ -26,6 +28,7 @@ import {
   deleteSession,
   type SDKSessionInfo,
 } from '@anthropic-ai/claude-agent-sdk';
+import { getCurrentSpace } from '../space.ts';
 import { sendError } from '../http.ts';
 
 /** Trimmed session row sent to the client. */
@@ -48,12 +51,21 @@ function toRow(s: SDKSessionInfo): SessionRow {
 }
 
 export function mount(app: express.Express): void {
-  // All local sessions, newest first. No `dir` filter — the dropdown
-  // shows every local Claude Code session (terminal + panel alike).
+  // Sessions for the CURRENT space, newest first. The agent always runs
+  // with cwd = the open space dir, and the SDK records `cwd` per session,
+  // so filter on it — the History dropdown then shows only this space's
+  // conversations (incl. terminal Claude Code runs in the same dir),
+  // matching "this panel belongs to this space". No space open (rare —
+  // the panel needs one) → fall back to listing all so it's never blank.
   app.get('/api/agent/sessions', async (_req, res) => {
     try {
       const sessions = await listSessions();
-      const rows = sessions.map(toRow).sort((a, b) => b.lastModified - a.lastModified);
+      const space = getCurrentSpace();
+      const cur = space ? path.resolve(space) : null;
+      const rows = sessions
+        .map(toRow)
+        .filter((r) => !cur || (r.cwd != null && path.resolve(r.cwd) === cur))
+        .sort((a, b) => b.lastModified - a.lastModified);
       res.json(rows);
     } catch (err: unknown) {
       sendError(res, err);

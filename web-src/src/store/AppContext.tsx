@@ -45,7 +45,6 @@ export type {
   CascadePrompt,
   CtxMenu,
   ModalRequest,
-  NavEntry,
   OpenFile,
   PendingHighlight,
   SaveStatus,
@@ -139,8 +138,6 @@ export interface AppActions {
    *  new entry into the back/forward stack. Used by preview iframes
    *  forwarding `<a>` clicks. */
   navigateTo: (name: string, anchor?: string) => Promise<void>;
-  navBack: () => Promise<void>;
-  navForward: () => Promise<void>;
   /** Called by the preview iframe after it has consumed the pending
    *  anchor / scrollY so a follow-up keystroke / re-render won't
    *  re-scroll. */
@@ -729,35 +726,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     saveTimer.current = setTimeout(() => { void flushSave(); }, AUTOSAVE_DEBOUNCE_MS);
   }, [flushSave]);
 
-  /** Read the current MD preview's scroll position so the entry we're
-   *  about to leave can be restored on back. Only the read-only MD
-   *  iframe is `allow-same-origin`; HTML and split-edit previews can't
-   *  be read from the parent, so they return null. */
-  function captureCurrentScrollY(): number | null {
-    const tab = getActiveTab(stateRef.current);
-    if (!tab?.file || tab.file.format !== 'md' || tab.editMode) return null;
-    const iframe = document.getElementById('previewFrame') as HTMLIFrameElement | null;
-    const doc = iframe?.contentDocument;
-    if (!doc) return null;
-    return doc.documentElement.scrollTop || doc.body.scrollTop || 0;
-  }
-
-  /** Shared file-load. Pushes onto the nav stack when `push=true`
-   *  (sidebar click, link click); back/forward call this with
-   *  `push=false` and provide a precomputed cursor update. With
-   *  `newTab=true` (double-click / `+` then click) the file lands in a
-   *  freshly-created tab rather than replacing the active tab's file.
-   *  `preview` is forwarded to the FILE_OPEN action — see its docstring
-   *  in `state.ts` for the create-vs-replace semantics. */
+  /** Shared file-load. With `newTab=true` (double-click / `+` then click)
+   *  the file lands in a freshly-created tab rather than replacing the
+   *  active tab's file. `preview` is forwarded to the FILE_OPEN action —
+   *  see its docstring in `state.ts` for the create-vs-replace semantics.
+   *  `anchor` is a heading id to scroll to after load (cross-file links /
+   *  search hits). */
   const loadFile = useCallback(async (
     name: string,
     opts: {
-      push: boolean;
       newTab?: boolean;
       preview?: boolean;
       anchor?: string;
-      restoreScrollY?: number;
-      cursor?: number;
       /** Open an empty placeholder when the file isn't on disk yet
        *  (instead of erroring) — used to pop a recording's tab the
        *  instant it's stopped, before its OCR note has been written. */
@@ -797,39 +777,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
     }
-    const scrollY = opts.newTab ? null : captureCurrentScrollY();
-    // "Implicit new tab" — first open in a fresh session (no active
-    // tab yet) goes through the new-tab path too, so the new tab's
-    // navStack gets the initial NAV_PUSH instead of dropping it.
+    // "Implicit new tab" — first open in a fresh session (no active tab
+    // yet) goes through the new-tab path too.
     const noActiveTab = stateRef.current.activeTabId == null || !getActiveTab(stateRef.current);
     const newTabMode = !!opts.newTab || noActiveTab;
-    // For new-tab mode we must dispatch FILE_OPEN with newTab=true
-    // FIRST — that creates the tab and makes it active — so the
-    // subsequent NAV_PUSH writes into the new tab's nav stack.
-    if (newTabMode) {
-      dispatch({ type: 'FILE_OPEN', body, newTab: !noActiveTab, preview: opts.preview });
-      dispatch({
-        type: 'NAV_PUSH',
-        entry: { name, anchor: opts.anchor },
-        currentScrollY: null,
-      });
-    } else {
-      if (opts.push) {
-        dispatch({
-          type: 'NAV_PUSH',
-          entry: { name, anchor: opts.anchor },
-          currentScrollY: scrollY,
-        });
-      } else if (opts.cursor != null) {
-        dispatch({ type: 'NAV_GOTO', cursor: opts.cursor, currentScrollY: scrollY });
-      }
-      dispatch({ type: 'FILE_OPEN', body, preview: opts.preview });
-    }
     dispatch({
-      type: 'PENDING_SCROLL',
-      anchor: opts.anchor ?? null,
-      scrollY: opts.restoreScrollY ?? null,
+      type: 'FILE_OPEN',
+      body,
+      newTab: newTabMode ? !noActiveTab : undefined,
+      preview: opts.preview,
     });
+    dispatch({ type: 'PENDING_SCROLL', anchor: opts.anchor ?? null });
   }, [flushSave]);
 
   /** Single-click in the sidebar = open as PREVIEW. VS Code semantics:
@@ -852,7 +810,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     const active = getActiveTab(s);
     if (active && !active.file) {
-      await loadFile(name, { push: true, preview: true });
+      await loadFile(name, { preview: true });
       return;
     }
     const previewTab = s.tabs.find((t) => t.preview);
@@ -860,10 +818,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (s.activeTabId !== previewTab.id) dispatch({ type: 'ACTIVATE_TAB', id: previewTab.id });
       // FILE_OPEN with no `preview` field preserves the tab's existing
       // preview=true status, so the slot stays the "preview slot".
-      await loadFile(name, { push: true });
+      await loadFile(name, {});
       return;
     }
-    await loadFile(name, { push: true, newTab: true, preview: true });
+    await loadFile(name, { newTab: true, preview: true });
   }, [flushSave, loadFile]);
 
   /** Open `name` (preview-tab semantics like `selectFile`) and arm
@@ -911,7 +869,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (existing.preview) dispatch({ type: 'PROMOTE_TAB', id: existing.id });
       return;
     }
-    await loadFile(name, { push: true, newTab: true });
+    await loadFile(name, { newTab: true });
   }, [flushSave, loadFile]);
 
   const newTab = useCallback(async () => {
@@ -1076,73 +1034,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const activateTab = useCallback(async (id: string) => {
     const s = stateRef.current;
     if (s.activeTabId === id) return;
-    // Snapshot the outgoing tab's scroll into its current nav entry
-    // BEFORE flushSave (which may unmount the editor and lose the read
-    // path). MD previews give us a number; HTML / PDF return null
-    // because the iframe is cross-realm — we accept that those don't
-    // round-trip and just don't snapshot.
-    const outgoingScrollY = captureCurrentScrollY();
-    if (outgoingScrollY != null) {
-      dispatch({ type: 'NAV_SNAPSHOT_SCROLL', scrollY: outgoingScrollY });
-    }
     if (editorRef.current) await flushSave();
     dispatch({ type: 'ACTIVATE_TAB', id });
-    // After activating, arm the incoming tab's pendingScrollY from its
-    // current nav entry so the viewer's mount-time effect restores the
-    // position. React batches these two dispatches into a single
-    // render so the viewer mounts with pendingScrollY already set.
-    const incoming = stateRef.current.tabs.find((t) => t.id === id);
-    const entry = incoming?.navStack[incoming.navCursor];
-    if (entry?.scrollY != null) {
-      dispatch({ type: 'PENDING_SCROLL', anchor: entry.anchor ?? null, scrollY: entry.scrollY });
-    }
   }, [flushSave]);
 
+  /** Follow a link clicked inside a preview. Same-file `#anchor` jumps
+   *  scroll in place; a link to a DIFFERENT file opens in a new tab
+   *  (activating it if already open) so following a source link never
+   *  replaces what you're reading. */
   const navigateTo = useCallback(async (name: string, anchor?: string) => {
-    const tab = getActiveTab(stateRef.current);
-    const cur = tab?.file ?? null;
-    if (cur && cur.name === name && anchor) {
-      const scrollY = captureCurrentScrollY();
-      if (scrollY != null) dispatch({ type: 'NAV_SNAPSHOT_SCROLL', scrollY });
-      dispatch({
-        type: 'NAV_PUSH',
-        entry: { name, anchor },
-        currentScrollY: scrollY,
-      });
-      dispatch({ type: 'PENDING_SCROLL', anchor, scrollY: null });
+    const cur = getActiveTab(stateRef.current)?.file ?? null;
+    if (cur && cur.name === name) {
+      if (anchor) dispatch({ type: 'PENDING_SCROLL', anchor });
       return;
     }
-    await loadFile(name, { push: true, anchor });
-  }, [loadFile]);
-
-  const navBack = useCallback(async () => {
-    const tab = getActiveTab(stateRef.current);
-    if (!tab || tab.navCursor <= 0) return;
-    const target = tab.navStack[tab.navCursor - 1];
-    if (!target) return;
-    await loadFile(target.name, {
-      push: false,
-      anchor: target.anchor,
-      restoreScrollY: target.scrollY,
-      cursor: tab.navCursor - 1,
-    });
-  }, [loadFile]);
-
-  const navForward = useCallback(async () => {
-    const tab = getActiveTab(stateRef.current);
-    if (!tab || tab.navCursor < 0 || tab.navCursor >= tab.navStack.length - 1) return;
-    const target = tab.navStack[tab.navCursor + 1];
-    if (!target) return;
-    await loadFile(target.name, {
-      push: false,
-      anchor: target.anchor,
-      restoreScrollY: target.scrollY,
-      cursor: tab.navCursor + 1,
-    });
-  }, [loadFile]);
+    if (editorRef.current) await flushSave();
+    const existing = stateRef.current.tabs.find((t) => isSpaceFileTab(t, name));
+    if (existing) {
+      if (stateRef.current.activeTabId !== existing.id) dispatch({ type: 'ACTIVATE_TAB', id: existing.id });
+      if (existing.preview) dispatch({ type: 'PROMOTE_TAB', id: existing.id });
+      if (anchor) dispatch({ type: 'PENDING_SCROLL', anchor });
+      return;
+    }
+    await loadFile(name, { newTab: true, anchor });
+  }, [flushSave, loadFile]);
 
   const consumePendingScroll = useCallback(() => {
-    dispatch({ type: 'PENDING_SCROLL', anchor: null, scrollY: null });
+    dispatch({ type: 'PENDING_SCROLL', anchor: null });
   }, []);
 
   const consumePendingHighlight = useCallback(() => {
@@ -1173,9 +1091,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await loadFiles();
       const body = await api.getFile(name);
       dispatch({ type: 'FILE_OPEN', body });
-      // Seed the nav stack with this new note so back/forward inside
-      // the tab has a starting point.
-      dispatch({ type: 'NAV_PUSH', entry: { name }, currentScrollY: null });
       dispatch({ type: 'EDIT_MODE', on: true });
       dispatch({ type: 'RENAMING', renaming: { path: name, kind: 'file' } });
       void refreshIndexState();
@@ -1482,7 +1397,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await openInNewTab(name);
       return;
     }
-    await loadFile(name, { push: true, newTab: true, placeholderIfMissing: true });
+    await loadFile(name, { newTab: true, placeholderIfMissing: true });
     const deadline = Date.now() + 5 * 60_000;
     while (Date.now() < deadline) {
       if (stateRef.current.files.some((f) => f.name === name)) {
@@ -1491,7 +1406,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // or closed it, leave it be.
         const active = getActiveTab(stateRef.current);
         if (active?.file?.name === name && !active.file.content) {
-          await loadFile(name, { push: false });
+          await loadFile(name, {});
         }
         return;
       }
@@ -1572,7 +1487,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const finishOpenSpace = useCallback(async () => {
     resetSpaceScopedState();
     dispatch({ type: 'COLLAPSE_ALL_FOLDERS' });
-    dispatch({ type: 'NAV_RESET' });
     void refreshIndexState();
     // Load files BEFORE hiding the welcome overlay so the sidebar doesn't
     // briefly flash "NOTES" with an empty tree behind the overlay's fade.
@@ -1649,7 +1563,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loadFiles, refreshIndexState, runSync, runSearch, setFolderOrder,
     dismissSnapshotWarning,
     selectFile, selectFileWithHighlight, openInNewTab, newTab, openKbRules, closeTab, closeActiveTab, activateTab,
-    navigateTo, navBack, navForward, consumePendingScroll,
+    navigateTo, consumePendingScroll,
     consumePendingHighlight,
     resolveCascadePrompt,
     alert: showAlert, confirm: askConfirm, resolveModal,
@@ -1667,7 +1581,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loadFiles, refreshIndexState, runSync, runSearch, setFolderOrder,
     dismissSnapshotWarning,
     selectFile, selectFileWithHighlight, openInNewTab, newTab, openKbRules, closeTab, closeActiveTab, activateTab,
-    navigateTo, navBack, navForward, consumePendingScroll,
+    navigateTo, consumePendingScroll,
     consumePendingHighlight,
     resolveCascadePrompt,
     showAlert, askConfirm, resolveModal, toast, dismissToast,

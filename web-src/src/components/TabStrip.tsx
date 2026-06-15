@@ -96,8 +96,6 @@ export function TabStrip() {
     onDragEnd();
   }
 
-  const openFileNames = state.tabs.flatMap((t) => (t.file ? [t.file.name] : []));
-  const ambiguousLabels = findAmbiguousTabLabels(openFileNames);
   // One membership set for the whole strip — converting OR indexing.
   const stashing = new Set(stashingPaths(state));
 
@@ -111,7 +109,7 @@ export function TabStrip() {
       >
         {state.tabs.map((t) => {
           const isActive = t.id === state.activeTabId;
-          const label = t.file ? displayTabLabel(t.file.name, ambiguousLabels) : 'Untitled';
+          const label = t.file ? displayTabLabel(t.file.name) : 'Untitled';
           const isDragging = dragId === t.id;
           // "stashing" = the file's still being turned into searchable
           // content — either converting (PDF/image OCR) or indexing
@@ -186,31 +184,9 @@ export function TabStrip() {
   );
 }
 
-function displayTabLabel(path: string, ambiguousLabels: Set<string>): string {
-  const base = path.split('/').pop() ?? path;
-  const stem = base.replace(/\.(md|markdown|html|htm)$/i, '');
-  return ambiguousLabels.has(labelKey(path)) ? base : stem;
-}
-
-function findAmbiguousTabLabels(paths: string[]): Set<string> {
-  const counts = new Map<string, Set<string>>();
-  for (const p of paths) {
-    const base = p.split('/').pop() ?? p;
-    const m = base.match(/^(.+)\.(md|markdown|html|htm)$/i);
-    if (!m) continue;
-    const stemKey = m[1].toLowerCase();
-    const exts = counts.get(stemKey) ?? new Set<string>();
-    exts.add(m[2].toLowerCase());
-    counts.set(stemKey, exts);
-  }
-  const ambiguous = new Set<string>();
-  for (const [stemKey, exts] of counts) {
-    if (exts.size > 1) ambiguous.add(stemKey);
-  }
-  return ambiguous;
-}
-
-function labelKey(path: string): string {
-  const base = path.split('/').pop() ?? path;
-  return base.replace(/\.(md|markdown|html|htm)$/i, '').toLowerCase();
+/** Tab label = the file's basename, extension included (`note.md`, not
+ *  `note`). Showing the suffix keeps `.md` vs `.html` vs `.pdf` tabs
+ *  unambiguous at a glance. */
+function displayTabLabel(path: string): string {
+  return path.split('/').pop() ?? path;
 }

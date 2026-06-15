@@ -18,7 +18,6 @@ import { useIframeDropForward } from '../hooks/useIframeDropForward';
 export function MarkdownPreview({ name, content }: { name: string; content: string }) {
   const { state, actions, activeTab } = useApp();
   const pendingAnchor = activeTab?.pendingAnchor ?? null;
-  const pendingScrollY = activeTab?.pendingScrollY ?? null;
   const pendingHighlight = activeTab?.pendingHighlight ?? null;
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   // Snapshot find-bar state for the mount-time re-apply path. Read via
@@ -112,12 +111,12 @@ export function MarkdownPreview({ name, content }: { name: string; content: stri
   // Same-file anchor jump (no iframe reload): the loaded ref still
   // matches `html`, so the gate below lets us scroll synchronously.
   useEffect(() => {
-    if (!pendingAnchor && pendingScrollY == null) return;
+    if (!pendingAnchor) return;
     if (loadedHtmlRef.current !== html) return; // iframe still loading
     const doc = frameRef.current?.contentDocument;
     if (doc) applyPendingScroll(doc);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingAnchor, pendingScrollY, html]);
+  }, [pendingAnchor, html]);
 
   // Chunk-highlight after a SearchHit click. allow-same-origin lets
   // us walk the iframe DOM from the parent directly — no postMessage
@@ -135,19 +134,12 @@ export function MarkdownPreview({ name, content }: { name: string; content: stri
   }, [pendingHighlight, html]);
 
   function applyPendingScroll(doc: Document) {
-    if (pendingAnchor) {
-      const el = doc.getElementById(pendingAnchor);
-      if (el) {
-        el.scrollIntoView({ behavior: 'auto', block: 'start' });
-      }
-      actions.consumePendingScroll();
-      return;
+    if (!pendingAnchor) return;
+    const el = doc.getElementById(pendingAnchor);
+    if (el) {
+      el.scrollIntoView({ behavior: 'auto', block: 'start' });
     }
-    if (pendingScrollY != null) {
-      doc.documentElement.scrollTop = pendingScrollY;
-      doc.body.scrollTop = pendingScrollY;
-      actions.consumePendingScroll();
-    }
+    actions.consumePendingScroll();
   }
 
   return (

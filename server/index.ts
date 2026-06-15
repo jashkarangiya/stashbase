@@ -29,6 +29,7 @@ import { stopSpaceMcpServers, switchSpaceMcpServers } from './mcp-host.ts';
 import { getKbRoot, onClose, onKbRootChange, onSwitch, ensureKbRoot, needsKbRootPicker } from './space.ts';
 import { migrateLegacyEmbedderConfig } from './app-config.ts';
 import { bootBindAllSpaces } from './state.ts';
+import { reapOrphanDaemons } from './stale-lock.ts';
 import { logger } from './log.ts';
 import { setDerivedNoteIndexer } from './conversion.ts';
 import { noteTreeChanged } from './watcher.ts';
@@ -88,14 +89,11 @@ if (kbRootReadyAtBoot) {
   // recent entries. On a true first launch we skip this until the
   // picker persists the user's chosen root.
   ensureKbRoot();
-  // Configure the daemon with kbRoot + bind every known space found
-  // under it so MCP / cross-space search sees them without waiting for
-  // the user to open each one. Fire-and-forget — the server starts
-  // listening immediately; binds finish in the background.
-  bootBindAllSpaces().catch((err) =>
-    log.warn(`bootBindAllSpaces failed: ${err?.message ?? err}`),
-  );
-
+  // NB: the daemon is NOT spawned here — `bootBindAllSpaces` runs from the
+  // `listen` success callback below, i.e. only AFTER we win the `:8090`
+  // arbiter. That way the loser of a startup race never spawns a daemon
+  // (no race orphan), and the winner reaps pre-existing orphans before
+  // spawning its own (clean Milvus lock).
 } else {
   log.info('kbRoot is not initialised; waiting for first-run picker');
 }
@@ -263,6 +261,20 @@ if (viteProxy) app.use(viteProxy);
 const server = app.listen(PORT, '127.0.0.1', () => {
   log.info(`listening on http://127.0.0.1:${PORT}`);
   if (DEV_VITE) log.info(`dev-proxy → vite at http://localhost:${VITE_PORT}`);
+  // We own :8090 now → we're THE server. Reap any orphan daemon left by a
+  // previous server that died hard (kill -9 / crash / lost the startup
+  // race) BEFORE spawning ours, so it gets a clean Milvus lock instead of
+  // fighting an orphan and black-holing writes (data-layer §8.1).
+  if (kbRootReadyAtBoot) {
+    try { reapOrphanDaemons(getKbRoot()); } catch (err: unknown) {
+      log.warn(`reap orphan daemons failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    // Configure the daemon + bind every known space so MCP / cross-space
+    // search works without waiting for the user to open one. Background.
+    bootBindAllSpaces().catch((err) =>
+      log.warn(`bootBindAllSpaces failed: ${err?.message ?? err}`),
+    );
+  }
   log.info('waiting for the user to pick a space');
 });
 
@@ -340,6 +352,11 @@ onKbRootChange(async () => {
   killActiveAgent();
   await indexer.close();
   closeStateDb();
+  // Our old daemon is closed; sweep any orphan for the new root before
+  // re-binding so the fresh daemon takes a clean lock.
+  try { reapOrphanDaemons(getKbRoot()); } catch (err: unknown) {
+    log.warn(`reap orphan daemons failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
   await bootBindAllSpaces();
 });
 

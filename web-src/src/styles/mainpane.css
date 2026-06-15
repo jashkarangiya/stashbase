@@ -143,40 +143,8 @@
       z-index: 5;
     }
 
-    /* Mirror of `.main-floating-actions` for back/forward nav. Sits
-     * top-left of the main pane; buttons inherit `.icon-btn` styling
-     * with a disabled state that grays them out without hiding. */
-    .main-nav-actions {
-      position: absolute;
-      top: 44px;
-      left: 14px;
-      display: flex;
-      align-items: center;
-      gap: 2px;
-      z-index: 5;
-    }
-    .nav-btn {
-      width: 28px;
-      height: 28px;
-    }
-    .nav-btn svg {
-      width: 14px;
-      height: 14px;
-    }
-    .nav-btn:disabled {
-      color: var(--border, #e5e5e5);
-      cursor: default;
-      background: transparent;
-    }
-    .nav-btn:disabled:hover {
-      background: transparent;
-    }
-
-    /* Centered file path, Obsidian-style. Sits in the same row as the
-     * back/forward buttons (left) and edit toggle (right). Absolute +
-     * 50% transform centers it relative to .main; the inner max-width
-     * leaves breathing room so the title never collides with the icon
-     * clusters. Long paths truncate with ellipsis. */
+    /* Centered placeholder strip for an empty (Untitled) tab. Absolute +
+     * 50% transform centers it relative to .main. */
     .main-breadcrumb {
       position: absolute;
       top: 44px;
@@ -330,19 +298,13 @@
       min-height: 0;
     }
 
-    /* Cap the viewer column at 1100px on wide screens — keeps HTML
-     * imports (arxiv / Wikipedia snapshots) from stretching edge-to-edge
-     * on 2K/4K monitors, and visually aligns them with MD's narrower
-     * 820px reading column (which is enforced inside the MD iframe's
-     * own body styles, so this cap is functionally a no-op for MD). */
+    /* The iframe fills the viewer column — HTML imports control their own
+     * width via their own CSS; MD keeps its ~820px reading column inside
+     * the MD iframe's own body styles. */
     .viewer-shell>iframe {
       position: absolute;
-      top: 0;
-      bottom: 0;
-      left: 50%;
-      transform: translateX(-50%);
+      inset: 0;
       width: 100%;
-      max-width: 1100px;
       height: 100%;
       border: 0;
       display: block;
@@ -627,14 +589,17 @@
       grid-template: 1fr / 1fr;
       min-height: 0;
       min-width: 0;
-      /* Reserve room for the absolute-positioned chrome row
-       * (nav-actions / breadcrumb / floating-actions, all at top:44px,
-       * height ~28px) so editor / preview content doesn't render
-       * underneath it. */
+      /* Reserve room for the absolute-positioned chrome (edit toggle /
+       * PDF controls / floating-actions at top:44px, height ~28px) so
+       * editor / preview content doesn't render underneath it. */
       padding-top: 36px;
     }
 
-    .main.no-file .main-body {
+    /* HTML / image viewers have no top chrome, so they skip the band and
+     * fill from just under the tab strip. */
+    .main.no-file .main-body,
+    .main.fmt-html .main-body,
+    .main.fmt-image .main-body {
       padding-top: 0;
     }
 

@@ -505,6 +505,14 @@ export const api = {
   indexStatus: () => getJson<IndexStatus>('/api/index-status'),
   dismissSnapshotWarning: () =>
     send<{ ok: boolean }>('POST', '/api/snapshot-warning/dismiss'),
+  /** Bake the current space's embeddings into a portable
+   *  `.stashbase/snapshot.parquet` (+ `snapshot.meta.json`) so copying /
+   *  git-cloning the space folder carries the vectors — the other end
+   *  reuses them by `text_hash` instead of re-embedding. */
+  exportSnapshot: () =>
+    send<{ vectors: number; chunks: number; embedder: { provider: string; model: string | null; dim: number } }>(
+      'POST', '/api/space/export-snapshot',
+    ),
 
   /** Full per-file PDF conversion status, KB-wide, keyed by KB-relative
    *  path. PdfPreview calls this when the active file is a PDF to

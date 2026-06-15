@@ -1,11 +1,10 @@
-import { ArrowLeftIcon, ArrowRightIcon, EditIcon, PreviewIcon } from '../icons';
+import { EditIcon, PreviewIcon } from '../icons';
 import { useApp } from '../store/AppContext';
 import { EmptyTabLanding } from './EmptyTabLanding';
 import { FindBar } from './FindBar';
 import { HtmlPreview } from './HtmlPreview';
 import { ImagePreview } from './ImagePreview';
 import { MarkdownPreview } from './MarkdownPreview';
-import { PathBreadcrumb } from './PathBreadcrumb';
 import { PdfPreview } from './PdfPreview';
 import { CodeEditor } from './CodeEditor';
 import { StashingPlaceholder } from './StashingPlaceholder';
@@ -15,25 +14,17 @@ import { TabStrip } from './TabStrip';
  * Right rail. Layout from top to bottom:
  *   • TabStrip                   (when any tab is open)
  *   • main-body                  (preview / md editor / empty-tab landing)
- *   • absolute-positioned chrome:
- *       - nav-actions  (back / forward, top-left)
- *       - breadcrumb   (path, top-center)
- *       - floating     (edit toggle + save status, top-right)
+ *   • absolute-positioned chrome (top-right, `top: 44px` to clear the tab
+ *     strip): the md edit toggle + save status, and the PDF control slot.
  *
- * The chrome row sits at `top: 44px` to clear the tab strip — see
- * `.main-nav-actions` / `.main-breadcrumb` / `.main-floating-actions`
- * in styles.css. When there are no tabs at all, `.main.no-file > *`
- * hides every child so the pane is a clean canvas.
+ * When there are no tabs at all, `.main.no-file > *` hides every child so
+ * the pane is a clean canvas.
  */
 export function MainPane() {
   const { state, actions, activeTab } = useApp();
   const cur = activeTab?.file ?? null;
   const editMode = activeTab?.editMode ?? false;
   const saveStatus = activeTab?.saveStatus ?? { text: '', cls: '' };
-  const navStack = activeTab?.navStack ?? [];
-  const navCursor = activeTab?.navCursor ?? -1;
-  const canBack = navCursor > 0;
-  const canForward = navCursor >= 0 && navCursor < navStack.length - 1;
   const hasTabs = state.tabs.length > 0;
   const emptyTab = !!activeTab && !cur;
   // A recording's tab pops open before its OCR note exists, so its body
@@ -44,7 +35,7 @@ export function MainPane() {
     !!cur && cur.format === 'md' && !cur.content && state.pendingConversions.includes(cur.name);
 
   return (
-    <main className={'main' + (hasTabs ? '' : ' no-file')}>
+    <main className={'main' + (hasTabs ? '' : ' no-file') + (cur ? ' fmt-' + cur.format : '')}>
       {hasTabs && <TabStrip />}
       <div className="main-body">
         {!hasTabs && (
@@ -99,29 +90,6 @@ export function MainPane() {
           </div>
         )}
       </div>
-      {activeTab && (
-        <div className="main-nav-actions">
-          <button
-            className="icon-btn nav-btn"
-            type="button"
-            title="Back"
-            disabled={!canBack}
-            onClick={() => { void actions.navBack(); }}
-          >
-            <ArrowLeftIcon />
-          </button>
-          <button
-            className="icon-btn nav-btn"
-            type="button"
-            title="Forward"
-            disabled={!canForward}
-            onClick={() => { void actions.navForward(); }}
-          >
-            <ArrowRightIcon />
-          </button>
-        </div>
-      )}
-      {cur && <PathBreadcrumb name={cur.name} />}
       {emptyTab && (
         <div className="main-breadcrumb empty">
           <span className="seg current">Untitled</span>

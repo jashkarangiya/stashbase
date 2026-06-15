@@ -76,3 +76,43 @@ export function clearStaleMilvusLock(kbRoot: string): void {
     }
   }
 }
+
+/** Kill orphaned stashbase daemons for this kbRoot — leftovers from a
+ *  previous server that died without reaping its child (kill -9, crash,
+ *  Electron force-quit, or losing the `:8090` startup race). Unlike
+ *  `clearStaleMilvusLock`, these may NOT hold `milvus.db` — the lock-fight
+ *  loser never grabbed it, yet its mere presence lets the rightful
+ *  daemon's writes vanish into the loser (the write-black-hole, data-layer
+ *  §8.1 / §8.6 I2). So we match by command line instead of by lock holder.
+ *
+ *  MUST be called only AFTER winning the `:8090` arbiter and BEFORE
+ *  spawning this server's own daemon: that ordering guarantees any other
+ *  daemon for this kbRoot is an orphan, never a live peer, so there's
+ *  nothing to spare. Server-only — the MCP host must never run it.
+ *
+ *  macOS + Linux only (uses `ps`); Windows falls through silently. */
+export function reapOrphanDaemons(kbRoot: string): void {
+  if (process.platform === 'win32') return;
+  // `-axww` = every process, full (untruncated) command line — the daemon
+  // path + `--kb-root <abs>` can be long.
+  const ps = spawnSync('ps', ['-axww', '-o', 'pid=,command='], { encoding: 'utf8' });
+  if (ps.status !== 0 || !ps.stdout) return;
+  for (const line of ps.stdout.split('\n')) {
+    const m = line.trim().match(/^(\d+)\s+(.+)$/);
+    if (!m) continue;
+    const pid = Number(m[1]);
+    const cmd = m[2];
+    if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) continue;
+    // Frozen binary (`…/stashbase-daemon`) or dev mode (`python …
+    // stashbase_daemon.py`), scoped to THIS kb via its `--kb-root` arg so
+    // a daemon for a different StashBase root is left untouched.
+    const isDaemon = cmd.includes('stashbase-daemon') || cmd.includes('stashbase_daemon');
+    if (!isDaemon || !cmd.includes(`--kb-root ${kbRoot}`)) continue;
+    log.warn(`reaping orphan daemon pid=${pid} (kbRoot=${kbRoot})`);
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // Already gone — fine.
+    }
+  }
+}
