@@ -19,7 +19,7 @@ interface ElectronBridge {
 
 interface CapturePayload {
   ok?: boolean;
-  mode?: 'screen' | 'window' | 'region' | 'recording';
+  mode?: 'recording';
   mime?: string;
   dataUrl?: string;
   width?: number;
@@ -49,6 +49,7 @@ import { ChatPane } from './components/ChatPane';
 import { ChatLaunchButtons } from './components/ChatLaunchButtons';
 import { SettingsPortal, openSettings } from './components/SettingsModal';
 import { HomeIcon } from './icons';
+import { useHoverTip } from './hooks/useHoverTip';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppProvider, useApp } from './store/AppContext';
 import { SIDEBAR_COLLAPSE_AT, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from './store/state';
@@ -109,46 +110,28 @@ function AppBody() {
     });
 
     async function handleCaptureCreated(capture: CapturePayload) {
-      const isImage = capture.mime?.startsWith('image/');
-      const isVideo = capture.mime?.startsWith('video/');
-      if (!capture.dataUrl || (!isImage && !isVideo)) return;
-      const sourceTitle = capture.sourceTitle || (isVideo ? 'Recording' : 'Screenshot');
-      // Only stills get the lightbox preview; a recording can't be shown
-      // in the image viewer, it just gets processed.
-      if (isImage) setPreviewImage({ src: capture.dataUrl, alt: sourceTitle });
-
+      // `capture:created` only ever carries a screen recording now — the
+      // built-in screenshot tool was removed; system screenshots come in
+      // through the clipboard offer instead. Recordings aren't stored as
+      // video: they're OCR'd into a visible note and the webm is
+      // discarded server-side. The note shows up via the "Converting…"
+      // banner when its text is ready.
+      if (!capture.dataUrl || !capture.mime?.startsWith('video/')) return;
       if (state.welcomeVisible || !state.space) {
-        actions.toast(
-          isVideo ? 'Open a space to save this recording.' : 'Open a space to save this screenshot.',
-          { level: 'warning' },
-        );
+        actions.toast('Open a space to save this recording.', { level: 'warning' });
         return;
       }
-
       try {
         const file = await dataUrlToFile(
           capture.dataUrl,
-          capture.filename || defaultCaptureFilename(capture.mode),
-          capture.mime ?? 'application/octet-stream',
+          capture.filename || defaultCaptureFilename(),
+          capture.mime ?? 'video/webm',
         );
-        if (isVideo) {
-          // Recordings aren't stored as video — OCR'd into a visible note,
-          // the webm is discarded server-side. The note shows up via the
-          // "Converting…" banner when its text is ready.
-          const ok = await actions.recordVideo(file, state.activeFolder);
-          if (ok) actions.toast('Recording captured — extracting text…', { level: 'info' });
-          return;
-        }
-        const saved = await actions.upload([{ file, relPath: file.name }], state.activeFolder);
-        if (!saved) return;
-        const suffix = state.activeFolder ? ` to ${state.activeFolder}` : '';
-        actions.toast(`Saved ${file.name}${suffix}.`, { level: 'success' });
+        const ok = await actions.recordVideo(file, state.activeFolder);
+        if (ok) actions.toast('Recording captured — extracting text…', { level: 'info' });
       } catch (err) {
         console.warn('[capture] save failed:', err);
-        actions.toast(
-          isVideo ? 'Recording captured, but it could not be processed.' : 'Screenshot captured, but it could not be saved.',
-          { level: 'error' },
-        );
+        actions.toast('Recording captured, but it could not be processed.', { level: 'error' });
       }
     }
   }, [actions, state.activeFolder, state.space, state.welcomeVisible]);
@@ -170,7 +153,7 @@ function AppBody() {
       actions.toast(
         error.message || (isPermission
           ? 'Turn on Screen Recording for StashBase, then restart the app.'
-          : 'Screenshot did not finish. Try again.'),
+          : 'Recording did not finish. Try again.'),
         {
           level: isPermission ? 'warning' : 'error',
           ttl: isPermission ? null : undefined,
@@ -260,14 +243,7 @@ function AppBody() {
        *  controls stop sharing the same row. */}
       <div className="app-chrome">
         <div className="app-chrome-left">
-          {!state.welcomeVisible && (
-            <button
-              className="icon-btn"
-              type="button"
-              title="Back to Welcome"
-              onClick={() => actions.goHome()}
-            ><HomeIcon /></button>
-          )}
+          {!state.welcomeVisible && <HomeChromeButton onClick={() => actions.goHome()} />}
         </div>
         {!state.welcomeVisible && state.space && (
           <div className="app-chrome-title">{state.space}</div>
@@ -323,10 +299,23 @@ function AppBody() {
   );
 }
 
-function defaultCaptureFilename(mode?: string): string {
+function defaultCaptureFilename(): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  if (mode === 'recording') return `recording-${stamp}.webm`;
-  return `screenshot-${mode || 'capture'}-${stamp}.png`;
+  return `recording-${stamp}.webm`;
+}
+
+/** Home button in the top chrome. Its own component so the hover-tip hook
+ *  isn't called conditionally (the button only renders outside Welcome).
+ *  Tip drops *below* the button — it sits at the very top of the window,
+ *  so a tooltip above would be clipped off-screen. */
+function HomeChromeButton({ onClick }: { onClick: () => void }) {
+  const { tipProps, tip } = useHoverTip('Back to Welcome', 'bottom');
+  return (
+    <button className="icon-btn" type="button" aria-label="Back to Welcome" onClick={onClick} {...tipProps}>
+      <HomeIcon />
+      {tip}
+    </button>
+  );
 }
 
 /** Decode a `data:` URL into a File. Decodes the base64 (or percent-

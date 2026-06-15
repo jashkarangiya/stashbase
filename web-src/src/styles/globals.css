@@ -67,16 +67,22 @@
       border-bottom: 1px solid var(--border);
     }
 
-    /* Left group sits to the right of the traffic lights (which overlay
-     * at x:14, y:14, taking ~62px). Padding here keeps the toggle button
-     * clear of the OS chrome. macOS fullscreen hides the traffic lights;
-     * the `.is-fullscreen` body class (driven by Electron IPC) drops
-     * the inset so the toggle hugs the edge again. */
+    /* Left group sits to the right of the traffic lights. The cluster
+     * starts at x:14 and runs to ~68px; the home button needs to clear
+     * it with breathing room, so we inset ~84px (the old 62px left the
+     * button crowding the green light). Only in Electron — a browser tab
+     * has no traffic lights, so there the group hugs the edge. macOS
+     * fullscreen hides the lights; the `.is-fullscreen` body class
+     * (driven by Electron IPC) drops the inset so the button hugs the
+     * edge again. */
     .app-chrome-left {
-      padding-left: 62px;
       display: flex;
       align-items: center;
       gap: 4px;
+    }
+
+    body.is-electron .app-chrome-left {
+      padding-left: 84px;
     }
 
     body.is-fullscreen .app-chrome-left {
@@ -120,6 +126,28 @@
     body.is-electron strong {
       -webkit-app-region: no-drag;
     }
+
+    /* Custom hover tooltip (see `useHoverTip`) — replaces the native
+     * `title`, which never appears in this Electron window. `fixed` so it
+     * escapes the sidebar's `overflow: hidden`; the hook sets top/left to
+     * the trigger's edge and the transform centers it on that edge. */
+    .hover-tip {
+      position: fixed;
+      z-index: 1000;
+      pointer-events: none;
+      background: var(--fg);
+      color: var(--pane);
+      font-size: 12px;
+      line-height: 1;
+      padding: 5px 8px;
+      border-radius: 5px;
+      white-space: nowrap;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+      /* Fixed-positioned: never a drag region (it's transient + tiny). */
+      -webkit-app-region: no-drag;
+    }
+    .hover-tip-right { transform: translateY(-50%); }
+    .hover-tip-bottom { transform: translateX(-50%); }
 
     .app {
       flex: 1;

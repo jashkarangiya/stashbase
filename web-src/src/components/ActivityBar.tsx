@@ -3,6 +3,7 @@ import { FilesViewIcon, RecordIcon, SearchIcon, SettingsIcon, StopIcon } from '.
 import { useApp } from '../store/AppContext';
 import { api } from '../api';
 import { openSettings } from './SettingsModal';
+import { useHoverTip } from '../hooks/useHoverTip';
 
 interface CaptureBridge {
   /** Start screen recording → Gemini video understanding → note. */
@@ -38,6 +39,10 @@ export function ActivityBar() {
   const [recording, setRecording] = useState(false);
   const isElectron = !!captureBridge();
   useEffect(() => captureBridge()?.onRecordingState?.(setRecording), []);
+
+  const recordLabel = recording ? 'Stop recording' : 'Record screen (video understanding)';
+  const recordTip = useHoverTip(recordLabel);
+  const settingsTip = useHoverTip('Settings');
 
   async function toggleRecording() {
     const bridge = captureBridge();
@@ -97,10 +102,12 @@ export function ActivityBar() {
           type="button"
           className={'activity-bar-btn' + (recording ? ' recording' : '')}
           onClick={toggleRecording}
-          title={recording ? 'Stop recording' : 'Record screen (video understanding)'}
+          aria-label={recordLabel}
           aria-pressed={recording}
+          {...recordTip.tipProps}
         >
           {recording ? <StopIcon /> : <RecordIcon />}
+          {recordTip.tip}
         </button>
       )}
       {/* Settings pinned to the bottom of the rail, VSCode-style. The
@@ -110,9 +117,11 @@ export function ActivityBar() {
         type="button"
         className="activity-bar-btn activity-bar-btn-bottom"
         onClick={() => openSettings()}
-        title="Settings"
+        aria-label="Settings"
+        {...settingsTip.tipProps}
       >
         <SettingsIcon />
+        {settingsTip.tip}
       </button>
     </nav>
   );
@@ -127,6 +136,7 @@ interface ActivityIconProps {
 }
 
 function ActivityIcon({ active, controls, label, onClick, children }: ActivityIconProps) {
+  const { tipProps, tip } = useHoverTip(label);
   return (
     <button
       type="button"
@@ -134,10 +144,12 @@ function ActivityIcon({ active, controls, label, onClick, children }: ActivityIc
       role="tab"
       aria-selected={active}
       aria-controls={controls}
+      aria-label={label}
       onClick={onClick}
-      title={label}
+      {...tipProps}
     >
       {children}
+      {tip}
     </button>
   );
 }
