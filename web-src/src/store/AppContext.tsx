@@ -291,6 +291,20 @@ function isSpaceFileTab(t: { file: State['tabs'][number]['file'] }, name: string
   return t.file?.name === name && (t.file.kind ?? 'space') === 'space';
 }
 
+/** A space-root file worth auto-opening when you enter a space that has no
+ *  tabs yet — so the seeded "👋 Start Here" (and any user space carrying a
+ *  README) lands on something to read instead of a blank tab. Ordered by
+ *  preference; only exact space-root matches qualify, so a nested readme
+ *  never hijacks the landing. Returns the file name, or null when none. */
+const LANDING_FILES = ['welcome.html', 'readme.md', 'readme.html', 'index.html'];
+function pickLandingFile(files: Array<{ name: string }>): string | null {
+  for (const target of LANDING_FILES) {
+    const hit = files.find((f) => f.name.toLowerCase() === target);
+    if (hit) return hit.name;
+  }
+  return null;
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   // Sidebar view (Files / Search) is deliberately NOT persisted: every
   // launch lands on Files. The file tree is the canonical landing spot;
@@ -454,14 +468,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const loadFiles = useCallback(async () => {
     try {
       const j = await api.listFiles();
+      const files = j.files ?? [];
       dispatch({
         type: 'FILES_LOADED',
-        files: j.files ?? [],
+        files,
         folders: j.folders ?? [],
         space: j.space ?? 'notes',
       });
+      return files;
     } catch {
       dispatch({ type: 'FILES_LOADED', files: [], folders: [], space: 'notes' });
+      return [];
     }
   }, []);
 
@@ -1497,9 +1514,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     void refreshIndexState();
     // Load files BEFORE hiding the welcome overlay so the sidebar doesn't
     // briefly flash "NOTES" with an empty tree behind the overlay's fade.
-    await Promise.all([loadFiles(), loadFileOrder()]);
+    const [files] = await Promise.all([loadFiles(), loadFileOrder()]);
     dispatch({ type: 'WELCOME_HIDE' });
-  }, [loadFiles, loadFileOrder, refreshIndexState, resetSpaceScopedState]);
+    // Land on a Welcome/README note instead of a blank tab. `finishOpenSpace`
+    // is the fresh-entry path (it just reset tabs above), so no need to guard
+    // on tab count — and we use the files loadFiles just returned rather than
+    // reading `stateRef`, which may not yet reflect the FILES_LOADED dispatch.
+    const landing = pickLandingFile(files);
+    if (landing) void selectFile(landing);
+  }, [loadFiles, loadFileOrder, refreshIndexState, resetSpaceScopedState, selectFile]);
 
   const refreshRecent = useCallback(async () => {
     const j = await api.getSpace();
