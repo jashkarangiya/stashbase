@@ -382,14 +382,20 @@ function resolveDaemonBinary(): string | null {
   // Repo build dir carries `.nosync` so iCloud leaves it intact; inside the
   // packaged .app it's plain `sidecar` (Resources isn't synced).
   //
-  // In dev (`pnpm dev` sets STASHBASE_DEV_VITE) skip the PROJECT_ROOT
-  // candidate: a leftover `pnpm build:python-sidecar` output would
-  // otherwise silently shadow `python/stashbase_daemon.py`, and the dev
-  // server ends up running a frozen daemon that's days behind the
-  // source. STASHBASE_DAEMON_BIN still wins when set explicitly.
+  // In dev (`pnpm dev` sets STASHBASE_DEV_VITE) skip BOTH project-dir
+  // bundled-binary candidates and run `python/stashbase_daemon.py` from
+  // source. A leftover `python/sidecar*` build would otherwise silently
+  // shadow the source — and in dev RESOURCES_ROOT falls back to
+  // PROJECT_ROOT, so even the non-`.nosync` candidate resolves into the
+  // repo. The dev server would then spawn a frozen (possibly broken,
+  // e.g. a half-written PyInstaller onedir missing `_internal/Python`)
+  // daemon instead of the live script. STASHBASE_DAEMON_BIN still wins
+  // when set explicitly.
   const candidates = [
     process.env.STASHBASE_DAEMON_BIN,
-    path.join(RESOURCES_ROOT, 'python', 'sidecar', 'stashbase-daemon', 'stashbase-daemon'),
+    process.env.STASHBASE_DEV_VITE
+      ? undefined
+      : path.join(RESOURCES_ROOT, 'python', 'sidecar', 'stashbase-daemon', 'stashbase-daemon'),
     process.env.STASHBASE_DEV_VITE
       ? undefined
       : path.join(PROJECT_ROOT, 'python', 'sidecar.nosync', 'stashbase-daemon', 'stashbase-daemon'),
