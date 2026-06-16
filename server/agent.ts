@@ -44,6 +44,7 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import { logger, errorMessage } from './log.ts';
 import { getCurrentSpace, runWithWindowId } from './space.ts';
+import { buildStashbasePreamble } from './agent-preamble.ts';
 
 const log = logger('agent');
 
@@ -128,6 +129,14 @@ class AgentSession {
           cwd,
           includePartialMessages: true,
           permissionMode: 'default',
+          // Orient the panel inside StashBase. settingSources below loads
+          // CLAUDE.md / skills / MCP, but nothing tells the model it's in a
+          // StashBase space, what search_kb/reindex are for, or the house
+          // rules (those reach the model only via the advisory MCP
+          // `instructions` field + an optional kb_info call). Inject that
+          // deterministically as a system-prompt append. See
+          // agent-preamble.ts and architecture.md §8.4.
+          systemPrompt: { type: 'preset', preset: 'claude_code', append: buildStashbasePreamble(cwd) },
           // Resuming a past session loads its conversation history so the
           // user can continue it. The transcript itself is rendered from
           // getSessionMessages on the client; `resume` only primes the SDK

@@ -13,6 +13,20 @@ window.addEventListener('DOMContentLoaded', () => {
   document.body.classList.add('is-electron');
 });
 
+// macOS green-button fullscreen hides the traffic lights, so the chrome
+// strip drops its left inset (the `is-fullscreen` body class). Own this in
+// the preload, not a renderer React effect: the listener is registered at
+// preload top-level — before the page loads — so the initial state push
+// (main sends it on did-finish-load) is caught even when the window STARTS
+// in fullscreen. A React effect can attach its listener after that push has
+// already fired and miss it, leaving the inset stuck on.
+function applyFullscreenClass(isFullScreen) {
+  const set = () => document.body.classList.toggle('is-fullscreen', isFullScreen === true);
+  if (document.body) set();
+  else window.addEventListener('DOMContentLoaded', set, { once: true });
+}
+ipcRenderer.on('fullscreen-change', (_e, isFullScreen) => applyFullscreenClass(isFullScreen));
+
 contextBridge.exposeInMainWorld('electron', {
   /** Show the OS folder picker. Returns the picked absolute path or
    *  null if the user cancelled. Accepts `defaultPath` and
@@ -125,15 +139,5 @@ contextBridge.exposeInMainWorld('electron', {
     const wrapped = (_event, label) => handler(typeof label === 'string' ? label : '');
     ipcRenderer.on('recording:label', wrapped);
     return () => ipcRenderer.removeListener('recording:label', wrapped);
-  },
-  /** Subscribe to fullscreen-state pushes. macOS green-button fullscreen
-   *  hides traffic lights; the renderer uses this to toggle the body
-   *  class that controls the chrome-strip left padding. */
-  onFullscreenChange: (handler) => {
-    const wrapped = (_event, isFullScreen) => {
-      if (typeof isFullScreen === 'boolean') handler(isFullScreen);
-    };
-    ipcRenderer.on('fullscreen-change', wrapped);
-    return () => ipcRenderer.removeListener('fullscreen-change', wrapped);
   },
 });

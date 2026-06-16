@@ -1,6 +1,6 @@
 {
   "name": "stashbase",
-  "version": "0.6.0",
+  "version": "0.7.2",
   "description": "Local-first knowledge base desktop app.",
   "author": "liliu-z",
   "license": "Apache-2.0",
@@ -45,6 +45,7 @@
     "electron": "electron .",
     "dist": "node scripts/package-unsigned.mjs && node scripts/package-unsigned.mjs --win",
     "dist:brew": "node scripts/publish.mjs",
+    "smoke:packaged-server": "node scripts/smoke-packaged-server.mjs",
     "pack:mac": "node scripts/package-unsigned.mjs --dir",
     "dist:mac": "node scripts/package-unsigned.mjs",
     "dist:mac:unsigned": "node scripts/package-unsigned.mjs",
@@ -190,5 +191,8 @@
     "tsx": "^4.20.0",
     "typescript": "^5.7.3",
     "vite": "^8.0.12"
+  },
+  "optionalDependencies": {
+    "@vscode/ripgrep-darwin-arm64": "1.18.0"
   }
 }

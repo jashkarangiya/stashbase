@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { rgPath } from '@vscode/ripgrep';
 import { logger } from '../log.ts';
-import { fromKbRel, getCurrentSpace, getCurrentSpaceName, getKbRoot, isInsideKbRoot, toKbRel } from '../space.ts';
+import { fromKbRel, getCurrentSpace, getCurrentSpaceName, getKbRoot, isInsideKbRoot, requireSpaceExistsByName, toKbRel } from '../space.ts';
 import { getApiKey } from '../app-config.ts';
 import { syncIndex } from '../sync.ts';
 import { hasNoExtractableText } from '../indexable.ts';
@@ -19,7 +19,7 @@ import { isImageFile } from '../format.ts';
 import { clearRecord, listFailed, readAll as readConversionStatus } from '../conversion-status.ts';
 import { getFsChangeCounter } from '../watcher.ts';
 import { getDaemon } from '../mfs-daemon.ts';
-import { clearSnapshotWarning, getSnapshotWarning, indexer } from '../state.ts';
+import { bindIndexerForSpace, clearSnapshotWarning, getSnapshotWarning, indexer } from '../state.ts';
 import { noteTreeChanged } from '../watcher.ts';
 import { sendError } from '../http.ts';
 
@@ -37,6 +37,9 @@ export function mount(app: express.Express): void {
         ? req.query.space.trim() : undefined;
       const space = explicit ?? getCurrentSpaceName() ?? undefined;
       if (!space) return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
+      if (getApiKey()) {
+        await bindIndexerForSpace(requireSpaceExistsByName(space));
+      }
       const result = await syncIndex(indexer, space);
       if (result.added.length || result.modified.length || result.removed.length || result.renamed.length) {
         noteTreeChanged();
@@ -508,5 +511,4 @@ function isKeywordWordChar(ch: string): boolean {
 }
 
 // ---------- recent-files walk ----------
-
 

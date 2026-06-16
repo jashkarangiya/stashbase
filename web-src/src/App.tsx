@@ -14,7 +14,6 @@ interface ElectronBridge {
   onCaptureError?: (handler: (error: CaptureErrorPayload) => void) => (() => void);
   onClipboardImage?: (handler: (offer: ClipboardOffer) => void) => (() => void);
   markClipboardHandled?: (hash: string) => void;
-  onFullscreenChange?: (handler: (isFullScreen: boolean) => void) => (() => void);
 }
 
 interface CapturePayload {
@@ -95,14 +94,10 @@ function AppBody() {
       document.body.classList.add('is-electron');
     }
   }, []);
-  // Track macOS fullscreen — traffic lights hide in that mode, so the
-  // chrome strip should drop its 62px left inset.
-  useEffect(() => {
-    const bridge = (window as { electron?: ElectronBridge }).electron;
-    return bridge?.onFullscreenChange?.((isFullScreen) => {
-      document.body.classList.toggle('is-fullscreen', isFullScreen);
-    });
-  }, []);
+  // macOS fullscreen toggles the `is-fullscreen` body class so the chrome
+  // strip can drop its traffic-light inset. That's owned entirely by the
+  // preload (registered before page load, so it catches the initial state
+  // push even when the window starts in fullscreen) — see preload.cjs.
   useEffect(() => {
     const bridge = (window as { electron?: ElectronBridge }).electron;
     return bridge?.onCaptureCreated?.((capture) => {

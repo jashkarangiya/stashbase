@@ -16,7 +16,9 @@ await esbuild.build({
   format: 'esm',
   target: 'node20',
   banner: {
-    js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+    // Alias the import to a private name so a bundled dep that also imports
+    // `createRequire` can't collide with this banner — see build-server.mjs.
+    js: "import { createRequire as __sbCreateRequire } from 'node:module'; const require = __sbCreateRequire(import.meta.url);",
   },
   sourcemap: true,
   logLevel: 'info',

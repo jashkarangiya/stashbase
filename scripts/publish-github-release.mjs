@@ -10,6 +10,7 @@ const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 const args = new Set(process.argv.slice(2));
 const dryRun = args.has('--dry-run');
 const skipBuild = args.has('--skip-build');
+const skipSmoke = args.has('--skip-smoke');
 const draft = args.has('--draft');
 const prerelease = args.has('--prerelease');
 const tag = `v${pkg.version}`;
@@ -173,6 +174,9 @@ function publishWithGh(artifacts) {
 
 if (!skipBuild) {
   run(process.execPath, [path.join(root, 'scripts', 'package-unsigned.mjs')]);
+}
+if (!skipSmoke && process.platform === 'darwin') {
+  run(process.execPath, [path.join(root, 'scripts', 'smoke-packaged-server.mjs')]);
 }
 
 const artifacts = listArtifacts();
