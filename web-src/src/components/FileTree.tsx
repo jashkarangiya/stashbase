@@ -372,7 +372,11 @@ function FileRow({
 }) {
   const { state, actions, dispatch } = useApp();
   const isActive = state.selectedPath === path;
-  const isPending = state.pendingNames.has(path);
+  // Without an OpenAI key the embedder is off, so a file is never going to
+  // be indexed — it's not "pending", it's done as far as it'll get (keyword
+  // search still works). Dropping the not-indexed dim/pulse here matches the
+  // stashing-pill suppression so the tree doesn't breathe forever with no key.
+  const isPending = state.embedderHasKey !== false && state.pendingNames.has(path);
   const renaming = useRenameTarget(path, 'file');
   const [dropEdge, setDropEdge] = useState<DropEdge>(null);
 

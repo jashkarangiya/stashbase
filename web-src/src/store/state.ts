@@ -482,8 +482,16 @@ export function getActiveTab(s: State): Tab | null {
  *  on one stable list. */
 export function stashingPaths(s: State): string[] {
   const out = new Set(s.pendingConversions);
-  for (const p of s.pendingNames) {
-    if (!p.split('/').some((seg) => seg.startsWith('.'))) out.add(p);
+  // Without an OpenAI key the embedder is off, so the not-yet-embedded set
+  // never drains — those files aren't "in progress", they're as searchable
+  // as they'll get (keyword via ripgrep). Counting them would spin the
+  // stashing indicator forever (see "23 stashing" with no key). Conversions
+  // (local OCR / Gemini) don't need this key, so they stay counted. Only
+  // suppress on a *known* missing key (false); null = not yet checked.
+  if (s.embedderHasKey !== false) {
+    for (const p of s.pendingNames) {
+      if (!p.split('/').some((seg) => seg.startsWith('.'))) out.add(p);
+    }
   }
   return [...out].sort();
 }
