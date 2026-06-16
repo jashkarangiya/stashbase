@@ -3,6 +3,7 @@ import { FilesViewIcon, RecordIcon, SearchIcon, SettingsIcon, StopIcon } from '.
 import { useApp } from '../store/AppContext';
 import { api } from '../api';
 import { openSettings } from './SettingsModal';
+import { RequireGeminiKeyModal } from './embedder/RequireGeminiKeyModal';
 import { useHoverTip } from '../hooks/useHoverTip';
 
 interface CaptureBridge {
@@ -37,6 +38,7 @@ export function ActivityBar() {
   // in sync no matter how recording was started or stopped (e.g. the
   // macOS recording indicator).
   const [recording, setRecording] = useState(false);
+  const [needGeminiKey, setNeedGeminiKey] = useState(false);
   const isElectron = !!captureBridge();
   useEffect(() => captureBridge()?.onRecordingState?.(setRecording), []);
 
@@ -49,12 +51,11 @@ export function ActivityBar() {
     if (recording) { bridge?.stopRecording?.(); return; }
     // Recording is Gemini-only (no local fallback) — check the key BEFORE
     // capture starts, so the user never loses a recording to a missing key.
+    // No key → pop the add-key modal (mirrors the embedder gate) and start
+    // recording once it's saved, rather than bouncing the user to Settings.
     try {
       const { hasKey } = await api.getGeminiKey();
-      if (!hasKey) {
-        actions.toast('Screen recording needs a Gemini API key — add one in Settings → Capture.', { level: 'error' });
-        return;
-      }
+      if (!hasKey) { setNeedGeminiKey(true); return; }
     } catch { /* server unreachable — let the route's own guard handle it */ }
     bridge?.startRecording?.();
   }
@@ -109,6 +110,12 @@ export function ActivityBar() {
           {recording ? <StopIcon /> : <RecordIcon />}
           {recordTip.tip}
         </button>
+      )}
+      {needGeminiKey && (
+        <RequireGeminiKeyModal
+          onSaved={() => { setNeedGeminiKey(false); captureBridge()?.startRecording?.(); }}
+          onLater={() => setNeedGeminiKey(false)}
+        />
       )}
       {/* Settings pinned to the bottom of the rail, VSCode-style. The
           spacer above (margin-top:auto on this button) pushes it down
