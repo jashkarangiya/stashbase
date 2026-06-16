@@ -48,13 +48,10 @@ export function RequireApiKeyModal({
     <ModalShell onCancel={busy ? () => { /* swallow */ } : onLater}>
       <h3>Add OpenAI key</h3>
       <p className="modal-hint">
-        StashBase uses <strong>OpenAI embedding</strong> (text-embedding-3-small)
-        for semantic search — typically a few cents per month for a few MB
-        of notes. The key is used only for embedding — no chat or completion
-        requests are sent. Stored in <code>~/.stashbase/config.json</code>
-        {' '}(owner-only). Until you add one, semantic search and automatic
-        embedding/index updates stay off. Keyword search, editing, preview,
-        and file operations still work.
+        Semantic search uses <strong>OpenAI embedding</strong> — embedding
+        only, no chat, ~a few cents/month. Stored locally in
+        {' '}<code>~/.stashbase/config.json</code>. Add it anytime — keyword
+        search and editing work without it.
       </p>
       <input
         ref={inputRef}
