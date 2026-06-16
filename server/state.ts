@@ -116,6 +116,9 @@ let staleLockSwept = false;
  *  responsibility via `scheduleIndexerSync`. With no key the space is
  *  still bound but indexing is disabled. */
 export async function bindIndexerForSpace(spaceAbs: string): Promise<void> {
+  const daemon = getDaemon();
+  daemon.configure({ kbRoot: getKbRoot() });
+
   // Before the first bind of this process, sweep any stashbase daemon
   // still holding the Milvus flock: a dirty previous exit (kill -9, OS
   // shutdown) or another session's leftover embedded daemon would
