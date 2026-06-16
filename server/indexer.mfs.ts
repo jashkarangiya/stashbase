@@ -342,7 +342,11 @@ export class MfsIndexer implements Indexer {
   async closeStore(): Promise<void> {
     const daemon = getDaemon();
     if (daemon.currentGeneration() === 0) return;
-    await daemon.call('close_store', {});
+    try {
+      await daemon.call('close_store', {});
+    } finally {
+      await daemon.close();
+    }
     this.spaceIndex.clear();
     this.spaceReady.clear();
   }

@@ -11,7 +11,7 @@ import express from 'express';
 import { logger, errorMessage } from '../log.ts';
 import { getCurrentSpace } from '../space.ts';
 import { getApiKey, getEmbedderProvider, setApiKey } from '../app-config.ts';
-import { bindIndexerForSpace } from '../state.ts';
+import { bindIndexerForSpace, bootBindAllSpaces, resetIndexerRuntime } from '../state.ts';
 import { validateOpenAIKey } from '../http.ts';
 
 const log = logger('routes/embedder');
@@ -35,21 +35,29 @@ export function mount(app: express.Express): void {
     const check = await validateOpenAIKey(key);
     if (!check.ok) return res.status(check.status).json({ error: check.error });
     setApiKey(key);
-    const cur = getCurrentSpace();
-    if (cur) {
-      try {
+    try {
+      await resetIndexerRuntime({ forgetBindings: true });
+      await bootBindAllSpaces();
+      const cur = getCurrentSpace();
+      if (cur) {
         await bindIndexerForSpace(cur);
-      } catch (err: unknown) {
-        log.warn(`key set: rebind failed: ${errorMessage(err)}`);
       }
+    } catch (err: unknown) {
+      log.warn(`key set: runtime reset/rebind failed: ${errorMessage(err)}`);
     }
     res.json({ hasKey: true });
   });
 
   // Wipe the global OpenAI key. New embed / search calls will no-op
   // until a key is added back; existing vectors stay valid.
-  app.delete('/api/embedder/key', (_req, res) => {
+  app.delete('/api/embedder/key', async (_req, res) => {
     setApiKey(undefined);
+    try {
+      await resetIndexerRuntime({ forgetBindings: true });
+      await bootBindAllSpaces();
+    } catch (err: unknown) {
+      log.warn(`key delete: runtime reset failed: ${errorMessage(err)}`);
+    }
     res.json({ hasKey: false });
   });
 

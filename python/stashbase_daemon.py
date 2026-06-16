@@ -566,7 +566,7 @@ class StashbaseStore:
             )
         return self._embedder, self._store, self._dim
 
-    def close_all(self) -> None:
+    def close_all(self, *, clear_bindings: bool = True) -> None:
         """Release Milvus Lite's flock. The next ``bind_space`` reopens."""
         if self._store is not None:
             try:
@@ -576,7 +576,8 @@ class StashbaseStore:
         self._store = None
         self._embedder = None
         self._dim = 0
-        self._bound.clear()
+        if clear_bindings:
+            self._bound.clear()
 
 
 # ---------------------------------------------------------------- ops
@@ -1404,7 +1405,7 @@ def op_clear_vector_cache(svc: StashbaseStore, args: dict) -> dict:
 def op_close_store(svc: StashbaseStore, _args: dict) -> dict:
     """Release the Milvus Lite flock so the server can move / wipe the
     DB. Next ``bind_space`` reopens lazily."""
-    svc.close_all()
+    svc.close_all(clear_bindings=False)
     return {}
 
 

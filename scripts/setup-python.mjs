@@ -20,6 +20,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const VENV = path.join(ROOT, 'python', '.venv.nosync');
 const REQS = path.join(ROOT, 'python', 'requirements.txt');
+const VENV_PYTHON = process.platform === 'win32'
+  ? path.join(VENV, 'Scripts', 'python.exe')
+  : path.join(VENV, 'bin', 'python');
 
 const MIN_MAJOR = 3;
 const MIN_MINOR = 10;
@@ -70,10 +73,9 @@ if (!existsSync(VENV)) {
   execFileSync(py.bin, ['-m', 'venv', VENV], { stdio: 'inherit' });
 }
 
-const venvPy = path.join(VENV, 'bin', 'python');
 console.log(`[setup:python] installing deps from ${REQS}`);
-execFileSync(venvPy, ['-m', 'pip', 'install', '--upgrade', 'pip'], { stdio: 'inherit' });
-execFileSync(venvPy, ['-m', 'pip', 'install', '-r', REQS], { stdio: 'inherit' });
+execFileSync(VENV_PYTHON, ['-m', 'pip', 'install', '--upgrade', 'pip'], { stdio: 'inherit' });
+execFileSync(VENV_PYTHON, ['-m', 'pip', 'install', '-r', REQS], { stdio: 'inherit' });
 
 // Smoke-test the imports the daemon needs, so a corrupt venv reports
 // failure here instead of at first daemon spawn.
@@ -86,4 +88,4 @@ except Exception as e:
     print(f'[setup:python] import probe failed: {e}', file=sys.stderr)
     sys.exit(1)
 `;
-execFileSync(venvPy, ['-c', probeImports], { stdio: 'inherit' });
+execFileSync(VENV_PYTHON, ['-c', probeImports], { stdio: 'inherit' });

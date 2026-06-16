@@ -27,6 +27,23 @@ function parsePortArg(argv, fallback) {
 }
 const SERVER_PORT = parsePortArg(process.argv.slice(1), 8090);
 
+function pythonCandidates(root) {
+  return process.platform === 'win32'
+    ? [
+        path.join(root, 'Scripts', 'python.exe'),
+        path.join(root, 'bin', 'python'),
+      ]
+    : [
+        path.join(root, 'bin', 'python'),
+        path.join(root, 'Scripts', 'python.exe'),
+      ];
+}
+
+function sidecarExecutable(root, name, opts = {}) {
+  const exe = process.platform === 'win32' ? `${name}.exe` : name;
+  return opts.direct ? path.join(root, exe) : path.join(root, name, exe);
+}
+
 // Capture server stdout/stderr to a file the user can `cat` after a
 // failed launch. Dock-launched packaged apps inherit Electron's stderr
 // which goes to /dev/null, so without this every server crash is
@@ -256,8 +273,8 @@ async function ensureServer() {
   // packaged. Model weights are cached by huggingface_hub under
   // `~/.cache/huggingface/` regardless of dev vs packaged.
   const packagedPythonCandidates = [
-    path.join(process.resourcesPath, 'python', 'runtime', 'bin', 'python'),
-    path.join(process.resourcesPath, 'python', '.venv', 'bin', 'python'),
+    ...pythonCandidates(path.join(process.resourcesPath, 'python', 'runtime')),
+    ...pythonCandidates(path.join(process.resourcesPath, 'python', '.venv')),
   ];
   const packagedPython = packagedPythonCandidates.find((candidate) => {
     try { return require('node:fs').existsSync(candidate); } catch { return false; }
@@ -270,8 +287,8 @@ async function ensureServer() {
   // each candidate as a *file* — spawn-ing the outer directory by
   // mistake yields EACCES with no useful hint.
   const packagedDaemonCandidates = [
-    path.join(process.resourcesPath, 'python', 'sidecar', 'stashbase-daemon', 'stashbase-daemon'),
-    path.join(process.resourcesPath, 'python', 'sidecar', 'stashbase-daemon'),
+    sidecarExecutable(path.join(process.resourcesPath, 'python', 'sidecar'), 'stashbase-daemon'),
+    sidecarExecutable(path.join(process.resourcesPath, 'python', 'sidecar'), 'stashbase-daemon', { direct: true }),
   ];
   const packagedDaemon = packagedDaemonCandidates.find((candidate) => {
     try { return require('node:fs').statSync(candidate).isFile(); } catch { return false; }
@@ -283,12 +300,14 @@ async function ensureServer() {
   // server (pdf.ts / image.ts) spawns this binary with a `pdf` / `ocr`
   // subcommand when STASHBASE_EXTRACT_BIN is set; in dev it spawns the
   // scripts via the local venv instead.
-  const packagedExtract = path.join(
-    process.resourcesPath, 'python', 'sidecar', 'stashbase-extract', 'stashbase-extract',
-  );
-  const hasPackagedExtract = (() => {
-    try { return require('node:fs').statSync(packagedExtract).isFile(); } catch { return false; }
-  })();
+  const packagedExtractCandidates = [
+    sidecarExecutable(path.join(process.resourcesPath, 'python', 'sidecar'), 'stashbase-extract'),
+    sidecarExecutable(path.join(process.resourcesPath, 'python', 'sidecar'), 'stashbase-extract', { direct: true }),
+  ];
+  const packagedExtract = packagedExtractCandidates.find((candidate) => {
+    try { return require('node:fs').statSync(candidate).isFile(); } catch { return false; }
+  });
+  const hasPackagedExtract = Boolean(packagedExtract);
   const packagedEnv = app.isPackaged
     ? {
         ELECTRON_RUN_AS_NODE: '1',

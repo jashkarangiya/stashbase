@@ -67,12 +67,22 @@ function runElectronBuilder() {
   });
 }
 
+function sidecarCandidates(name) {
+  const exe = process.platform === 'win32' || platform === 'win' ? `${name}.exe` : name;
+  return [
+    path.join(root, 'python', 'sidecar.nosync', name, exe),
+    path.join(root, 'python', 'sidecar.nosync', exe),
+  ];
+}
+
 function assertWindowsSidecar() {
   if (platform !== 'win') return;
-  const sidecar = path.join(root, 'python', 'sidecar.nosync', 'stashbase-daemon.exe');
-  if (!fs.existsSync(sidecar)) {
+  const daemon = sidecarCandidates('stashbase-daemon').find((candidate) => fs.existsSync(candidate));
+  const extract = sidecarCandidates('stashbase-extract').find((candidate) => fs.existsSync(candidate));
+  if (!daemon || !extract) {
     throw new Error(
-      'Windows packaging requires python/sidecar.nosync/stashbase-daemon.exe. ' +
+      'Windows packaging requires python/sidecar.nosync/stashbase-daemon/stashbase-daemon.exe ' +
+        'and python/sidecar.nosync/stashbase-extract/stashbase-extract.exe. ' +
         'Build the Windows Python sidecar on Windows before running `pnpm dist:win`.',
     );
   }

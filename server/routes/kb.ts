@@ -15,6 +15,7 @@ import { indexer, getSnapshotWarning } from '../state.ts';
 import { displayPathForHit } from '../pdf.ts';
 import { getKbInfo, getKbRules, setKbRules } from '../kb.ts';
 import { sendError } from '../http.ts';
+import { getApiKey } from '../app-config.ts';
 
 const log = logger('routes/kb');
 
@@ -32,6 +33,12 @@ export function mount(app: express.Express): void {
       const pathPrefix = typeof req.body?.path_prefix === 'string' && req.body.path_prefix.trim()
         ? req.body.path_prefix.trim() : undefined;
       if (!query) return res.status(400).json({ error: 'query required' });
+      if (!getApiKey()) {
+        return res.status(412).json({
+          error: 'semantic search is disabled until you add an OpenAI API key',
+          code: 'EMBEDDER_KEY_REQUIRED',
+        });
+      }
       const kbRoot = getKbRoot();
       const hits = (await indexer.search(query, topK, space, pathPrefix))
         .map((h) => {

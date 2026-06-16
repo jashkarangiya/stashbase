@@ -21,7 +21,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:chil
 import { INDEX_EXCLUDED_DIRS, MAX_INDEXABLE_BYTES } from './indexable.ts';
 import { NOTE_EXTS } from './format.ts';
 import { EventEmitter } from 'node:events';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -150,6 +150,14 @@ class MfsDaemon extends EventEmitter {
     return this.bindings;
   }
 
+  /** Forget every recorded binding. Used when the global embedder
+   *  credential changes: replaying bindings captured with the old key
+   *  would recreate the Python embedder with stale credentials before
+   *  the fresh bind lands. */
+  forgetBindings(): void {
+    this.bindings.clear();
+  }
+
   private spawnAndWait(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       if (!this.kbRoot) {
@@ -184,7 +192,18 @@ class MfsDaemon extends EventEmitter {
         try { proc.kill('SIGKILL'); } catch { /* already gone */ }
       }, READY_TIMEOUT_MS);
       readyTimer.unref();
-      const onReady = () => { clearTimeout(readyTimer); resolve(); };
+      let ready = false;
+      const failAll = (err: Error) => {
+        for (const slot of this.pending.values()) slot.reject(err);
+        this.pending.clear();
+        if (this.proc === proc) this.proc = null;
+        this.readyP = null;
+      };
+      const onReady = () => {
+        ready = true;
+        clearTimeout(readyTimer);
+        resolve();
+      };
 
       const lines = readline.createInterface({ input: proc.stdout });
       lines.on('line', (line) => this.onLine(line, onReady));
@@ -193,18 +212,22 @@ class MfsDaemon extends EventEmitter {
         process.stderr.write(`[mfs/py] ${chunk.toString()}`);
       });
 
+      proc.on('error', (err) => {
+        clearTimeout(readyTimer);
+        log.warn(`MFS daemon spawn failed: ${err.message}`);
+        failAll(err);
+        reject(err);
+      });
+
       proc.on('exit', (code, signal) => {
         clearTimeout(readyTimer);
         const err = new Error(
           `MFS daemon exited (code=${code}, signal=${signal ?? 'null'})`,
         );
         log.warn(`${err.message}`);
-        for (const slot of this.pending.values()) slot.reject(err);
-        this.pending.clear();
-        this.proc = null;
-        this.readyP = null;
+        failAll(err);
         // If we never got `ready`, surface the failure to the caller.
-        reject(err);
+        if (!ready) reject(err);
       });
     });
   }
@@ -348,13 +371,16 @@ function resolvePythonBin(): string {
     // `python/.venv.nosync`. Skip the packaged candidates in dev — same
     // guard as resolveDaemonBinary. STASHBASE_PYTHON still wins.
     if (!process.env.STASHBASE_DEV_VITE) {
-      const packagedRuntime = path.join(RESOURCES_ROOT, 'python', 'runtime', 'bin', 'python');
-      if (existsSync(packagedRuntime)) return packagedRuntime;
-      const packagedVenv = path.join(RESOURCES_ROOT, 'python', '.venv', 'bin', 'python');
-      if (existsSync(packagedVenv)) return packagedVenv;
+      for (const candidate of pythonCandidates(path.join(RESOURCES_ROOT, 'python', 'runtime'))) {
+        if (existsSync(candidate)) return candidate;
+      }
+      for (const candidate of pythonCandidates(path.join(RESOURCES_ROOT, 'python', '.venv'))) {
+        if (existsSync(candidate)) return candidate;
+      }
     }
-    const venvBin = path.join(PROJECT_ROOT, 'python', '.venv.nosync', 'bin', 'python');
-    if (existsSync(venvBin)) return venvBin;
+    for (const candidate of pythonCandidates(path.join(PROJECT_ROOT, 'python', '.venv.nosync'))) {
+      if (existsSync(candidate)) return candidate;
+    }
     log.warn('python/.venv.nosync not found, falling back to system `python3`');
     return 'python3';
   })();
@@ -379,6 +405,18 @@ function resolvePythonBin(): string {
     );
   }
   return bin;
+}
+
+function pythonCandidates(root: string): string[] {
+  return process.platform === 'win32'
+    ? [
+        path.join(root, 'Scripts', 'python.exe'),
+        path.join(root, 'bin', 'python'),
+      ]
+    : [
+        path.join(root, 'bin', 'python'),
+        path.join(root, 'Scripts', 'python.exe'),
+      ];
 }
 
 function resolveDaemonCommand(kbRoot: string): { command: string; args: string[]; cwd: string } {
@@ -410,12 +448,29 @@ function resolveDaemonBinary(): string | null {
     process.env.STASHBASE_DAEMON_BIN,
     process.env.STASHBASE_DEV_VITE
       ? undefined
-      : path.join(RESOURCES_ROOT, 'python', 'sidecar', 'stashbase-daemon', 'stashbase-daemon'),
+      : sidecarExecutable(path.join(RESOURCES_ROOT, 'python', 'sidecar'), 'stashbase-daemon'),
     process.env.STASHBASE_DEV_VITE
       ? undefined
-      : path.join(PROJECT_ROOT, 'python', 'sidecar.nosync', 'stashbase-daemon', 'stashbase-daemon'),
+      : sidecarExecutable(path.join(RESOURCES_ROOT, 'python', 'sidecar'), 'stashbase-daemon', { direct: true }),
+    process.env.STASHBASE_DEV_VITE
+      ? undefined
+      : sidecarExecutable(path.join(PROJECT_ROOT, 'python', 'sidecar.nosync'), 'stashbase-daemon'),
+    process.env.STASHBASE_DEV_VITE
+      ? undefined
+      : sidecarExecutable(path.join(PROJECT_ROOT, 'python', 'sidecar.nosync'), 'stashbase-daemon', { direct: true }),
   ].filter(Boolean) as string[];
-  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+  return candidates.find(isFile) ?? null;
+}
+
+function sidecarExecutable(root: string, name: string, opts: { direct?: boolean } = {}): string {
+  const exe = process.platform === 'win32' ? `${name}.exe` : name;
+  return opts.direct
+    ? path.join(root, exe)
+    : path.join(root, name, exe);
+}
+
+function isFile(candidate: string): boolean {
+  try { return statSync(candidate).isFile(); } catch { return false; }
 }
 
 function resolvePythonDaemonScript(): string {

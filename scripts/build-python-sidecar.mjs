@@ -8,7 +8,10 @@ const root = path.resolve(__dirname, '..');
 // `.nosync` suffix keeps iCloud Drive from mangling these build artifacts
 // when the repo lives under ~/Documents (it flattens PyInstaller's symlinks
 // and evicts the bundled dylibs → the daemon binary stops loading).
-const python = path.join(root, 'python', '.venv.nosync', 'bin', 'python');
+const venvRoot = path.join(root, 'python', '.venv.nosync');
+const python = process.platform === 'win32'
+  ? path.join(venvRoot, 'Scripts', 'python.exe')
+  : path.join(venvRoot, 'bin', 'python');
 const entry = path.join(root, 'python', 'stashbase_daemon.py');
 const distPath = path.join(root, 'python', 'sidecar.nosync');
 const buildPath = path.join(root, 'dist', 'pyinstaller');
@@ -25,7 +28,7 @@ if (!fs.existsSync(python)) {
 }
 
 if (!fs.existsSync(python)) {
-  throw new Error('python/.venv.nosync setup did not produce python/.venv.nosync/bin/python.');
+  throw new Error(`python/.venv.nosync setup did not produce ${path.relative(root, python)}.`);
 }
 
 const probe = spawnSync(python, ['-m', 'PyInstaller', '--version'], {
@@ -93,7 +96,7 @@ execFileSync(
 // --onedir layout: <distPath>/stashbase-daemon/{stashbase-daemon, _internal/}.
 // The executable is inside the same-named directory.
 const outDir = path.join(distPath, 'stashbase-daemon');
-const outBin = path.join(outDir, 'stashbase-daemon');
+const outBin = path.join(outDir, process.platform === 'win32' ? 'stashbase-daemon.exe' : 'stashbase-daemon');
 if (!fs.existsSync(outBin)) {
   throw new Error(`PyInstaller did not produce ${outBin}`);
 }
@@ -146,7 +149,11 @@ execFileSync(
   { cwd: root, stdio: 'inherit' },
 );
 
-const extractBin = path.join(distPath, 'stashbase-extract', 'stashbase-extract');
+const extractBin = path.join(
+  distPath,
+  'stashbase-extract',
+  process.platform === 'win32' ? 'stashbase-extract.exe' : 'stashbase-extract',
+);
 if (!fs.existsSync(extractBin)) {
   throw new Error(`PyInstaller did not produce ${extractBin}`);
 }

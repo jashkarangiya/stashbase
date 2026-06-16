@@ -108,6 +108,16 @@ export async function bootBindAllSpaces(): Promise<void> {
   }
 }
 
+/** Tear down the Python daemon after global runtime config changes.
+ *  `forgetBindings` is important for OpenAI key changes: bindings replay
+ *  during daemon startup carry credentials, so stale entries could
+ *  recreate the embedder with the old key before the fresh bind lands. */
+export async function resetIndexerRuntime(opts: { forgetBindings?: boolean } = {}): Promise<void> {
+  await indexer.close();
+  if (opts.forgetBindings) getDaemon().forgetBindings();
+  loadedSnapshotCaches.clear();
+}
+
 /** One-shot latch for the stale-flock sweep below. */
 let staleLockSwept = false;
 

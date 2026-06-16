@@ -8,7 +8,7 @@
  * `<resources>/python/runtime/`; in dev we fall back to the project's
  * `python/.venv.nosync/`, then to a bare `python3` on PATH.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,9 +28,9 @@ const RESOURCES_ROOT = process.env.STASHBASE_RESOURCES_PATH
 export function pythonBin(): string {
   if (process.env.STASHBASE_PYTHON) return process.env.STASHBASE_PYTHON;
   for (const candidate of [
-    path.join(RESOURCES_ROOT, 'python', 'runtime', 'bin', 'python'),
-    path.join(RESOURCES_ROOT, 'python', '.venv', 'bin', 'python'),
-    path.join(PROJECT_ROOT, 'python', '.venv.nosync', 'bin', 'python'),
+    ...pythonCandidates(path.join(RESOURCES_ROOT, 'python', 'runtime')),
+    ...pythonCandidates(path.join(RESOURCES_ROOT, 'python', '.venv')),
+    ...pythonCandidates(path.join(PROJECT_ROOT, 'python', '.venv.nosync')),
   ]) {
     if (existsSync(candidate)) return candidate;
   }
@@ -57,7 +57,36 @@ export function extractorSpawn(
   scriptName: string,
   args: string[],
 ): { cmd: string; args: string[] } {
-  const bin = process.env.STASHBASE_EXTRACT_BIN;
+  const bin = process.env.STASHBASE_EXTRACT_BIN || resolvePackagedExtractBin();
   if (bin) return { cmd: bin, args: [mode, ...args] };
   return { cmd: pythonBin(), args: [pythonScript(scriptName), ...args] };
+}
+
+function pythonCandidates(root: string): string[] {
+  return process.platform === 'win32'
+    ? [
+        path.join(root, 'Scripts', 'python.exe'),
+        path.join(root, 'bin', 'python'),
+      ]
+    : [
+        path.join(root, 'bin', 'python'),
+        path.join(root, 'Scripts', 'python.exe'),
+      ];
+}
+
+function resolvePackagedExtractBin(): string | undefined {
+  if (process.env.STASHBASE_DEV_VITE) return undefined;
+  const name = 'stashbase-extract';
+  const exe = process.platform === 'win32' ? `${name}.exe` : name;
+  const candidates = [
+    path.join(RESOURCES_ROOT, 'python', 'sidecar', name, exe),
+    path.join(RESOURCES_ROOT, 'python', 'sidecar', exe),
+    path.join(PROJECT_ROOT, 'python', 'sidecar.nosync', name, exe),
+    path.join(PROJECT_ROOT, 'python', 'sidecar.nosync', exe),
+  ];
+  return candidates.find(isFile);
+}
+
+function isFile(candidate: string): boolean {
+  try { return statSync(candidate).isFile(); } catch { return false; }
 }
