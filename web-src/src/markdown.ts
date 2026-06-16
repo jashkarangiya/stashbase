@@ -190,6 +190,10 @@ document.addEventListener("click", function(e) {
         }, "*");
         return;
       }
+      // Non-note assets (recording webm, etc.) open in the system browser.
+      e.preventDefault();
+      window.parent.postMessage({ type: "stashbase-open-external", href: url.href }, "*");
+      return;
     }
     if ((url.protocol === "http:" || url.protocol === "https:") && url.origin !== location.origin) {
       e.preventDefault();

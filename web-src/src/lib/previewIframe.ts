@@ -61,10 +61,21 @@ function forwardAnchorClick(anchor: HTMLAnchorElement, e: Event, currentPath?: s
     const encoded = url.pathname.slice('/asset/'.length);
     let decoded: string;
     try { decoded = encoded.split('/').map(decodeURIComponent).join('/'); } catch { return; }
-    if (!/\.(md|markdown|html|htm)$/i.test(decoded)) return; // only navigable notes
+    if (/\.(md|markdown|html|htm)$/i.test(decoded)) {
+      // Notes navigate in-app.
+      e.preventDefault();
+      const hash = url.hash.startsWith('#') ? url.hash.slice(1) : '';
+      window.postMessage({ type: 'stashbase-nav', path: decoded, anchor: hash || undefined }, window.location.origin);
+      return;
+    }
+    // Non-note assets (recording webm, PDFs, images linked explicitly)
+    // open in the system browser — the same-origin /asset/ URL streams
+    // from our local server, and the browser can play/preview formats the
+    // in-app viewers don't (notably MediaRecorder webm, which lacks the
+    // header duration an inline <video> needs). Without this they'd fall
+    // through and navigate the app shell away from the workspace.
     e.preventDefault();
-    const hash = url.hash.startsWith('#') ? url.hash.slice(1) : '';
-    window.postMessage({ type: 'stashbase-nav', path: decoded, anchor: hash || undefined }, window.location.origin);
+    window.postMessage({ type: 'stashbase-open-external', href: url.href }, window.location.origin);
     return;
   }
   if (url.protocol === 'http:' || url.protocol === 'https:') {

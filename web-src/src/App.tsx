@@ -53,6 +53,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppProvider, useApp } from './store/AppContext';
 import { SIDEBAR_COLLAPSE_AT, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from './store/state';
 import { useGlobalDragDrop } from './hooks/useGlobalDragDrop';
+import { getWindowId } from './api';
 
 /**
  * Top-level shell. Wraps everything in <AppProvider> (the single
@@ -194,6 +195,15 @@ function AppBody() {
       try {
         const url = new URL(href);
         if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+        // Same-origin asset links (e.g. a recording's webm, opened in the
+        // system browser to play) need the window's space context — the
+        // browser can't send our header, so carry the windowId in the
+        // query the way `assetUrl` does. Without it the server has no open
+        // space for the request and answers NO_SPACE.
+        if (url.origin === window.location.origin && url.pathname.startsWith('/asset/')
+          && !url.searchParams.has('windowId')) {
+          url.searchParams.set('windowId', getWindowId());
+        }
         const bridge = (window as { electron?: ElectronBridge }).electron;
         if (bridge?.openExternal) {
           void bridge.openExternal(url.href);
