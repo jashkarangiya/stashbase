@@ -21,6 +21,7 @@ import path from 'node:path';
 import { discoverNewImages } from './image.ts';
 import { discoverNewPdfs } from './pdf.ts';
 import { getKbRoot } from './space.ts';
+import { getApiKey } from './app-config.ts';
 import type { Indexer } from './indexer.ts';
 import { logger, errorMessage } from './log.ts';
 import { hasNoExtractableText, indexableFileSizeError, shouldIndexFilePath } from './indexable.ts';
@@ -100,6 +101,19 @@ export interface SyncResult {
  *  window. Returns space-relative paths so the manual sync UI can show
  *  them straight. */
 export async function syncIndex(indexer: Indexer, space: string): Promise<SyncResult> {
+  // No OpenAI key → semantic indexing is disabled by design (§5.3): the
+  // daemon has no embedder/store, so every upsert would throw "no bound
+  // space … set an OpenAI API key" and a whole-folder import would flood
+  // the log with one failure per file. There's nothing in the index to
+  // maintain without a store, so skip the entire reconcile (including
+  // PDF/image conversion, whose derived-note upsert would fail the same
+  // way). Keyword search (ripgrep, no index) is unaffected, and the UI
+  // prompts the user to add a key on space open. Re-running sync after a
+  // key is set picks everything up.
+  if (!getApiKey()) {
+    log.info(`no OpenAI key — skipping semantic index for "${space}" (keyword search unaffected)`);
+    return { added: [], modified: [], removed: [], renamed: [], failed: [] };
+  }
   // Surface untracked PDFs / images before running the index diff. We
   // don't await individual conversions — each converter indexes its
   // derived note directly on completion; here we just start the queueing
