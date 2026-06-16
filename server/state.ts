@@ -161,6 +161,13 @@ export async function bindIndexerForSpace(spaceAbs: string): Promise<void> {
  *  matching embedder; a mismatch records a UI warning and falls back to
  *  a full re-embed. */
 async function maybeImportSnapshot(spaceAbs: string, spaceName: string): Promise<void> {
+  // No OpenAI key → no embedder/store, so there's nothing to prime the
+  // snapshot's vectors into. `load_vector_cache` would call
+  // `require_current()` on the daemon and throw "no embedder bound",
+  // spilling a Python traceback into the log on every keyless import of a
+  // snapshot-carrying space (e.g. the CS183B starter). Skip; once a key
+  // is set, reindex reuses the snapshot then. Mirrors syncIndex's guard.
+  if (!getApiKey()) return;
   const snapshot = path.join(spaceAbs, '.stashbase', 'snapshot.parquet');
   const metaPath = path.join(spaceAbs, '.stashbase', 'snapshot.meta.json');
   try {
