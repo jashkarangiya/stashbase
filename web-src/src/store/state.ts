@@ -707,8 +707,10 @@ export function reducer(s: State, a: Action): State {
     case 'CHAT_TABS_RESET':
       // Wipes ALL tabs — called on space switch (the server kills every
       // agent session in that flow; the frontend drops its tab list too
-      // or we'd render panels bound to the old space).
-      return { ...s, chatTabs: [], activeChatTabId: null };
+      // or we'd render panels bound to the old space). Fold the panel too,
+      // mirroring CHAT_TAB_CLOSE: an empty panel is dead space and the
+      // launchers are the only way back in.
+      return { ...s, chatTabs: [], activeChatTabId: null, chatOpen: false };
     case 'ACTIVE_FOLDER':
       // Semantically "make this folder the user's current target" —
       // also moves the visual focus there.
