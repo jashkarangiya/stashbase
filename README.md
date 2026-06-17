@@ -184,8 +184,9 @@ pnpm electron
 pnpm dev
 
 # Build distributable app
-pnpm dist:mac
-pnpm dist:win
+pnpm dist          # macOS DMG + zip
+pnpm dist:win     # Windows NSIS + zip, built from Windows sidecars
+pnpm pack:mac     # macOS .app only, faster packaging smoke
 ```
 
 **Debugging.** Dev knobs are plain environment variables — prefix the command, e.g. `STASHBASE_LOG=debug pnpm dev` (daemon ops, conversion timing; also: `STASHBASE_PDF_CONVERTER=marker`, `STASHBASE_PYTHON=/path/to/python`). API keys are NOT env vars — they live in Settings. Renderer logs: View → Toggle Developer Tools. Packaged-app server logs: `~/Library/Logs/StashBase/`; headless-server boots log to `~/.stashbase/headless-server.log`.
@@ -199,9 +200,10 @@ pnpm test:import-folder
 
 ## Publishing
 
-`dist:brew` is the one-command publishing flow: build the macOS package, upload the current version's files in `release.nosync/` to this repository's GitHub Release, then publish the Homebrew cask update.
+`release:verify:mac` is the local preflight: build the macOS package, run the packaged daemon/PDF/OCR/server smoke tests, and mount the DMG to verify its helper files. `dist:brew` is the one-command publishing flow: build the macOS package, upload the current version's files in `release.nosync/` to this repository's GitHub Release, then publish the Homebrew cask update.
 
 ```bash
+pnpm release:verify:mac
 pnpm dist:brew
 ```
 

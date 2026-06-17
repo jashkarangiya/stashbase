@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const releaseDir = path.join(root, 'release.nosync');
+const signScriptPath = path.join(root, 'scripts', 'sign-macos-app.sh');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const args = new Set(process.argv.slice(2));
 const dryRun = args.has('--dry-run');
@@ -83,6 +84,7 @@ function git(tapRepo, args, options = {}) {
 function caskContent({ url, checksum }) {
   const productName = pkg.build?.productName || 'StashBase';
   const appName = `${productName}.app`;
+  const signScript = fs.readFileSync(signScriptPath, 'utf8');
 
   return `cask "${cask}" do
   version "${pkg.version}"
@@ -98,10 +100,10 @@ function caskContent({ url, checksum }) {
   postflight do
     system_command "/usr/bin/xattr",
                    args: ["-cr", "#{appdir}/${appName}"],
-                   sudo: false
-    system_command "/usr/bin/codesign",
-                   args: ["--force", "--deep", "--sign", "-", "#{appdir}/${appName}"],
-                   sudo: false
+                   sudo: true
+    system_command "/bin/zsh",
+                   args: ["-c", ${JSON.stringify(signScript)}, "sign-stashbase-app", "#{appdir}/${appName}"],
+                   sudo: true
   end
 
   zap trash: [

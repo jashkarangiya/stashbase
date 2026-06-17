@@ -37,20 +37,24 @@
     "build:server": "node scripts/build-server.mjs",
     "build:mcp": "node scripts/build-mcp.mjs",
     "build:python-sidecar": "node scripts/build-python-sidecar.mjs",
+    "clean:python-build": "node scripts/clean-python-build.mjs",
     "test:import-folder": "node --import tsx --test server/import-folder.test.ts",
     "build": "pnpm build:web && pnpm build:server && pnpm build:mcp",
     "build:desktop": "pnpm build && pnpm build:python-sidecar",
     "setup:python": "node scripts/setup-python.mjs",
     "prestart": "pnpm build:web",
     "electron": "electron .",
-    "dist": "node scripts/package-unsigned.mjs && node scripts/package-unsigned.mjs --win",
+    "package:mac": "node scripts/package-unsigned.mjs",
+    "package:mac:dir": "node scripts/package-unsigned.mjs --dir",
+    "package:win": "node scripts/package-unsigned.mjs --win",
+    "dist": "pnpm package:mac",
+    "dist:all": "pnpm package:mac && pnpm package:win",
     "dist:brew": "node scripts/publish.mjs",
     "smoke:packaged-server": "node scripts/smoke-packaged-server.mjs",
-    "pack:mac": "node scripts/package-unsigned.mjs --dir",
-    "dist:mac": "node scripts/package-unsigned.mjs",
-    "dist:mac:unsigned": "node scripts/package-unsigned.mjs",
-    "dist:win": "node scripts/package-unsigned.mjs --win",
-    "dist:win:unsigned": "node scripts/package-unsigned.mjs --win"
+    "release:verify:mac": "node scripts/release-verify-mac.mjs",
+    "pack:mac": "pnpm package:mac:dir",
+    "dist:mac": "pnpm package:mac",
+    "dist:win": "pnpm package:win"
   },
   "build": {
     "appId": "com.stashbase.app",
@@ -136,6 +140,13 @@
           "type": "file",
           "path": "build/dmg-scripts/Read Me.txt",
           "name": "Read Me.txt"
+        },
+        {
+          "x": 40,
+          "y": 40,
+          "type": "file",
+          "path": "scripts/sign-macos-app.sh",
+          "name": ".sign-macos-app.sh"
         }
       ]
     },

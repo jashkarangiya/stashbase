@@ -1,4 +1,5 @@
 node_modules
+.pnpm-store/
 .env
 .env.local
 data/
@@ -40,3 +41,4 @@ __pycache__/
 *.tsbuildinfo
 python/.venv.nosync/
 python/.venv/
+python/pyinstaller-cache.nosync/

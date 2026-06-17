@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,6 +21,7 @@ const electronBuilderBin = path.join(
   '.bin',
   process.platform === 'win32' ? 'electron-builder.cmd' : 'electron-builder',
 );
+const pnpmListFallback = path.join(root, 'scripts', 'pnpm-list-for-electron-builder.mjs');
 
 function run(command, args, env = {}) {
   execFileSync(command, args, {
@@ -27,6 +29,14 @@ function run(command, args, env = {}) {
     env: { ...process.env, ...env },
     stdio: 'inherit',
   });
+}
+
+function findCommand(command) {
+  try {
+    return execFileSync('/usr/bin/which', [command], { encoding: 'utf8' }).trim();
+  } catch {
+    return null;
+  }
 }
 
 function clearQuarantine(extraCandidates = []) {
@@ -62,9 +72,58 @@ function runElectronBuilder() {
   if (!fs.existsSync(electronBuilderBin)) {
     throw new Error('Missing local electron-builder binary. Run your package manager install first.');
   }
-  run(electronBuilderBin, [`--${platform}`, ...target], {
-    CSC_IDENTITY_AUTO_DISCOVERY: 'false',
-  });
+  assertPnpmCollectorInput();
+  const fallback = preparePnpmCollectorFallback();
+  try {
+    run(electronBuilderBin, [`--${platform}`, ...target], {
+      ...fallback.env,
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false',
+    });
+  } finally {
+    fallback.cleanup();
+  }
+}
+
+function assertPnpmCollectorInput() {
+  if (!fs.existsSync(path.join(root, 'pnpm-lock.yaml'))) return;
+  try {
+    execFileSync(process.execPath, [pnpmListFallback, root], {
+      cwd: root,
+      stdio: 'ignore',
+    });
+  } catch (err) {
+    throw new Error(
+      `Unable to synthesize electron-builder's pnpm dependency tree fallback: ${err.message}`,
+    );
+  }
+}
+
+function preparePnpmCollectorFallback() {
+  if (!fs.existsSync(path.join(root, 'pnpm-lock.yaml'))) {
+    return { env: {}, cleanup() {} };
+  }
+  const realPnpm = findCommand('pnpm');
+  if (!realPnpm) return { env: {}, cleanup() {} };
+
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stashbase-pnpm-wrapper-'));
+  const wrapper = path.join(binDir, 'pnpm');
+  fs.writeFileSync(wrapper, `#!/bin/sh
+if [ "$1" = "list" ]; then
+  exec "${process.execPath}" "${pnpmListFallback}" "${root}"
+fi
+exec "${realPnpm}" "$@"
+`);
+  fs.chmodSync(wrapper, 0o755);
+
+  return {
+    env: {
+      PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
+      STASHBASE_REAL_PNPM: realPnpm,
+    },
+    cleanup() {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    },
+  };
 }
 
 function sidecarCandidates(name) {
@@ -75,25 +134,30 @@ function sidecarCandidates(name) {
   ];
 }
 
-function assertWindowsSidecar() {
-  if (platform !== 'win') return;
+function assertSidecarsForPlatform() {
   const daemon = sidecarCandidates('stashbase-daemon').find((candidate) => fs.existsSync(candidate));
   const extract = sidecarCandidates('stashbase-extract').find((candidate) => fs.existsSync(candidate));
-  if (!daemon || !extract) {
-    throw new Error(
-      'Windows packaging requires python/sidecar.nosync/stashbase-daemon/stashbase-daemon.exe ' +
-        'and python/sidecar.nosync/stashbase-extract/stashbase-extract.exe. ' +
-        'Build the Windows Python sidecar on Windows before running `pnpm dist:win`.',
-    );
-  }
+  if (daemon && extract) return;
+
+  const expected = sidecarCandidates('stashbase-daemon')[0];
+  const extractExpected = sidecarCandidates('stashbase-extract')[0];
+  const hint = platform === 'win'
+    ? 'Build the Windows Python sidecars on Windows before running `pnpm dist:win` from another OS.'
+    : 'Run `pnpm build:python-sidecar` before packaging.';
+  throw new Error(
+    `${platform} packaging requires Python sidecars:\n` +
+      `  - ${path.relative(root, expected)}\n` +
+      `  - ${path.relative(root, extractExpected)}\n` +
+      `${hint}`,
+  );
 }
 
 if (platform === 'win' && process.platform !== 'win32') {
-  assertWindowsSidecar();
+  assertSidecarsForPlatform();
   runScript('build');
 } else {
   runScript('build:desktop');
-  assertWindowsSidecar();
+  assertSidecarsForPlatform();
 }
 clearQuarantine();
 runElectronBuilder();

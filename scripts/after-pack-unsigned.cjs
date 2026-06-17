@@ -2,6 +2,9 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const root = path.resolve(__dirname, '..');
+const signScript = path.join(root, 'scripts', 'sign-macos-app.sh');
+
 module.exports = async function afterPack(context) {
   if (context.electronPlatformName !== 'darwin') return;
 
@@ -29,7 +32,5 @@ module.exports = async function afterPack(context) {
 
   // Ad-hoc signature is mandatory: Apple Silicon refuses to execute
   // completely unsigned binaries, "unsigned distribution" or not.
-  execFileSync('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', appPath], {
-    stdio: 'inherit',
-  });
+  execFileSync('/bin/zsh', [signScript, appPath], { stdio: 'inherit' });
 };

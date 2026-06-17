@@ -15,9 +15,87 @@ const python = process.platform === 'win32'
 const entry = path.join(root, 'python', 'stashbase_daemon.py');
 const distPath = path.join(root, 'python', 'sidecar.nosync');
 const buildPath = path.join(root, 'dist', 'pyinstaller');
+const cachePath = path.join(root, 'python', 'pyinstaller-cache.nosync');
 const specPath = path.join(root, 'dist', 'pyinstaller');
 const buildReqs = path.join(root, 'python', 'build-requirements.txt');
 const setupPython = path.join(root, 'scripts', 'setup-python.mjs');
+const pyinstallerEnv = {
+  ...process.env,
+  PYINSTALLER_CONFIG_DIR: cachePath,
+};
+const daemonExcludedModules = [
+  'onnxruntime',
+  'tokenizers',
+  'mfs.embedder.onnx',
+  'pymupdf',
+  'pymupdf4llm',
+  'fitz',
+  'docx',
+  'PIL',
+  'cv2',
+  'rapidocr_onnxruntime',
+];
+const daemonForbiddenEntries = [
+  'onnxruntime',
+  'tokenizers',
+  'pymupdf',
+  'pymupdf4llm',
+  'fitz',
+  'cv2',
+  'rapidocr_onnxruntime',
+];
+const extractExcludedModules = [
+  'blake3',
+  'mfs',
+  'milvus',
+  'milvus_lite',
+  'openai',
+  'pyarrow',
+  'pymilvus',
+  'tiktoken',
+];
+const extractForbiddenEntries = [
+  'blake3',
+  'mfs',
+  'milvus',
+  'milvus_lite',
+  'openai',
+  'pyarrow',
+  'pymilvus',
+  'tiktoken',
+];
+
+function assertNoBundleEntries(bundleDir, forbiddenNames, label) {
+  const internalDir = path.join(bundleDir, '_internal');
+  if (!fs.existsSync(internalDir)) return;
+  const forbidden = new Set(forbiddenNames.map((name) => name.toLowerCase()));
+  const hits = [];
+  const stack = [internalDir];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const lower = entry.name.toLowerCase();
+      const normalized = lower.replace(/[-.].*$/, '');
+      if (forbidden.has(lower) || forbidden.has(normalized)) {
+        hits.push(path.relative(bundleDir, path.join(current, entry.name)));
+        continue;
+      }
+      if (entry.isDirectory()) {
+        stack.push(path.join(current, entry.name));
+      }
+    }
+  }
+
+  if (hits.length > 0) {
+    throw new Error(
+      `${label} bundle contains excluded heavy modules:\n` +
+        hits.slice(0, 20).map((hit) => `  - ${hit}`).join('\n') +
+        (hits.length > 20 ? `\n  ... and ${hits.length - 20} more` : ''),
+    );
+  }
+  console.log(`[build:python-sidecar] ${label} excludes verified`);
+}
 
 if (!fs.existsSync(python)) {
   console.log('[build:python-sidecar] python/.venv.nosync is missing; running setup:python');
@@ -46,6 +124,7 @@ if (probe.status !== 0) {
 fs.rmSync(distPath, { recursive: true, force: true });
 fs.mkdirSync(distPath, { recursive: true });
 fs.mkdirSync(buildPath, { recursive: true });
+fs.mkdirSync(cachePath, { recursive: true });
 
 execFileSync(
   python,
@@ -67,15 +146,8 @@ execFileSync(
     '--hidden-import',
     'blake3',
     // V1 is openai-only: the local ONNX embedder is never imported, so
-    // keep onnxruntime / tokenizers (+ the unused onnx embedder module)
-    // out of the bundle. Verified safe — `import mfs` and the submodules
-    // we use don't load them (see stashbase_daemon.py / requirements.txt).
-    '--exclude-module',
-    'onnxruntime',
-    '--exclude-module',
-    'tokenizers',
-    '--exclude-module',
-    'mfs.embedder.onnx',
+    // keep local model + document extraction deps out of the daemon bundle.
+    ...daemonExcludedModules.flatMap((moduleName) => ['--exclude-module', moduleName]),
     '--copy-metadata',
     'milvus-lite',
     '--copy-metadata',
@@ -90,7 +162,7 @@ execFileSync(
     specPath,
     entry,
   ],
-  { cwd: root, stdio: 'inherit' },
+  { cwd: root, env: pyinstallerEnv, stdio: 'inherit' },
 );
 
 // --onedir layout: <distPath>/stashbase-daemon/{stashbase-daemon, _internal/}.
@@ -101,6 +173,7 @@ if (!fs.existsSync(outBin)) {
   throw new Error(`PyInstaller did not produce ${outBin}`);
 }
 fs.chmodSync(outBin, 0o755);
+assertNoBundleEntries(outDir, daemonForbiddenEntries, 'daemon');
 console.log('[build:python-sidecar] done ->', outBin);
 
 // Second sidecar: the one-shot extractors (`python/extract_main.py`,
@@ -138,6 +211,7 @@ execFileSync(
     'pymupdf4llm',
     '--collect-all',
     'pymupdf',
+    ...extractExcludedModules.flatMap((moduleName) => ['--exclude-module', moduleName]),
     '--distpath',
     distPath,
     '--workpath',
@@ -146,7 +220,7 @@ execFileSync(
     specPath,
     extractEntry,
   ],
-  { cwd: root, stdio: 'inherit' },
+  { cwd: root, env: pyinstallerEnv, stdio: 'inherit' },
 );
 
 const extractBin = path.join(
@@ -158,4 +232,5 @@ if (!fs.existsSync(extractBin)) {
   throw new Error(`PyInstaller did not produce ${extractBin}`);
 }
 fs.chmodSync(extractBin, 0o755);
+assertNoBundleEntries(path.dirname(extractBin), extractForbiddenEntries, 'extractor');
 console.log('[build:python-sidecar] done ->', extractBin);
