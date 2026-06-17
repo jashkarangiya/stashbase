@@ -12,11 +12,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { fileURLToPath } from 'node:url';
 import { logger, errorMessage } from './log.ts';
 import { moveDirectory, copyDirectoryDereferenced } from './fs-move.ts';
 import { isIndexExcludedDirName } from './indexable.ts';
+import { kbLocalDataDir } from './local-data.ts';
 import {
   readAppConfig as readConfig,
   writeAppConfig as writeConfig,
@@ -242,6 +244,12 @@ export async function setKbRoot(
   cfg.recentSpaces = [];
   delete cfg.recentVaults;
   writeConfig(cfg);
+  // Make the post-save state immediately observable to the route
+  // response: the first-run picker refreshes Welcome right after
+  // `PUT /api/kb-root`, so the bundled starter space should already be
+  // on disk and in recents. The kbRoot-change listener also calls this;
+  // the latch makes the second call a no-op.
+  seedBuiltinSpace();
   for (const [windowId, prevRoot] of currentSpaces.entries()) {
     for (const fn of closeListeners) {
       try { fn(prevRoot, windowId); } catch (err) {
@@ -251,11 +259,13 @@ export async function setKbRoot(
   }
   currentSpaces.clear();
   for (const fn of kbRootListeners) {
-    void Promise.resolve()
-      .then(() => fn(root))
-      .catch((err) => {
-        log.warn(`kbRoot listener threw: ${(err as any)?.message ?? err}`);
-      });
+    try {
+      await fn(root);
+    } catch (err) {
+      const message = (err as any)?.message ?? String(err);
+      warnings.push(`Root folder was saved, but runtime cleanup reported: ${message}`);
+      log.warn(`kbRoot listener threw: ${message}`);
+    }
   }
   return { warnings };
 }
@@ -712,7 +722,7 @@ function pushRecent(absPath: string): void {
 export function getSpaceConfigPath(spaceName: string): string {
   const bad = validateSpaceName(spaceName);
   if (bad) throw new Error(bad);
-  return path.join(getKbRoot(), spaceName, '.stashbase', 'config.json');
+  return path.join(kbLocalDataDir(getKbRoot()), 'space-config', spaceConfigDirName(spaceName), 'config.json');
 }
 
 export function readSpaceConfig(spaceName: string): SpaceConfigFile {
@@ -720,7 +730,7 @@ export function readSpaceConfig(spaceName: string): SpaceConfigFile {
     const parsed = JSON.parse(fs.readFileSync(getSpaceConfigPath(spaceName), 'utf8'));
     return sanitizeSpaceConfig(parsed);
   } catch {
-    return {};
+    return migrateLegacySpaceConfig(spaceName);
   }
 }
 
@@ -771,16 +781,45 @@ function sanitizeSpaceConfig(raw: unknown): SpaceConfigFile {
   return out;
 }
 
+function spaceConfigDirName(spaceName: string): string {
+  const hash = crypto.createHash('sha256').update(spaceName).digest('hex').slice(0, 16);
+  const base = spaceName.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'space';
+  return `${base.slice(0, 48)}-${hash}`;
+}
+
+function legacySpaceConfigPath(spaceName: string): string {
+  return path.join(getKbRoot(), spaceName, '.stashbase', 'config.json');
+}
+
+function hasSpaceConfigEntries(cfg: SpaceConfigFile): boolean {
+  return Object.keys(cfg.mcpServers ?? {}).length > 0;
+}
+
+function migrateLegacySpaceConfig(spaceName: string): SpaceConfigFile {
+  const legacy = legacySpaceConfigPath(spaceName);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(legacy, 'utf8'));
+  } catch {
+    return {};
+  }
+  const cfg = sanitizeSpaceConfig(parsed);
+  try {
+    if (hasSpaceConfigEntries(cfg)) {
+      writeSpaceConfig(spaceName, cfg);
+    }
+    fs.rmSync(legacy, { force: true });
+    log.info(`migrated space config for "${spaceName}" out of the space folder`);
+  } catch (err: unknown) {
+    log.warn(`failed to migrate legacy space config for "${spaceName}": ${errorMessage(err)}`);
+  }
+  return cfg;
+}
+
 function ensureSpaceMetadata(spaceRoot: string): void {
   const stash = path.join(spaceRoot, '.stashbase');
   fs.mkdirSync(stash, { recursive: true });
-  const config = path.join(stash, 'config.json');
-  if (!fs.existsSync(config)) {
-    fs.writeFileSync(config, JSON.stringify({ mcpServers: {} }, null, 2) + '\n', {
-      encoding: 'utf8',
-      mode: 0o600,
-    });
-  }
+  ensureSpaceStashbaseIgnore(stash);
   // Auto-create an **empty** `<spaceRoot>/STASHBASE.md` by default
   // (user request, reversing the earlier "opt-in only" stance). Empty =
   // 0-byte on purpose: zero-byte notes are never indexed (see
@@ -792,6 +831,26 @@ function ensureSpaceMetadata(spaceRoot: string): void {
   const rules = path.join(spaceRoot, 'STASHBASE.md');
   if (!fs.existsSync(rules)) {
     fs.writeFileSync(rules, '', 'utf8');
+  }
+}
+
+function ensureSpaceStashbaseIgnore(stash: string): void {
+  const ignore = path.join(stash, '.gitignore');
+  const ignoreEntries = [
+    'config.json',
+    'store.nosync/',
+    'store/',
+    'mfs/',
+    'cache/',
+    'state.db',
+    'state.db-*',
+  ];
+  const existing = fs.existsSync(ignore) ? fs.readFileSync(ignore, 'utf8') : '';
+  const existingLines = new Set(existing.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+  const missing = ignoreEntries.filter((entry) => !existingLines.has(entry));
+  if (missing.length) {
+    const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
+    fs.writeFileSync(ignore, `${existing}${prefix}${missing.join('\n')}\n`, 'utf8');
   }
 }
 

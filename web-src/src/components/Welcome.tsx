@@ -235,9 +235,17 @@ export function Welcome() {
         <KbRootPickerModal
           initialPath={kbRoot}
           homeDir={state.homeDir ?? ''}
-          onSaved={(path) => {
+          onSaved={(path, warnings) => {
             setKbRoot(path);
             setRootPickerOpen(false);
+            void api.getSpace()
+              .then((j) => dispatch({
+                type: 'WELCOME_SHOW',
+                recent: j.recent ?? [],
+                homeDir: j.homeDir,
+                error: warnings?.length ? warnings.join(' ') : undefined,
+              }))
+              .catch((err) => dispatch({ type: 'WELCOME_ERROR', error: errorMessage(err) }));
           }}
         />
       )}
@@ -274,7 +282,7 @@ function KbRootPickerModal({
 }: {
   initialPath: string;
   homeDir: string;
-  onSaved: (path: string) => void;
+  onSaved: (path: string, warnings?: string[]) => void;
 }) {
   const { actions } = useApp();
   const [path, setPath] = useState(initialPath);
@@ -308,7 +316,7 @@ function KbRootPickerModal({
     setError(null);
     try {
       const r = await setKbRootConfirming(p, actions.confirm);
-      if (r) onSaved(r.path); // null → user declined the non-empty confirm
+      if (r) onSaved(r.path, r.warnings); // null → user declined the non-empty confirm
     } catch (err) {
       setError(errorMessage(err));
     } finally {

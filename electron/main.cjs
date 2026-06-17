@@ -56,6 +56,7 @@ const SERVER_LOG_PATH = path.join(SERVER_LOG_DIR, 'server.log');
 // "can't connect" race.
 const SERVER_HOST = '127.0.0.1';
 const SERVER_URL = `http://${SERVER_HOST}:${SERVER_PORT}`;
+const SERVER_PROTOCOL_VERSION = 1;
 const PROJECT_ROOT = app.isPackaged ? app.getAppPath() : path.resolve(__dirname, '..');
 const SERVER_ENTRY = app.isPackaged
   ? path.join(PROJECT_ROOT, 'dist', 'server', 'index.mjs')
@@ -251,9 +252,19 @@ function configureMcpClient(client) {
  *  skip the spawn and just point the window at it — handy for editing
  *  the server in your editor with tsx-watch hot reload. */
 async function ensureServer() {
-  if (await isServerLive(SERVER_PORT, 300)) {
+  const existing = await probeServer(SERVER_PORT, 300);
+  if (existing.compatible) {
     console.log(`[electron] reusing existing server at ${SERVER_URL}`);
     return;
+  }
+  if (existing.occupied) {
+    const what = existing.legacyStashBase
+      ? 'an older StashBase server'
+      : 'another local service';
+    throw new Error(
+      `Port ${SERVER_PORT} is already in use by ${what}, so this StashBase build cannot start its server.\n` +
+      `Quit the other StashBase/app using ${SERVER_URL}, then reopen StashBase.`,
+    );
   }
   const serverBin = app.isPackaged
     ? process.execPath
@@ -371,20 +382,58 @@ async function ensureServer() {
   // generous; we surface a clear error rather than hanging forever.
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    if (await isServerLive(SERVER_PORT, 200)) return;
+    if ((await probeServer(SERVER_PORT, 200)).compatible) return;
     await sleep(150);
   }
   throw new Error(`server did not come up on :${SERVER_PORT} within 10s`);
 }
 
-function isServerLive(port, timeoutMs) {
+async function probeServer(port, timeoutMs) {
+  const health = await requestJson(port, '/api/health', timeoutMs);
+  if (!health.reachable) return { compatible: false, occupied: false, legacyStashBase: false };
+  if (
+    health.statusCode === 200 &&
+    health.body?.app === 'stashbase' &&
+    health.body?.ok === true &&
+    health.body?.protocolVersion === SERVER_PROTOCOL_VERSION
+  ) {
+    return { compatible: true, occupied: true, legacyStashBase: false };
+  }
+
+  const space = await requestJson(port, '/api/space', timeoutMs);
+  const legacyStashBase =
+    space.statusCode === 200 &&
+    space.body &&
+    typeof space.body === 'object' &&
+    ('current' in space.body || 'recent' in space.body) &&
+    'homeDir' in space.body;
+  return { compatible: false, occupied: true, legacyStashBase };
+}
+
+function requestJson(port, requestPath, timeoutMs) {
   return new Promise((resolve) => {
     const req = http.request(
-      { host: SERVER_HOST, port, path: '/api/space', method: 'GET', timeout: timeoutMs },
-      (res) => { res.resume(); resolve(true); },
+      { host: SERVER_HOST, port, path: requestPath, method: 'GET', timeout: timeoutMs },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          if (body.length < 4096) body += chunk;
+        });
+        res.on('end', () => {
+          try {
+            resolve({ reachable: true, statusCode: res.statusCode ?? 0, body: JSON.parse(body) });
+          } catch {
+            resolve({ reachable: true, statusCode: res.statusCode ?? 0, body: null });
+          }
+        });
+      },
     );
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve({ reachable: false, statusCode: 0, body: null }));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ reachable: false, statusCode: 0, body: null });
+    });
     req.end();
   });
 }

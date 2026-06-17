@@ -95,14 +95,15 @@ export function mount(app: express.Express): void {
   // relative form (`~/Documents/StashBase`) in copy.
   app.get('/api/kb-root', (_req, res) => {
     // Re-create the root if it was deleted out from under a long-lived
-    // server. `ensureKbRoot` only runs at server boot, but the server can
-    // outlive an Electron session (a reused tsx-watch / headless server on
-    // :8090 isn't respawned on relaunch — see electron/main.cjs), so a
-    // root deleted between launches would never come back. The renderer
-    // hits this on every (re)launch via `refreshKbRoot`; re-ensure here
-    // when the configured root is missing. Idempotent + cheap otherwise.
+    // server, but do NOT turn a truly empty first launch into an implicit
+    // default-root choice. At boot, `index.ts` deliberately skips
+    // `ensureKbRoot()` when `needsKbRootPicker()` is true so the required
+    // first-run picker can persist the user's choice and trigger the
+    // kbRoot-change listeners (seed + daemon bind). Calling ensure here in
+    // that state would silently write `~/Documents/StashBase`, suppress
+    // the picker, and miss those listeners.
     const root = getKbRoot();
-    if (!fs.existsSync(root)) ensureKbRoot();
+    if (!needsKbRootPicker() && !fs.existsSync(root)) ensureKbRoot();
     res.json({ path: getKbRoot(), needsPicker: needsKbRootPicker() });
   });
 

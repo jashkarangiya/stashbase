@@ -70,6 +70,7 @@ function parsePortArg(argv: string[], fallback: number): number {
   return fallback;
 }
 const PORT = parsePortArg(process.argv.slice(2), 8090);
+const SERVER_PROTOCOL_VERSION = 1;
 const VITE_PORT = Number(process.env.VITE_PORT ?? 5173);
 // In dev mode the React app is served by Vite (HMR, fast refresh) but
 // Electron still loads :8090 — so we proxy non-API requests through.
@@ -171,6 +172,14 @@ app.use((req, res, next) => {
   if (!origin) return next(); // Electron loadURL / MCP / curl have none.
   if (ALLOWED_ORIGINS.has(origin)) return next();
   res.status(403).json({ error: 'cross-origin request rejected', code: 'BAD_ORIGIN' });
+});
+
+// Cheap identity probe for Electron's startup arbiter. A random process
+// can be listening on :8090 and even answer `/api/space`; the main
+// process should only reuse a server that explicitly identifies itself
+// as StashBase.
+app.get('/api/health', (_req, res) => {
+  res.json({ app: 'stashbase', ok: true, protocolVersion: SERVER_PROTOCOL_VERSION });
 });
 
 // Static layer is mounted before the API routes because it falls
@@ -350,10 +359,27 @@ onClose((_oldRoot, windowId) => {
   void stopSpaceMcpServers(windowId);
 });
 onKbRootChange(async () => {
-  await stopSpaceMcpServers();
-  killActiveAgent();
-  await indexer.close();
-  closeStateDb();
+  const failures: string[] = [];
+  try {
+    await stopSpaceMcpServers();
+  } catch (err: unknown) {
+    failures.push(`stop MCP servers failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    killActiveAgent();
+  } catch (err: unknown) {
+    failures.push(`stop active agent failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    await indexer.close();
+  } catch (err: unknown) {
+    failures.push(`close indexer failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    closeStateDb();
+  } catch (err: unknown) {
+    failures.push(`close state db failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
   // Our old daemon is closed; sweep any orphan for the new root before
   // re-binding so the fresh daemon takes a clean lock.
   try { reapOrphanDaemons(getKbRoot()); } catch (err: unknown) {
@@ -362,7 +388,12 @@ onKbRootChange(async () => {
   // First-run picker lands here after the user chooses a root — seed the
   // built-in manual into it before binding (no-op once latched / non-empty).
   seedBuiltinSpace();
-  await bootBindAllSpaces();
+  bootBindAllSpaces().catch((err) =>
+    log.warn(`bootBindAllSpaces failed after kbRoot change: ${err?.message ?? err}`),
+  );
+  if (failures.length > 0) {
+    throw new Error(failures.join('; '));
+  }
 });
 
 // Hook WebSocket upgrades. `/ws/agent` goes to our agent-session bridge;
