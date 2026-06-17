@@ -88,6 +88,8 @@ Structured formats are indexed as they are; unstructured formats are extracted i
 
 A StashBase KB is a folder on disk (default `~/Documents/StashBase`) containing **spaces** (first-level subdirectories). Inside spaces: HTML, Markdown, PDF, images, plus hidden extraction companions and asset bundles.
 
+User content may live in iCloud-synced Documents, but local databases do not: Milvus indexes and StashBase's SQLite state live under the per-machine app data directory and are regenerated on each device.
+
 Indexing runs locally via [mfs](https://github.com/zilliztech/mfs) + [Milvus Lite](https://milvus.io/docs/milvus_lite.md). The index is **KB-level** (one collection per KB), so retrieval works across spaces or scoped to one.
 
 ### When is content indexed?

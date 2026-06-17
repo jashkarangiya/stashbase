@@ -6,9 +6,10 @@
  * to requests by an auto-incrementing id. Auto-respawns if the daemon
  * dies (in-flight requests get rejected with the exit info).
  *
- * The daemon is anchored at the **KB root**: every space lives under
- * `<kb_root>/<space>/...` and one `milvus.db` at
- * `<kb_root>/.stashbase/store.nosync/milvus.db` holds every collection. The
+ * The daemon is anchored at the **KB root** for disk scans: every space
+ * lives under `<kb_root>/<space>/...`. The Milvus DB itself is
+ * per-machine app data (see `local-data.ts`) so iCloud-synced
+ * Documents folders never carry WAL / lock-heavy database files. The
  * Node side ensures each known space is `bind_space`-ed (recorded
  * here so a respawn can replay them).
  *
@@ -26,6 +27,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { logger } from './log.ts';
+import { vectorStoreDirForKb } from './local-data.ts';
 
 const log = logger('mfs');
 
@@ -421,12 +423,13 @@ function pythonCandidates(root: string): string[] {
 
 function resolveDaemonCommand(kbRoot: string): { command: string; args: string[]; cwd: string } {
   const binary = resolveDaemonBinary();
+  const storeArgs = ['--store-root', vectorStoreDirForKb(kbRoot)];
   if (binary) {
-    return { command: binary, args: ['--kb-root', kbRoot], cwd: path.dirname(binary) };
+    return { command: binary, args: ['--kb-root', kbRoot, ...storeArgs], cwd: path.dirname(binary) };
   }
   const pythonBin = resolvePythonBin();
   const script = resolvePythonDaemonScript();
-  return { command: pythonBin, args: ['-u', script, '--kb-root', kbRoot], cwd: PROJECT_ROOT };
+  return { command: pythonBin, args: ['-u', script, '--kb-root', kbRoot, ...storeArgs], cwd: PROJECT_ROOT };
 }
 
 function resolveDaemonBinary(): string | null {

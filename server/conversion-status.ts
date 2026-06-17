@@ -9,10 +9,10 @@
  *     rediscovered ("source exists, derived note doesn't, no failure
  *     record → queue") — conversions are idempotent.
  *
- *   - **failures: persisted** (`<KB>/.stashbase/state.db`, `conversions`
- *     table) — the Retry banner needs the reason and attempt count to
- *     survive restarts, and a persistent failure must NOT be silently
- *     re-queued by the next discovery walk.
+ *   - **failures: persisted** (per-machine app-data `state.db`,
+ *     `conversions` table) — the Retry banner needs the reason and
+ *     attempt count to survive restarts, and a persistent failure must
+ *     NOT be silently re-queued by the next discovery walk.
  *
  * "Done" is not a state we record: the derived note on disk IS the
  * record (discovery skips sources whose note exists).

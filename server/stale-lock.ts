@@ -3,7 +3,7 @@
  * space. The story we keep hitting:
  *
  *   1. Previous StashBase session held the lock on
- *      `<KB>/.stashbase/store.nosync/milvus.db`.
+ *      the per-machine Milvus DB for this KB.
  *   2. It exited dirtily — `kill -9`, force-quit, OS shutdown, or a
  *      shutdown that ran past our 4 s `indexer.close()` ceiling on a
  *      big library where Milvus's own flush takes longer.
@@ -28,6 +28,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from './log.ts';
+import { vectorStoreDirForKb } from './local-data.ts';
 
 const log = logger('stale-lock');
 
@@ -37,6 +38,7 @@ const log = logger('stale-lock');
 export function clearStaleMilvusLock(kbRoot: string): void {
   if (process.platform === 'win32') return;
   const candidates = [
+    path.join(vectorStoreDirForKb(kbRoot), 'milvus.db'),
     path.join(kbRoot, '.stashbase', 'store.nosync', 'milvus.db'),
     path.join(kbRoot, '.stashbase', 'store', 'milvus.db'),
     path.join(kbRoot, '.stashbase', 'mfs', 'milvus.db'),

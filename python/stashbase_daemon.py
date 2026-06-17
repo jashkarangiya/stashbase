@@ -1,6 +1,6 @@
 """StashBase sidecar daemon.
 
-Owns the **single** Milvus Lite DB at ``<kb_root>/.stashbase/store.nosync/milvus.db``
+Owns the **single** per-machine Milvus Lite DB for a KB root
 with **one** collection (``vectors_openai_1536``). V1 ships a single
 fixed embedder (OpenAI), so the whole KB lives in that one collection —
 there's no embedder switching, no per-provider collection pool, and no
@@ -81,6 +81,7 @@ import argparse
 import datetime
 import json
 import os
+import shutil
 import sys
 import time
 import traceback
@@ -386,6 +387,36 @@ def _collection_name(dim: int) -> str:
     return f"vectors_openai_{dim}"
 
 
+def _move_legacy_store_dir(legacy: Path, target: Path) -> None:
+    """Move a legacy Milvus store dir into ``target``.
+
+    ``target`` may already exist because the daemon lock lives there and
+    is acquired before ``StashbaseStore`` initialises. Move children in
+    that case, leaving any existing lock file alone.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        shutil.move(str(legacy), str(target))
+        return
+    for child in legacy.iterdir():
+        dest = target / child.name
+        if dest.exists():
+            continue
+        shutil.move(str(child), str(dest))
+    try:
+        legacy.rmdir()
+    except OSError:
+        pass
+
+
+def _warn_legacy_store_conflict(legacy: Path, active_db: Path) -> None:
+    print(
+        f"[stashbase] legacy Milvus store remains at {legacy}, "
+        f"but active store already exists at {active_db}; leaving legacy store untouched",
+        file=sys.stderr,
+    )
+
+
 class StashbaseStore:
     """Holds the kb-root-anchored DB and the **single** ``MilvusStore``
     every space shares. V1 has one fixed embedder (OpenAI), so the whole
@@ -407,25 +438,31 @@ class StashbaseStore:
     ``bind_space`` for every known space on reconnect.
     """
 
-    def __init__(self, kb_root: str) -> None:
+    def __init__(self, kb_root: str, store_root: str | None = None) -> None:
         self._kb_root: Path = Path(kb_root).resolve()
-        # The store dir carries a `.nosync` suffix so iCloud Drive skips
-        # it: `<kb_root>` often lives under ~/Documents (synced), and
-        # iCloud evicting / reverting Milvus Lite's WAL `.arrow` files out
-        # from under the running daemon corrupts the collection ("files
-        # vanished from the daemon's FDs" → every upsert/delete fails).
-        # The store is pure per-machine derived data, so excluding it from
-        # sync is always correct.
-        self._db_path: Path = self._kb_root / ".stashbase" / "store.nosync" / "milvus.db"
-        # Migrate older store locations into the .nosync dir, newest first:
-        # `.stashbase/store` (pre-.nosync) then `.stashbase/mfs` (oldest).
+        # The vector store is pure per-machine derived data. Keep it out
+        # of `<kb_root>` because the default root often lives under
+        # ~/Documents, and iCloud evicting / reverting Milvus Lite's WAL
+        # `.arrow` files corrupts the collection.
+        store_parent = Path(store_root).expanduser().resolve() if store_root else (
+            self._kb_root / ".stashbase" / "store.nosync"
+        )
+        self._db_path: Path = store_parent / "milvus.db"
+        # Migrate older in-KB store locations into the local app-data dir,
+        # newest first: `.stashbase/store.nosync`, then `.stashbase/store`,
+        # then `.stashbase/mfs`.
         for legacy in (
+            self._kb_root / ".stashbase" / "store.nosync",
             self._kb_root / ".stashbase" / "store",
             self._kb_root / ".stashbase" / "mfs",
         ):
-            if legacy.exists() and not self._db_path.parent.exists():
-                legacy.rename(self._db_path.parent)
-                break
+            if not legacy.exists():
+                continue
+            if self._db_path.exists():
+                _warn_legacy_store_conflict(legacy, self._db_path)
+                continue
+            _move_legacy_store_dir(legacy, self._db_path.parent)
+            break
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         # The one embedder + store, created on the first bind with a key.
         self._embedder: Any = None
@@ -1441,7 +1478,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="StashBase MFS sidecar daemon")
     parser.add_argument("--kb-root", required=True,
                         help="Absolute path of the StashBase library root; the daemon "
-                             "owns one Milvus DB at <kb_root>/.stashbase/store.nosync/milvus.db")
+                             "owns one Milvus DB for that root")
+    parser.add_argument("--store-root",
+                        help="Per-machine directory that holds milvus.db. "
+                             "Defaults to <kb_root>/.stashbase/store.nosync for old callers.")
     parsed, _unknown = parser.parse_known_args()
 
     # Single-instance guard (data-layer §8.6 I3): hold an exclusive flock
@@ -1455,7 +1495,10 @@ def main() -> int:
     daemon_lock = None  # noqa: F841 — held open for the process lifetime
     try:
         import fcntl
-        lock_path = Path(parsed.kb_root) / ".stashbase" / "store.nosync" / "daemon.lock"
+        lock_root = Path(parsed.store_root).expanduser().resolve() if parsed.store_root else (
+            Path(parsed.kb_root) / ".stashbase" / "store.nosync"
+        )
+        lock_path = lock_root / "daemon.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         daemon_lock = open(lock_path, "w")
         try:
@@ -1474,7 +1517,7 @@ def main() -> int:
         daemon_lock = None  # unguarded platforms: proceed as before
 
     try:
-        svc = StashbaseStore(parsed.kb_root)
+        svc = StashbaseStore(parsed.kb_root, parsed.store_root)
     except Exception as exc:
         _emit({"event": "error", "phase": "store_init", "error": str(exc)})
         return 1

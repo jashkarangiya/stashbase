@@ -1,5 +1,5 @@
 /**
- * KB-level transactional state in `<kbRoot>/.stashbase/state.db`.
+ * KB-level transactional state in the per-machine app data directory.
  *
  * This is StashBase-owned state, separate from MFS/Milvus' `store/`
  * schema. It holds exactly one thing: PDF / image conversion status
@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { logger, errorMessage } from './log.ts';
 import { getKbRoot } from './space.ts';
+import { stateDbPathForKb } from './local-data.ts';
 
 const log = logger('state-db');
 
@@ -35,7 +36,7 @@ let db: Database.Database | null = null;
 let dbPath: string | null = null;
 
 function stateDbPath(): string {
-  return path.join(getKbRoot(), '.stashbase', 'state.db');
+  return stateDbPathForKb(getKbRoot());
 }
 
 function getStateDb(): Database.Database {
@@ -46,6 +47,7 @@ function getStateDb(): Database.Database {
     db = null;
   }
   fs.mkdirSync(path.dirname(target), { recursive: true });
+  migrateLegacyStateDb(target);
   db = new Database(target);
   dbPath = target;
   db.pragma('journal_mode = WAL');
@@ -53,6 +55,32 @@ function getStateDb(): Database.Database {
   migrate(db);
   migrateLegacyStatusJson(db);
   return db;
+}
+
+function legacyStateDbPath(): string {
+  return path.join(getKbRoot(), '.stashbase', 'state.db');
+}
+
+function migrateLegacyStateDb(target: string): void {
+  const legacy = legacyStateDbPath();
+  if (!fs.existsSync(legacy) || fs.existsSync(target)) return;
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  for (const suffix of ['', '-wal', '-shm']) {
+    const from = legacy + suffix;
+    if (!fs.existsSync(from)) continue;
+    const to = target + suffix;
+    try {
+      fs.renameSync(from, to);
+    } catch {
+      try {
+        fs.copyFileSync(from, to);
+        fs.unlinkSync(from);
+      } catch (err: unknown) {
+        log.warn(`failed to migrate legacy state db ${from}: ${errorMessage(err)}`);
+      }
+    }
+  }
+  log.info(`migrated state.db out of KB root → ${target}`);
 }
 
 export function closeStateDb(): void {
