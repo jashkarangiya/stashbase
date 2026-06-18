@@ -11,7 +11,7 @@ import { logger } from '../log.ts';
 import { fromKbRelForSpace, getCurrentSpace, getCurrentSpaceName, getKbRoot, isInsideKbRoot, requireSpaceExistsByName, validateSpaceRef } from '../space.ts';
 import { getApiKey } from '../app-config.ts';
 import { hasNoExtractableText } from '../indexable.ts';
-import { derivedPathsForPdf, maybeConvertPdf } from '../pdf.ts';
+import { derivedPathsForPdf, displayPathForHit, maybeConvertPdf } from '../pdf.ts';
 import { derivedNotePathForImage, maybeConvertImage } from '../image.ts';
 import { getInFlightConversions } from '../conversion.ts';
 import { isImageFile } from '../format.ts';
@@ -290,10 +290,15 @@ export function mount(app: express.Express): void {
       // text (bundler-format HTML that is one giant <script>,
       // whitespace-only notes) chunk to nothing, never enter Milvus, and
       // would pulse "indexing…" forever.
-      const pending = status.pending
-        .map((p) => fromKbRelForSpace(p, space))
-        .filter((p): p is string => p != null)
-        .filter((p) => !hasNoExtractableText(path.join(cur, p)));
+      const pendingSet = new Set<string>();
+      for (const kbRel of status.pending) {
+        const rel = fromKbRelForSpace(kbRel, space);
+        if (rel == null) continue;
+        if (hasNoExtractableText(path.join(cur, rel))) continue;
+        const visible = displayPathForHit(rel, cur);
+        if (visible) pendingSet.add(visible);
+      }
+      const pending = [...pendingSet].sort();
       const orphaned = status.orphaned
         .map((p) => fromKbRelForSpace(p, space))
         .filter((p): p is string => p != null);
@@ -309,6 +314,7 @@ export function mount(app: express.Express): void {
         space,
         ...status,
         pending,
+        pendingCount: pending.length,
         orphaned,
         pendingConversions: getInFlightConversions(space),
         conversionFailures,

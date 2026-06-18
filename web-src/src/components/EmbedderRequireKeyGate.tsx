@@ -41,6 +41,7 @@ export function EmbedderRequireKeyGate() {
         setState((s) => (s ? { ...s, hasKey: true } : s));
         dispatch({ type: 'EMBEDDER_KEY_STATE', hasKey: true });
         setOpen(false);
+        void actions.markVisibleFilesStashing();
         void actions.refreshIndexState();
       }}
       onLater={() => setOpen(false)}

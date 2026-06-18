@@ -336,7 +336,6 @@ function FolderRow({
             initialBasename={node.name}
             ext=""
             onCommit={(newName) => {
-              dispatch({ type: 'RENAMING', renaming: null });
               void actions.renameFolder(node.path, newName);
             }}
             onCancel={() => dispatch({ type: 'RENAMING', renaming: null })}
@@ -533,7 +532,6 @@ function FileRow({
           initialBasename={ext ? basename.slice(0, -ext.length) : basename}
           ext={ext}
           onCommit={(newBasename) => {
-            dispatch({ type: 'RENAMING', renaming: null });
             void actions.renameFile(path, newBasename);
           }}
           onCancel={() => dispatch({ type: 'RENAMING', renaming: null })}

@@ -216,6 +216,10 @@ export interface State {
    *  is empty (panel closed or just initialised). */
   activeChatTabId: string | null;
 
+  /** User-visible paths whose searchable content is still being embedded.
+   *  Usually structured notes (md/html). For derived PDF/image notes the
+   *  status layer remaps the hidden `.source.ext.md` path back to the
+   *  visible source file so the UI never exposes implementation files. */
   pendingNames: Set<string>;
   /** Space-relative paths of PDFs the server is converting right now.
    *  Sidebar shows a "Converting…" row per entry; transition to
@@ -508,6 +512,19 @@ export function stashingPaths(s: State): string[] {
   return [...out].sort();
 }
 
+/** Visible files to mark as "stashing" immediately after the user adds
+ *  the first OpenAI key. The server may already be embedding by the time
+ *  `/api/index-status` is polled, and the daemon serialises status behind
+ *  embeds; this optimistic set keeps the UI from going silent during the
+ *  first-key backfill. */
+export function optimisticKeyBackfillPaths(files: FileMeta[]): string[] {
+  return files
+    .filter((f) => f.format === 'md' || f.format === 'html' || f.format === 'pdf' || f.format === 'image')
+    .map((f) => f.name)
+    .filter((name) => !name.split('/').some((seg) => seg.startsWith('.')))
+    .sort();
+}
+
 /** Merge `patch` into the active tab in place. Returns the state
  *  unchanged when no tab is active — every caller checks `activeTabId`
  *  first, but the no-op guard keeps the reducer cases short. */
@@ -682,6 +699,14 @@ export function reducer(s: State, a: Action): State {
       };
     }
     case 'REMAP_PATHS': {
+      const files = s.files.map((f) => {
+        const name = remapOnePath(f.name, a.from, a.to, a.kind);
+        return name === f.name ? f : { ...f, name };
+      });
+      const folders = s.folders.map((f) => {
+        const path = remapOnePath(f.path, a.from, a.to, a.kind);
+        return path === f.path ? f : { ...f, path };
+      });
       const tabs = s.tabs.map((t) => {
         if (!t.file || t.file.kind === 'kb') return t;
         const nextName = remapOnePath(t.file.name, a.from, a.to, a.kind);
@@ -691,6 +716,8 @@ export function reducer(s: State, a: Action): State {
       for (const p of s.expanded) expanded.add(remapOnePath(p, a.from, a.to, a.kind));
       return {
         ...s,
+        files,
+        folders,
         tabs,
         expanded,
         fileOrder: remapFileOrder(s.fileOrder, a.from, a.to, a.kind),

@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { initialState, reducer, renamedFilePath, stashingPaths, type State, type Tab } from './state.ts';
+import {
+  initialState,
+  optimisticKeyBackfillPaths,
+  reducer,
+  renamedFilePath,
+  stashingPaths,
+  type State,
+  type Tab,
+} from './state.ts';
 
 function tab(id: string, name: string): Tab {
   return {
@@ -30,7 +38,15 @@ function stateWithTabs(): State {
 }
 
 test('REMAP_PATHS updates every open tab under a renamed folder', () => {
-  const next = reducer(stateWithTabs(), {
+  const next = reducer({
+    ...stateWithTabs(),
+    files: [
+      { name: 'docs/one.md', format: 'md', heading: '', snippet: '' },
+      { name: 'docs/sub/two.md', format: 'md', heading: '', snippet: '' },
+      { name: 'other.md', format: 'md', heading: '', snippet: '' },
+    ],
+    folders: [{ path: 'docs' }, { path: 'docs/sub' }, { path: 'other-folder' }],
+  }, {
     type: 'REMAP_PATHS',
     kind: 'folder',
     from: 'docs',
@@ -42,6 +58,12 @@ test('REMAP_PATHS updates every open tab under a renamed folder', () => {
     'notes/sub/two.md',
     'other.md',
   ]);
+  assert.deepEqual(next.files.map((f) => f.name), [
+    'notes/one.md',
+    'notes/sub/two.md',
+    'other.md',
+  ]);
+  assert.deepEqual(next.folders.map((f) => f.path), ['notes', 'notes/sub', 'other-folder']);
   assert.deepEqual([...next.expanded].sort(), ['notes', 'notes/sub', 'other-folder']);
   assert.equal(next.activeFolder, 'notes/sub');
   assert.equal(next.selectedPath, 'notes/sub/two.md');
@@ -76,6 +98,10 @@ test('REMAP_PATHS updates one file without touching sibling prefixes', () => {
       tab('a', 'note.md'),
       tab('b', 'note.md.backup'),
     ],
+    files: [
+      { name: 'note.md', format: 'md', heading: '', snippet: '' },
+      { name: 'note.md.backup', format: 'md', heading: '', snippet: '' },
+    ],
     selectedPath: 'note.md',
   }, {
     type: 'REMAP_PATHS',
@@ -85,6 +111,7 @@ test('REMAP_PATHS updates one file without touching sibling prefixes', () => {
   });
 
   assert.deepEqual(next.tabs.map((t) => t.file?.name), ['renamed.md', 'note.md.backup']);
+  assert.deepEqual(next.files.map((f) => f.name), ['renamed.md', 'note.md.backup']);
   assert.equal(next.selectedPath, 'renamed.md');
 });
 
@@ -125,6 +152,16 @@ test('stashingPaths resumes pending note visibility when an embedder key is adde
   const withKey = reducer(withoutKey, { type: 'EMBEDDER_KEY_STATE', hasKey: true });
 
   assert.deepEqual(stashingPaths(withKey), ['note.md', 'paper.pdf']);
+});
+
+test('optimisticKeyBackfillPaths marks only visible searchable files', () => {
+  assert.deepEqual(optimisticKeyBackfillPaths([
+    { name: 'note.md', format: 'md', heading: '', snippet: '' },
+    { name: 'page.html', format: 'html', heading: '', snippet: '' },
+    { name: 'paper.pdf', format: 'pdf', heading: '', snippet: '' },
+    { name: 'shot.png', format: 'image', heading: '', snippet: '' },
+    { name: '.paper.pdf.md', format: 'md', heading: '', snippet: '' },
+  ]), ['note.md', 'page.html', 'paper.pdf', 'shot.png']);
 });
 
 test('SEARCH_START clears stale semantic and keyword results', () => {

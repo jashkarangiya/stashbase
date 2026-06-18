@@ -518,7 +518,7 @@ function ImportFolderModal({
         return;
       }
       try {
-        await actions.openSpaceByName(result.name);
+        await actions.openSpaceByName(result.name, { optimisticStashingOnOpen: true });
       } catch (openErr) {
         setDoneName(result.name);
         setError(`Imported "${result.name}", but it could not be opened: ${errorMessage(openErr)}`);
@@ -617,7 +617,11 @@ function ImportFolderModal({
           <button
             type="button"
             className="modal-btn primary"
-            onClick={() => { void actions.openSpaceByName(doneName).then(onClose).catch((e) => setError(errorMessage(e))); }}
+            onClick={() => {
+              void actions.openSpaceByName(doneName, { optimisticStashingOnOpen: true })
+                .then(onClose)
+                .catch((e) => setError(errorMessage(e)));
+            }}
           >Open space</button>
         ) : (
           <button

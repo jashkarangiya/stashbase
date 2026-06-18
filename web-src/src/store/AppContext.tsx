@@ -29,6 +29,7 @@ import {
 import {
   getActiveTab,
   initialState,
+  optimisticKeyBackfillPaths,
   renamedFilePath,
   reducer,
   type Action,
@@ -91,10 +92,18 @@ export interface AppActions {
   /** Open a space by name — single segment under the KB root.
    *  Preferred over `openSpace(path)` for new UI flows now that
    *  spaces are flat. */
-  openSpaceByName: (name: string, opts?: { create?: boolean; exclusiveCreate?: boolean }) => Promise<void>;
+  openSpaceByName: (
+    name: string,
+    opts?: { create?: boolean; exclusiveCreate?: boolean; optimisticStashingOnOpen?: boolean },
+  ) => Promise<void>;
   goHome: () => Promise<boolean>;
 
   loadFiles: () => Promise<void>;
+  /** Optimistically mark the current visible files as stashing. Used
+   *  after the first embedder key is added and immediately after a
+   *  folder import opens the new space, before daemon status can catch
+   *  up. */
+  markVisibleFilesStashing: (files?: State['files']) => Promise<void>;
   refreshIndexState: () => Promise<void>;
   runSync: () => Promise<void>;
   /** Run a search. Pass `mode` to force a specific routing — useful
@@ -512,6 +521,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return [];
     }
   }, [loadFilesFromServer]);
+
+  const markVisibleFilesStashing = useCallback(async (files?: State['files']) => {
+    const space = stateRef.current.space;
+    const source = files ?? (stateRef.current.files.length ? stateRef.current.files : space ? await loadFiles(space) : []);
+    if (stateRef.current.space !== space) return;
+    const paths = optimisticKeyBackfillPaths(source);
+    if (paths.length === 0) return;
+    const merged = new Set(stateRef.current.pendingNames);
+    for (const path of paths) merged.add(path);
+    dispatch({ type: 'PENDING_NAMES', names: merged });
+  }, [loadFiles]);
 
   /** Fetch the per-space manual ordering map. Called alongside
    *  `loadFiles` on space switch and on bootstrap. Errors are
@@ -1448,6 +1468,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'RENAMING', renaming: null });
       return;
     }
+    if (
+      stateRef.current.files.some((f) => f.name === newName)
+      || stateRef.current.folders.some((f) => f.path === newName)
+    ) {
+      toast('Rename failed: target exists', { level: 'error' });
+      dispatch({ type: 'RENAMING', renaming: null });
+      return;
+    }
     const cascade = await askCascadeForRename('file', oldName, newName);
     if (stateRef.current.space !== targetSpace) {
       dispatch({ type: 'RENAMING', renaming: null });
@@ -1470,16 +1498,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       dispatch({ type: 'SAVE_STATUS', status: { text: 'Renaming…', cls: '' } });
     }
+    dispatch({ type: 'REMAP_PATHS', from: oldName, to: newName, kind: 'file' });
+    dispatch({ type: 'RENAMING', renaming: null });
     try {
-      const j = await api.renameFile(oldName, newName, { cascade });
+      const j = await api.renameFile(oldName, newName, { cascade, asyncIndex: true });
       if (stateRef.current.space !== targetSpace) return;
-      dispatch({ type: 'REMAP_PATHS', from: oldName, to: j.name, kind: 'file' });
+      if (j.name !== newName) {
+        dispatch({ type: 'REMAP_PATHS', from: newName, to: j.name, kind: 'file' });
+      }
       if (wasActive && activeFile) {
         dispatch({ type: 'SAVE_STATUS', status: { text: 'Saved', cls: 'saved' } });
       }
       await loadFiles(targetSpace);
+      if (j.indexWarning) {
+        toast('Renamed. ' + j.indexWarning, { level: 'warning' });
+      } else if (j.indexDeferred) {
+        toast('Renamed. Updating semantic index in the background.', { level: 'info' });
+      }
     } catch (e: unknown) {
       if (stateRef.current.space !== targetSpace) return;
+      dispatch({ type: 'REMAP_PATHS', from: newName, to: oldName, kind: 'file' });
       const msg = e instanceof Error ? e.message : String(e);
       toast('Rename failed: ' + msg, { level: 'error' });
       if (wasActive) {
@@ -1797,7 +1835,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'FILE_ORDER_LOADED', order: {} });
   }, []);
 
-  const finishOpenSpace = useCallback(async (expectedSpace: string, generation: number) => {
+  const finishOpenSpace = useCallback(async (
+    expectedSpace: string,
+    generation: number,
+    opts: { optimisticStashingOnOpen?: boolean } = {},
+  ) => {
     if (generation !== openGen.current) return;
     resetSpaceScopedState();
     dispatch({ type: 'COLLAPSE_ALL_FOLDERS' });
@@ -1811,6 +1853,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // briefly flash "NOTES" with an empty tree behind the overlay's fade.
     const [files] = await Promise.all([loadFiles(expectedSpace), loadFileOrder(expectedSpace)]);
     if (generation !== openGen.current || stateRef.current.space !== expectedSpace) return;
+    if (opts.optimisticStashingOnOpen && stateRef.current.embedderHasKey !== false) {
+      await markVisibleFilesStashing(files);
+    }
     dispatch({ type: 'WELCOME_HIDE' });
     // Land on a Welcome/README note instead of a blank tab. `finishOpenSpace`
     // is the fresh-entry path (it just reset tabs above), so no need to guard
@@ -1818,7 +1863,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // reading `stateRef`, which may not yet reflect the FILES_LOADED dispatch.
     const landing = pickLandingFile(files);
     if (landing) void selectFile(landing);
-  }, [loadFiles, loadFileOrder, refreshIndexState, resetSpaceScopedState, selectFile]);
+  }, [loadFiles, loadFileOrder, markVisibleFilesStashing, refreshIndexState, resetSpaceScopedState, selectFile]);
 
   const refreshRecent = useCallback(async () => {
     const j = await api.getSpace();
@@ -1844,18 +1889,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await finishOpenSpace(openedName, generation);
   }, [finishOpenSpace, flushSave, refreshRecent]);
 
-  const openSpaceByName = useCallback(async (name: string, opts?: { create?: boolean; exclusiveCreate?: boolean }) => {
+  const openSpaceByName = useCallback(async (
+    name: string,
+    opts?: { create?: boolean; exclusiveCreate?: boolean; optimisticStashingOnOpen?: boolean },
+  ) => {
     if (editorRef.current && !(await flushSave())) {
       throw new Error('Current file could not be saved. Resolve the save error before switching spaces.');
     }
     const generation = ++openGen.current;
-    const opened = await api.openSpaceByName(name, opts);
+    const opened = await api.openSpaceByName(name, {
+      create: opts?.create,
+      exclusiveCreate: opts?.exclusiveCreate,
+    });
     const openedName = opened.current?.name;
     if (!openedName || generation !== openGen.current) return;
     void refreshRecent().catch((err) => {
       console.warn('[recent] refresh after open failed:', err);
     });
-    await finishOpenSpace(openedName, generation);
+    await finishOpenSpace(openedName, generation, {
+      optimisticStashingOnOpen: opts?.optimisticStashingOnOpen,
+    });
   }, [finishOpenSpace, flushSave, refreshRecent]);
 
   const goHome = useCallback(async () => {
@@ -1929,7 +1982,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const actions = useMemo<AppActions>(() => ({
     bootstrap, openSpace, openSpaceByName, goHome,
-    loadFiles, refreshIndexState, runSync, runSearch, setFolderOrder,
+    loadFiles, markVisibleFilesStashing, refreshIndexState, runSync, runSearch, setFolderOrder,
     dismissSnapshotWarning, dismissIndexWarning,
     selectFile, selectFileWithHighlight, openInNewTab, newTab, openKbRules, closeTab, closeActiveTab, activateTab,
     navigateTo, consumePendingScroll,
@@ -1947,7 +2000,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     toggleFindCaseSensitive, toggleFindWholeWord, findNext, findPrev,
   }), [
     bootstrap, openSpace, openSpaceByName, goHome,
-    loadFiles, refreshIndexState, runSync, runSearch, setFolderOrder,
+    loadFiles, markVisibleFilesStashing, refreshIndexState, runSync, runSearch, setFolderOrder,
     dismissSnapshotWarning, dismissIndexWarning,
     selectFile, selectFileWithHighlight, openInNewTab, newTab, openKbRules, closeTab, closeActiveTab, activateTab,
     navigateTo, consumePendingScroll,

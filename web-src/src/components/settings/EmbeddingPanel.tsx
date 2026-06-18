@@ -67,6 +67,7 @@ export function EmbeddingPanel() {
       setAddKey('');
       setState((s) => (s ? { ...s, hasKey: true } : s));
       dispatch({ type: 'EMBEDDER_KEY_STATE', hasKey: true });
+      void actions.markVisibleFilesStashing();
       void actions.refreshIndexState();
     } catch (err: unknown) {
       if (!mountedRef.current) return;
