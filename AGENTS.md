@@ -1,28 +1,9 @@
 # Agent Maintenance Contract
 
-Before writing code, read the relevant files under `design-docs/`.
-Use `design-docs/architecture.md` for module placement and data flow. If
-the module map marks a touched file as red, read the matching
-`design-docs/data-layer.md` section 8 entry first. Use `data-layer.md` for
-consistency, caches, lifecycle, process ownership, and liveness constraints.
-
-Keep the design docs current as part of relevant code changes. Do not run a
-standalone documentation pass unless the user explicitly asks for one.
-
-## Design Docs And Mirrors
-
-`design-docs/` is the local working copy and is gitignored. Published mirrors
-live in Feishu:
-
-- `architecture.md`: https://icnrl0icvns2.feishu.cn/wiki/Oi6PwGdwgiqNSQkijoic673Mnob
-- `data-layer.md`: https://icnrl0icvns2.feishu.cn/wiki/KE2xw8pN0iJW6Fka9nMc6i9cnmg
-- `overview.md`: https://icnrl0icvns2.feishu.cn/wiki/KRDhw1SqriUj5JkNHDLcR9uunyc
-
-When editing `architecture.md` or `data-layer.md`, sync Feishu in the same
-session with `lark-cli docs +update --api-version v2`. These two mirrors are
-text-only, so full-document overwrite with converted Feishu XML is preferred.
-Never overwrite `overview.md`; it contains images. Use targeted
-`str_replace` edits only.
+Code and tests are the source of truth. Do not look for or update a local
+design-docs directory; it has been removed from the project workflow. Only
+update external product/design documentation when the user explicitly asks for
+that documentation work.
 
 Use cases live in the Feishu Bitable at wiki
 `TyXgwJazMiE12vk9mJ3cFB0inB3`, not in a local file. Read and update it with
@@ -36,31 +17,11 @@ Keep the two status columns distinct:
 
 When changing a use-case definition, reset `测试状态` to `未测试`.
 
-## Documentation Boundaries
-
-- `overview.md`: product motivation, principles, solution shape, competitive
-  read. Update only for positioning, principles, product scope, or core model
-  changes.
-- `architecture.md`: module map, data flows, TS/Python/MCP/Electron
-  boundaries, extension points, indexing/store/embedder details, and design
-  decisions. Update when module boundaries, data flows, abstractions, schemas,
-  defaults, or important workflows change.
-- `data-layer.md`: ownership, consistency, identity, sync/export,
-  deletion/recovery, concurrency, caches, await graphs, timing windows,
-  invariants, and incidents. Section 8 is as-is only; claims need `file:line`
-  support and suspect behavior should be tagged with `⚠️`.
-
-Code is the source of truth. If behavior changes, update the relevant doc in
-the same change. Avoid duplication across docs. Keep `README.md` short and
-external-facing; link into the design docs rather than expanding it.
-
 ## Development Loop
 
 For bug reports and feature requests, run the full loop without hand-holding:
 
-1. Locate and diagnose the issue from code and relevant design docs. For
-   red-marked files in the architecture module map, read the matching
-   `data-layer.md` section 8 entry first.
+1. Locate and diagnose the issue from code, tests, and nearby module context.
 2. Implement within the documented constraints: context-free sync/conversion,
    hidden derived notes never surface, single-daemon ownership, and credentials
    only in Settings, never environment variables.
@@ -68,8 +29,7 @@ For bug reports and feature requests, run the full loop without hand-holding:
    - Always run `npx tsc --noEmit`.
    - For server changes, run `pnpm test:import-folder`.
    - For renderer changes, run `npx vite build --config web-src/vite.config.ts`.
-4. Update affected design docs in the same change and sync Feishu as required.
-   Update README or build-map copy when user-visible behavior changes.
+4. Update README or build-map copy when user-visible behavior changes.
 5. Leave work uncommitted unless the user asks to commit.
 
 ## Commit Protocol
