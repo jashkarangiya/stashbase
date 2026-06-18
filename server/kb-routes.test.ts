@@ -66,3 +66,74 @@ test('requireKbStatusSpace validates explicit status spaces', async () => {
     /space not found/,
   );
 });
+
+test('KB file helpers perform CRUD with kbRoot-relative paths', async () => {
+  await openKbRoot('kb-file-crud');
+  const {
+    deleteKbFile,
+    editKbFile,
+    listKbDirectory,
+    moveKbFile,
+    readKbFile,
+    writeKbFile,
+  } = await import('./routes/kb.ts');
+
+  const written = await writeKbFile('Project/docs/hello.md', '# Hello\n\nfirst\n', {});
+  assert.equal(written.path, 'Project/docs/hello.md');
+
+  assert.deepEqual(
+    (await listKbDirectory('')).entries.map((e) => ({ name: e.name, path: e.path, type: e.type })),
+    [{ name: 'Project', path: 'Project', type: 'directory' }],
+  );
+  assert.deepEqual(
+    (await listKbDirectory('Project')).entries.map((e) => ({ name: e.name, path: e.path, type: e.type })),
+    [{ name: 'docs', path: 'Project/docs', type: 'directory' }],
+  );
+
+  const read = await readKbFile('Project/docs/hello.md');
+  assert.equal(read.content, '# Hello\n\nfirst\n');
+  assert.equal(read.format, 'md');
+  assert.ok(read.version);
+  const { getKbRoot } = await import('./space.ts');
+  assert.equal(
+    (await readKbFile(path.join(getKbRoot(), 'Project', 'docs', 'hello.md'))).content,
+    '# Hello\n\nfirst\n',
+  );
+
+  const edited = await editKbFile('Project/docs/hello.md', 'first', 'second');
+  assert.equal(edited.replacements, 1);
+  assert.equal((await readKbFile('Project/docs/hello.md')).content, '# Hello\n\nsecond\n');
+
+  const moved = await moveKbFile('Project/docs/hello.md', 'Project/notes/greeting.md');
+  assert.equal(moved.oldPath, 'Project/docs/hello.md');
+  assert.equal(moved.path, 'Project/notes/greeting.md');
+  assert.equal((await readKbFile('Project/notes/greeting.md')).content, '# Hello\n\nsecond\n');
+
+  const deleted = await deleteKbFile('Project/notes/greeting.md');
+  assert.equal(deleted.alreadyGone, false);
+  await assert.rejects(
+    () => readKbFile('Project/notes/greeting.md'),
+    /not found/,
+  );
+});
+
+test('KB file helpers reject host paths, hidden derived notes, and cross-space moves', async () => {
+  await openKbRoot('kb-file-invalid');
+  fs.mkdirSync(path.join((await import('./space.ts')).getKbRoot(), 'Other'), { recursive: true });
+  const { deleteKbFile, moveKbFile, readKbFile, writeKbFile } = await import('./routes/kb.ts');
+
+  await assert.rejects(
+    () => readKbFile('/Users/me/Documents/StashBase/Project/a.md'),
+    /absolute path must live under kb_root/,
+  );
+  await assert.rejects(
+    () => writeKbFile('Project/.paper.pdf.md', 'hidden'),
+    /derived notes are hidden/,
+  );
+  await writeKbFile('Project/a.md', 'hello');
+  await assert.rejects(
+    () => moveKbFile('Project/a.md', 'Other/a.md'),
+    /same space only/,
+  );
+  assert.deepEqual(await deleteKbFile('Project/a.md'), { path: 'Project/a.md', alreadyGone: false });
+});

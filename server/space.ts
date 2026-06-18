@@ -77,6 +77,30 @@ export function runWithWindowId<T>(windowId: string | null | undefined, fn: () =
   return requestWindow.run(normalizeWindowId(windowId), fn);
 }
 
+/** Run a backend operation against a named space without changing any
+ *  user window, recents, or switch listeners. KB-wide routes use this
+ *  to reuse the space-relative filesystem layer while accepting
+ *  kbRoot-relative paths from MCP.
+ */
+export async function runWithSpaceName<T>(
+  spaceName: string,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  const root = requireSpaceExistsByName(spaceName);
+  return runWithWindowId(`__kb:${spaceName}`, async () => {
+    const windowId = currentWindowId();
+    const hadPrev = currentSpaces.has(windowId);
+    const prev = currentSpaces.get(windowId);
+    currentSpaces.set(windowId, root);
+    try {
+      return await fn();
+    } finally {
+      if (hadPrev && prev) currentSpaces.set(windowId, prev);
+      else currentSpaces.delete(windowId);
+    }
+  });
+}
+
 export function currentWindowId(): string {
   return requestWindow.getStore() ?? DEFAULT_WINDOW_ID;
 }

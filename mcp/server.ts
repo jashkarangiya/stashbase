@@ -2,7 +2,8 @@
 /**
  * Stdio MCP server exposing the local KB to Claude Desktop / Claude Code.
  *
- * Four tools: `search_kb` / `list_files` / `get_file` / `index_status`.
+ * Built-in tools include semantic search, reindex, and host-side file
+ * CRUD. File paths are kbRoot-relative (`Space/note.md`).
  *
  * All tools default to the **whole knowledge base** under
  * `~/Documents/StashBase/` and accept an optional `space` argument to
@@ -369,6 +370,73 @@ async function syncViaWeb(space: string | undefined): Promise<unknown> {
   return r.json();
 }
 
+async function webJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(url, init);
+  if (!r.ok) {
+    const detail = await r.text().catch(() => '');
+    throw new Error(`web ${init?.method ?? 'GET'} ${url.replace(WEB_BASE, '')} failed: ${r.status}${detail ? ` ${detail.slice(0, 500)}` : ''}`);
+  }
+  return r.json() as Promise<T>;
+}
+
+function kbQuery(pathValue: unknown): string {
+  const pathParam = typeof pathValue === 'string' ? pathValue : '';
+  return `path=${encodeURIComponent(pathParam)}`;
+}
+
+async function listDirectoryViaWeb(pathValue: unknown): Promise<unknown> {
+  return webJson(`${WEB_BASE}/api/kb/directory?${kbQuery(pathValue)}`, { headers: webHeaders() });
+}
+
+async function readFileViaWeb(pathValue: unknown): Promise<unknown> {
+  return webJson(`${WEB_BASE}/api/kb/file?${kbQuery(pathValue)}`, { headers: webHeaders() });
+}
+
+async function writeFileViaWeb(args: Record<string, unknown>): Promise<unknown> {
+  return webJson(`${WEB_BASE}/api/kb/file`, {
+    method: 'PUT',
+    headers: webHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({
+      path: args.path,
+      content: args.content,
+      ...(typeof args.baseVersion === 'string' ? { baseVersion: args.baseVersion } : {}),
+    }),
+  });
+}
+
+async function editFileViaWeb(args: Record<string, unknown>): Promise<unknown> {
+  return webJson(`${WEB_BASE}/api/kb/file/edit`, {
+    method: 'POST',
+    headers: webHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({
+      path: args.path,
+      old_text: args.old_text,
+      new_text: args.new_text,
+      replace_all: args.replace_all === true,
+      ...(typeof args.baseVersion === 'string' ? { baseVersion: args.baseVersion } : {}),
+    }),
+  });
+}
+
+async function moveFileViaWeb(args: Record<string, unknown>): Promise<unknown> {
+  return webJson(`${WEB_BASE}/api/kb/file/move`, {
+    method: 'PATCH',
+    headers: webHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({
+      path: args.path,
+      new_path: args.new_path,
+      cascade: args.cascade !== false,
+    }),
+  });
+}
+
+async function deleteFileViaWeb(pathValue: unknown): Promise<unknown> {
+  return webJson(`${WEB_BASE}/api/kb/file?${kbQuery(pathValue)}`, {
+    method: 'DELETE',
+    headers: webHeaders(),
+  });
+}
+
 const DEFAULT_TOP_K = 8;
 const MAX_TOP_K = 25;
 
@@ -377,20 +445,19 @@ const server = new Server(
   {
     capabilities: { tools: {} },
     instructions:
-      'StashBase exposes a local Markdown / HTML knowledge base as plain files on ' +
-      'disk. This server provides ONLY the things you cannot do with your own ' +
-      'filesystem tools: `search_kb` (semantic search) and `reindex` (make on-disk ' +
-      'changes searchable). Everything else is done by reading and writing files ' +
-      'directly.\n\n' +
+      'StashBase exposes a local Markdown / HTML knowledge base through host-side ' +
+      'MCP tools. External agent shells may be sandboxed and unable to read the ' +
+      'user\'s absolute filesystem paths, so DO NOT use shell/cat or generic ' +
+      'filesystem tools for StashBase paths. Use `list_directory`, `read_file`, ' +
+      '`write_file`, `edit_file`, `move_file`, and `delete_file` instead.\n\n' +
       'At the start of a session, call `kb_info`. It returns `kb_root` (the absolute ' +
       'path of the knowledge base), the list of spaces, and the `STASHBASE.md` rules ' +
       '— FOLLOW those rules for everything you do to the KB.\n\n' +
-      'To read a file, read `<kb_root>/<space>/<file>` with your filesystem tools ' +
-      '(search_kb returns kbRoot-relative paths). To create, edit, delete, or move a ' +
-      'note — or to edit the `STASHBASE.md` rules — write those files in place. There ' +
-      'is NO filesystem watcher: after ANY write, call `reindex` so the change ' +
-      'becomes searchable (it diffs disk against the index itself — you do not report ' +
-      'what changed).\n\n' +
+      'All file tools take kbRoot-relative POSIX paths such as `Space/note.md`; ' +
+      '`search_kb` returns paths in the same form. `write_file`, `edit_file`, ' +
+      '`move_file`, and `delete_file` update the semantic index when an API key is ' +
+      'configured. Call `reindex` after bulk external changes or whenever a tool ' +
+      'returns an index warning.\n\n' +
       'When you CREATE a new derived file (e.g. a generated summary), add ' +
       '`generated_by: stashbase-agent` to its Markdown YAML front-matter (or an HTML ' +
       '`<meta name="generated_by" content="stashbase-agent">`) so the user can later ' +
@@ -406,13 +473,98 @@ const BUILTIN_TOOLS = [
         'new conversation. Returns `{kb_root, spaces, rules}` where `kb_root` is the ' +
         'ABSOLUTE filesystem path of the knowledge base, `spaces` lists each space ' +
         '(name + embedder provider), and `rules` is the KB-level `STASHBASE.md` ' +
-        'maintenance contract you must follow. ' +
-        'Everything except semantic search and reindexing is done with your OWN ' +
-        'filesystem tools directly under `kb_root`: read a full file by reading ' +
-        '`<kb_root>/<space>/<file>`; create / edit / delete / move notes, and edit ' +
-        'the `STASHBASE.md` rules, by writing those files in place. After any write, ' +
-        'call `reindex` so the changes become searchable.',
+        'maintenance contract you must follow. Use StashBase file tools for paths ' +
+        'under `kb_root`; sandboxed shells may not be able to see those host files.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    },
+    {
+      name: 'list_directory',
+      description:
+        'List visible files and folders in the knowledge base. `path` is optional; omit ' +
+        'or pass "" to list spaces, pass `Space` to list a space root, or pass ' +
+        '`Space/folder` to list a folder. Paths are kbRoot-relative POSIX paths. Hidden ' +
+        'app-maintained derived notes and bundle folders are not surfaced.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Optional kbRoot-relative directory path.' },
+        },
+      },
+    },
+    {
+      name: 'read_file',
+      description:
+        'Read a Markdown or HTML text file from StashBase by kbRoot-relative path ' +
+        '(for example `Space/note.md`). Binary files such as PDFs/images are visible ' +
+        'in `list_directory` but cannot be returned as text.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'kbRoot-relative file path.' },
+        },
+        required: ['path'],
+      },
+    },
+    {
+      name: 'write_file',
+      description:
+        'Create or overwrite a Markdown/HTML text file. Creates parent folders as ' +
+        'needed, writes atomically, and updates the semantic index when an API key is configured.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'kbRoot-relative file path.' },
+          content: { type: 'string', description: 'Full file content to write.' },
+          baseVersion: { type: 'string', description: 'Optional version from read_file for optimistic conflict checks.' },
+        },
+        required: ['path', 'content'],
+      },
+    },
+    {
+      name: 'edit_file',
+      description:
+        'Patch a Markdown/HTML text file by exact string replacement. By default ' +
+        '`old_text` must match exactly once; set `replace_all` for global replacement.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'kbRoot-relative file path.' },
+          old_text: { type: 'string', description: 'Exact text to replace.' },
+          new_text: { type: 'string', description: 'Replacement text.' },
+          replace_all: { type: 'boolean', description: 'Replace every occurrence instead of requiring a single match.' },
+          baseVersion: { type: 'string', description: 'Optional version from read_file for optimistic conflict checks.' },
+        },
+        required: ['path', 'old_text', 'new_text'],
+      },
+    },
+    {
+      name: 'move_file',
+      description:
+        'Rename or move a file within the same space. Keeps note attachment bundles ' +
+        'and PDF/image derived artifacts together, optionally cascades Markdown/HTML links, ' +
+        'and updates the semantic index when possible.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Existing kbRoot-relative file path.' },
+          new_path: { type: 'string', description: 'New kbRoot-relative file path in the same space.' },
+          cascade: { type: 'boolean', description: 'Update links that point at the moved file. Defaults true.' },
+        },
+        required: ['path', 'new_path'],
+      },
+    },
+    {
+      name: 'delete_file',
+      description:
+        'Delete a visible file by kbRoot-relative path. Also removes note bundles or ' +
+        'PDF/image derived artifacts owned by that file, and cleans the semantic index asynchronously.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'kbRoot-relative file path.' },
+        },
+        required: ['path'],
+      },
     },
     {
       name: 'search_kb',
@@ -424,8 +576,7 @@ const BUILTIN_TOOLS = [
         'whose kbRoot-relative source starts with that prefix (e.g. "cs183b/transcripts/"). ' +
         'Each hit returns the kbRoot-relative file path (`<space>/<file>`), the chunk content, ' +
         'optional heading and source line range, and a fused relevance score. Use this when ' +
-        'the user asks something the notes might answer; read the full document by reading ' +
-        '`<kb_root>/<path>` directly with your filesystem tools.',
+        'the user asks something the notes might answer; read full text documents with `read_file`.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -457,9 +608,9 @@ const BUILTIN_TOOLS = [
       name: 'reindex',
       description:
         'Reconcile the semantic index with the files currently on disk, then report ' +
-        'index health. Call this after you create, edit, delete, or move any file under ' +
-        'kb_root with your filesystem tools — StashBase does NOT watch the filesystem, so ' +
-        'your changes are invisible to `search_kb` until you reindex. You do NOT need to ' +
+        'index health. StashBase file tools update the index themselves when possible; ' +
+        'call this after bulk external changes or when a file tool returns an index warning. ' +
+        'You do NOT need to ' +
         'say what changed: the sweep diffs disk against the index and discovers added / ' +
         'modified / removed / renamed files itself. Defaults to the **whole knowledge ' +
         'base**; pass `space` to limit the disk walk to one space. Re-embedding cost is ' +
@@ -506,6 +657,48 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const hits = await viaWeb('search', () => searchViaWeb(query, k, space, pathPrefix));
     return {
       content: [{ type: 'text', text: JSON.stringify({ query, space: space ?? null, path_prefix: pathPrefix ?? null, top_k: k, hits }, null, 2) }],
+    };
+  }
+
+  if (req.params.name === 'list_directory') {
+    const result = await viaWeb('list_directory', () => listDirectoryViaWeb(args.path));
+    return {
+      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+    };
+  }
+
+  if (req.params.name === 'read_file') {
+    const result = await viaWeb('read_file', () => readFileViaWeb(args.path));
+    return {
+      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+    };
+  }
+
+  if (req.params.name === 'write_file') {
+    const result = await viaWeb('write_file', () => writeFileViaWeb(args));
+    return {
+      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+    };
+  }
+
+  if (req.params.name === 'edit_file') {
+    const result = await viaWeb('edit_file', () => editFileViaWeb(args));
+    return {
+      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+    };
+  }
+
+  if (req.params.name === 'move_file') {
+    const result = await viaWeb('move_file', () => moveFileViaWeb(args));
+    return {
+      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+    };
+  }
+
+  if (req.params.name === 'delete_file') {
+    const result = await viaWeb('delete_file', () => deleteFileViaWeb(args.path));
+    return {
+      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
     };
   }
 
