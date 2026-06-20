@@ -7,12 +7,14 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const args = process.argv.slice(2);
-const platform = args.includes('--win') ? 'win' : 'mac';
+const platform = args.includes('--linux') ? 'linux' : args.includes('--win') ? 'win' : 'mac';
 const target = args.includes('--dir')
   ? ['dir']
   : platform === 'win'
     ? ['nsis', 'zip']
-    : ['dmg', 'zip'];
+    : platform === 'linux'
+      ? ['deb']
+      : ['dmg', 'zip'];
 const xattr = fs.existsSync('/usr/bin/xattr') ? '/usr/bin/xattr' : 'xattr';
 const packageManagerCli = process.env.npm_execpath;
 const electronBuilderBin = path.join(
