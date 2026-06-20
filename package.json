@@ -107,8 +107,10 @@
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*",
       "node_modules/@vscode/**/*",
+      "node_modules/@anthropic-ai/claude-agent-sdk*/**/*",
       "node_modules/.pnpm/better-sqlite3*/**/*",
-      "node_modules/.pnpm/@vscode+ripgrep*/**/*"
+      "node_modules/.pnpm/@vscode+ripgrep*/**/*",
+      "node_modules/.pnpm/@anthropic-ai+claude-agent-sdk*/**/*"
     ],
     "mac": {
       "category": "public.app-category.productivity",
