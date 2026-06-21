@@ -70,9 +70,9 @@ test('keyword search sends the active window space explicitly', async () => {
 
 test('recording upload sends the capture-time space and folder', async () => {
   const prevFetch = globalThis.fetch;
-  let body: FormData | null = null;
+  let body: FormData | undefined;
   globalThis.fetch = (async (_url, init) => {
-    body = init?.body instanceof FormData ? init.body : null;
+    body = init?.body instanceof FormData ? init.body : undefined;
     return new Response(JSON.stringify({ ok: true, file: 'Calls/recording.md' }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
@@ -80,9 +80,11 @@ test('recording upload sends the capture-time space and folder', async () => {
   }) as typeof fetch;
   try {
     await api.recordVideo(new File(['webm'], 'clip.webm', { type: 'video/webm' }), 'Calls', 'Space A');
-    assert.equal(body?.get('dir'), 'Calls');
-    assert.equal(body?.get('space'), 'Space A');
-    assert.equal((body?.get('file') as File | null)?.name, 'clip.webm');
+    const form = body;
+    assert.ok(form);
+    assert.equal(form.get('dir'), 'Calls');
+    assert.equal(form.get('space'), 'Space A');
+    assert.equal((form.get('file') as File | null)?.name, 'clip.webm');
   } finally {
     globalThis.fetch = prevFetch;
   }
@@ -90,9 +92,9 @@ test('recording upload sends the capture-time space and folder', async () => {
 
 test('file upload sends the import-time space and folder', async () => {
   const prevFetch = globalThis.fetch;
-  let body: FormData | null = null;
+  let body: FormData | undefined;
   globalThis.fetch = (async (_url, init) => {
-    body = init?.body instanceof FormData ? init.body : null;
+    body = init?.body instanceof FormData ? init.body : undefined;
     return new Response(JSON.stringify({ files: [{ file: 'Inbox/a.md' }] }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
@@ -104,10 +106,12 @@ test('file upload sends the import-time space and folder', async () => {
       'Inbox',
       'Space A',
     );
-    assert.equal(body?.get('dir'), 'Inbox');
-    assert.equal(body?.get('space'), 'Space A');
-    assert.equal(body?.get('paths'), 'a.md');
-    assert.equal((body?.get('files') as File | null)?.name, 'a.md');
+    const form = body;
+    assert.ok(form);
+    assert.equal(form.get('dir'), 'Inbox');
+    assert.equal(form.get('space'), 'Space A');
+    assert.equal(form.get('paths'), 'a.md');
+    assert.equal((form.get('files') as File | null)?.name, 'a.md');
   } finally {
     globalThis.fetch = prevFetch;
   }

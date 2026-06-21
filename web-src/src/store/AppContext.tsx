@@ -98,7 +98,7 @@ export interface AppActions {
   ) => Promise<void>;
   goHome: () => Promise<boolean>;
 
-  loadFiles: () => Promise<void>;
+  loadFiles: (expectedSpace?: string) => Promise<State['files']>;
   /** Optimistically mark the current visible files as stashing. Used
    *  after the first embedder key is added and immediately after a
    *  folder import opens the new space, before daemon status can catch
@@ -578,10 +578,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // the time it took to fetch — re-check before patching.
       if (stateRef.current.space !== spaceAtStart) return;
       const latestActive = getActiveTab(stateRef.current);
-      const stillActive = latestActive?.file?.name === name && latestActive.file.kind === tab.file.kind;
-      if (!stillActive) return;
+      const latestFile = latestActive?.file;
+      if (!latestFile || latestFile.name !== name || latestFile.kind !== tab.file.kind) return;
       if (latestActive?.editMode) return;
-      if (body.content === latestActive.file.content) return;
+      if (body.content === latestFile.content) return;
       dispatch({
         type: 'FILE_PATCH',
         patch: { content: body.content, ...('version' in body ? { version: body.version } : {}) },
@@ -2059,7 +2059,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const h = editorRef.current;
       const liveValue = h?.getValue();
       if (cur && h && liveValue !== undefined && liveValue !== cur.content) {
-        clearTimeout(saveTimer.current);
+        if (saveTimer.current !== null) {
+          clearTimeout(saveTimer.current);
+          saveTimer.current = null;
+        }
         try {
           const qs = `?windowId=${encodeURIComponent(getWindowId())}`;
           const endpoint = cur.kind === 'kb'
