@@ -1,8 +1,12 @@
 {
   "name": "stashbase",
   "version": "0.9.0",
+  "packageManager": "pnpm@10.28.0",
   "description": "Local-first knowledge base desktop app.",
-  "author": "liliu-z",
+  "author": {
+    "name": "liliu-z",
+    "email": "liliu-z@users.noreply.github.com"
+  },
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -48,14 +52,16 @@
     "package:mac": "node scripts/package-unsigned.mjs",
     "package:mac:dir": "node scripts/package-unsigned.mjs --dir",
     "package:win": "node scripts/package-unsigned.mjs --win",
+    "package:linux": "node scripts/package-unsigned.mjs --linux",
     "dist": "pnpm package:mac",
-    "dist:all": "pnpm package:mac && pnpm package:win",
+    "dist:all": "pnpm package:mac && pnpm package:win && pnpm package:linux",
     "dist:brew": "node scripts/publish.mjs",
     "smoke:packaged-server": "node scripts/smoke-packaged-server.mjs",
     "release:verify:mac": "node scripts/release-verify-mac.mjs",
     "pack:mac": "pnpm package:mac:dir",
     "dist:mac": "pnpm package:mac",
-    "dist:win": "pnpm package:win"
+    "dist:win": "pnpm package:win",
+    "dist:linux": "pnpm package:linux"
   },
   "build": {
     "appId": "com.stashbase.app",
@@ -101,8 +107,10 @@
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*",
       "node_modules/@vscode/**/*",
+      "node_modules/@anthropic-ai/claude-agent-sdk*/**/*",
       "node_modules/.pnpm/better-sqlite3*/**/*",
-      "node_modules/.pnpm/@vscode+ripgrep*/**/*"
+      "node_modules/.pnpm/@vscode+ripgrep*/**/*",
+      "node_modules/.pnpm/@anthropic-ai+claude-agent-sdk*/**/*"
     ],
     "mac": {
       "category": "public.app-category.productivity",
@@ -160,6 +168,27 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "category": "Office",
+      "target": [
+        "deb"
+      ],
+      "icon": "build/icons"
+    },
+    "deb": {
+      "depends": [
+        "libnotify4",
+        "libnss3",
+        "libatk1.0-0",
+        "libatk-bridge2.0-0",
+        "libgdk-pixbuf2.0-0",
+        "libgtk-3-0",
+        "libx11-xcb1",
+        "libxcb-dri3-0",
+        "libxtst6",
+        "libasound2"
+      ]
     }
   },
   "dependencies": {

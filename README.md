@@ -31,10 +31,22 @@ StashBase is a local-first knowledge base that turns documents, screenshots, vid
 
 ## ⚡ Try it
 
-StashBase currently ships for **macOS (Apple Silicon)** — Windows / Linux are on the [roadmap](#status). Install with Homebrew:
+StashBase currently ships for **macOS (Apple Silicon)** and **Linux (x86_64 Debian/Ubuntu)** — Windows is on the [roadmap](#status).
+
+### macOS Install (Apple Silicon)
+
+Install with Homebrew:
 
 ```bash
 brew install --cask liliu-z/stashbase/stashbase
+```
+
+### Linux Install (Debian/Ubuntu)
+
+Download the `.deb` package from the [Releases](https://github.com/liliu-z/stashbase/releases) page and install it:
+
+```bash
+sudo dpkg -i StashBase-0.9.0-linux-amd64.deb
 ```
 
 Once the app is running:
@@ -166,7 +178,7 @@ Drop a `STASHBASE.md` into the KB root (or per-space) to define maintenance rule
 
 ## Build from source
 
-For contributors and developers building locally, and for platforms without a prebuilt cask (Intel Mac, Windows, Linux). End users on Apple Silicon should just use the brew cask above.
+For contributors and developers building locally, and for platforms without a prebuilt installer (Intel Mac, Windows). End users on Apple Silicon should just use the brew cask, and Linux users can install the Debian package.
 
 ```bash
 # Setup
@@ -185,8 +197,9 @@ pnpm dev
 
 # Build distributable app
 pnpm dist          # macOS DMG + zip
-pnpm dist:win     # Windows NSIS + zip, built from Windows sidecars
-pnpm pack:mac     # macOS .app only, faster packaging smoke
+pnpm dist:win      # Windows NSIS + zip, built from Windows sidecars
+pnpm dist:linux    # Linux Debian (.deb)
+pnpm pack:mac      # macOS .app only, faster packaging smoke
 pnpm build:python-extract-sidecar # optional: include local PDF/OCR extractor
 ```
 
@@ -258,7 +271,7 @@ command = "/Users/YOUR_USER/.stashbase/bin/stashbase-mcp"
 
 ## Status
 
-Early alpha. macOS arm64 is the supported platform today; Windows / Linux are post-V1. Screen recording uses the native system picker on macOS 15+; on older versions you can record individual windows, but not full-screen apps.
+Early alpha. macOS arm64 and Linux x86_64 are the supported platforms today; Windows is post-V1. Screen recording uses the native system picker on macOS 15+; on older versions you can record individual windows, but not full-screen apps.
 
 ### Reasonably stable
 
@@ -280,7 +293,7 @@ Early alpha. macOS arm64 is the supported platform today; Windows / Linux are po
 
 ### Post-V1
 
-Windows / Linux, note-first treatment for dropped-in videos, cloud sync, multi-device, mobile access, team collaboration.
+Windows, note-first treatment for dropped-in videos, cloud sync, multi-device, mobile access, team collaboration.
 
 Pin a commit if you're embedding StashBase into a larger workflow.
 
