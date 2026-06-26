@@ -131,6 +131,17 @@ export function mount(app: express.Express): void {
     }
   });
 
+  // Resolve the best file path to hand to a built-in agent for a visible
+  // source file. Binary sources keep their visible path for context, but
+  // prefer the hidden extracted Markdown note when it already exists.
+  app.get('/api/kb/agent-context-file', async (req, res) => {
+    try {
+      res.json(await agentContextFile(req.query.path));
+    } catch (err: unknown) {
+      sendError(res, err);
+    }
+  });
+
   // KB-level STASHBASE.md content. Powers the renderer's "STASHBASE.md"
   // row in the Knowledge base section.
   app.get('/api/kb/rules', (_req, res) => {
@@ -251,6 +262,21 @@ interface KbDirectoryEntry {
   version?: string;
 }
 
+export interface AgentContextFile {
+  /** KB-relative source path (`Space/paper.pdf`) for HTTP/MCP callers. */
+  path: string;
+  /** Space name containing the visible source file. */
+  space: string;
+  /** Space-relative visible source path (`paper.pdf`). */
+  sourcePath: string;
+  /** Space-relative path the agent should read first. */
+  readPath: string;
+  kind: 'direct' | 'derived';
+  sourceFormat: string;
+  available: boolean;
+  reason: string;
+}
+
 export function normalizeKbFilePath(raw: unknown): KbPath {
   const kbRel = normalizeKbRelativePath(raw, { allowEmpty: false });
   const slash = kbRel.indexOf('/');
@@ -329,6 +355,53 @@ function routeError(message: string, status = 400, code?: string): Error {
   (err as any).status = status;
   if (code) (err as any).code = code;
   return err;
+}
+
+export async function agentContextFile(rawPath: unknown): Promise<AgentContextFile> {
+  const target = normalizeKbFilePath(rawPath);
+  return runWithSpaceName(target.space, async () => {
+    const sourceFormat = detectViewerFormat(target.spaceRel);
+    if (!sourceFormat) throw routeError('unsupported format', 415, 'UNSUPPORTED_FORMAT');
+    if (!pathExists(target.spaceRel)) throw routeError('not found', 404);
+
+    if (sourceFormat !== 'pdf' && sourceFormat !== 'image') {
+      return {
+        path: target.kbRel,
+        space: target.space,
+        sourcePath: target.spaceRel,
+        readPath: target.spaceRel,
+        kind: 'direct',
+        sourceFormat,
+        available: true,
+        reason: 'Structured text files are the readable source.',
+      };
+    }
+
+    const derivedNote = derivedArtifactsForSource(target.spaceRel).notes.find((rel) => readText(rel) != null);
+    if (!derivedNote) {
+      return {
+        path: target.kbRel,
+        space: target.space,
+        sourcePath: target.spaceRel,
+        readPath: target.spaceRel,
+        kind: 'direct',
+        sourceFormat,
+        available: false,
+        reason: `No extracted Markdown exists yet for this ${sourceFormat}; retry after conversion if you need text context.`,
+      };
+    }
+
+    return {
+      path: target.kbRel,
+      space: target.space,
+      sourcePath: target.spaceRel,
+      readPath: derivedNote,
+      kind: 'derived',
+      sourceFormat,
+      available: true,
+      reason: `Read the extracted Markdown/OCR note first for this ${sourceFormat}; use the original only when raw visual or binary detail is needed.`,
+    };
+  });
 }
 
 export async function listKbDirectory(rawPath: unknown): Promise<{ path: string; entries: KbDirectoryEntry[] }> {

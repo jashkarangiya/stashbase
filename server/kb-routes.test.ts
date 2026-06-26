@@ -117,6 +117,80 @@ test('KB file helpers perform CRUD with kbRoot-relative paths', async () => {
   );
 });
 
+test('agentContextFile prefers extracted Markdown for PDF and image sources', async () => {
+  await openKbRoot('kb-agent-context-derived');
+  const { getKbRoot } = await import('./space.ts');
+  const root = getKbRoot();
+  fs.writeFileSync(path.join(root, 'Project', 'paper.pdf'), '%PDF-1.7\n');
+  fs.writeFileSync(path.join(root, 'Project', '.paper.pdf.md'), '# Extracted paper\n');
+  fs.writeFileSync(path.join(root, 'Project', 'shot.png'), 'not really a png');
+  fs.writeFileSync(path.join(root, 'Project', '.shot.png.md'), '# OCR text\n');
+  const { agentContextFile } = await import('./routes/kb.ts');
+
+  assert.deepEqual(
+    await agentContextFile('Project/paper.pdf'),
+    {
+      path: 'Project/paper.pdf',
+      space: 'Project',
+      sourcePath: 'paper.pdf',
+      readPath: '.paper.pdf.md',
+      kind: 'derived',
+      sourceFormat: 'pdf',
+      available: true,
+      reason: 'Read the extracted Markdown/OCR note first for this pdf; use the original only when raw visual or binary detail is needed.',
+    },
+  );
+  assert.deepEqual(
+    await agentContextFile('Project/shot.png'),
+    {
+      path: 'Project/shot.png',
+      space: 'Project',
+      sourcePath: 'shot.png',
+      readPath: '.shot.png.md',
+      kind: 'derived',
+      sourceFormat: 'image',
+      available: true,
+      reason: 'Read the extracted Markdown/OCR note first for this image; use the original only when raw visual or binary detail is needed.',
+    },
+  );
+});
+
+test('agentContextFile returns direct paths for structured files and missing conversions', async () => {
+  await openKbRoot('kb-agent-context-direct');
+  const { getKbRoot } = await import('./space.ts');
+  const root = getKbRoot();
+  fs.writeFileSync(path.join(root, 'Project', 'note.md'), '# Note\n');
+  fs.writeFileSync(path.join(root, 'Project', 'unread.pdf'), '%PDF-1.7\n');
+  const { agentContextFile } = await import('./routes/kb.ts');
+
+  assert.deepEqual(
+    await agentContextFile('Project/note.md'),
+    {
+      path: 'Project/note.md',
+      space: 'Project',
+      sourcePath: 'note.md',
+      readPath: 'note.md',
+      kind: 'direct',
+      sourceFormat: 'md',
+      available: true,
+      reason: 'Structured text files are the readable source.',
+    },
+  );
+  assert.deepEqual(
+    await agentContextFile('Project/unread.pdf'),
+    {
+      path: 'Project/unread.pdf',
+      space: 'Project',
+      sourcePath: 'unread.pdf',
+      readPath: 'unread.pdf',
+      kind: 'direct',
+      sourceFormat: 'pdf',
+      available: false,
+      reason: 'No extracted Markdown exists yet for this pdf; retry after conversion if you need text context.',
+    },
+  );
+});
+
 test('KB file helpers reject host paths, hidden derived notes, and cross-space moves', async () => {
   await openKbRoot('kb-file-invalid');
   fs.mkdirSync(path.join((await import('./space.ts')).getKbRoot(), 'Other'), { recursive: true });

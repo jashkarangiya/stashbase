@@ -211,6 +211,17 @@ export interface UploadResult {
   files: UploadResultEntry[];
 }
 
+export interface AgentContextFile {
+  path: string;
+  space: string;
+  sourcePath: string;
+  readPath: string;
+  kind: 'direct' | 'derived';
+  sourceFormat: string;
+  available: boolean;
+  reason: string;
+}
+
 export interface SearchHit {
   fileName: string;
   chunkIndex: number;
@@ -548,6 +559,10 @@ export const api = {
     const r = await fetch('/api/agent/attach', { method: 'POST', body: fd, headers: requestHeaders() });
     return parseJsonOrThrow(r);
   },
+  agentContextFile: (space: string, path: string) =>
+    getJson<AgentContextFile>(
+      '/api/kb/agent-context-file?path=' + encodeURIComponent(`${space}/${path}`),
+    ),
 
   // Sync / search / status --------------------------------------
   sync: (space?: string) => send<SyncResult>(

@@ -12,7 +12,7 @@
  * This is Phase 1 of design-docs/chat-panel.md.
  */
 import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
-import { api, getWindowId, type SessionInfo } from '../api';
+import { api, getWindowId, type AgentContextFile, type SessionInfo } from '../api';
 import { FILE_MIME } from '../dragMime';
 import { renderMarkdownInline } from '../markdown';
 import { useApp } from '../store/AppContext';
@@ -393,7 +393,7 @@ export function AgentView({
     });
   }
 
-  function send(text: string) {
+  async function send(text: string) {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const atts = attachments;
@@ -406,13 +406,7 @@ export function AgentView({
     // attachments (temp uploads = absolute, sidebar files = space-relative)
     // are listed too. Both kept out of the displayed header — chips show
     // the attachments; the composer chip signals the active file.
-    const ctx: string[] = [];
-    if (activeFile && !atts.some((a) => a.path === activeFile)) {
-      ctx.push(`Current file (open in the viewer): ${activeFile}`);
-    }
-    if (atts.length) {
-      ctx.push(`Attached files (read these):\n${atts.map((a) => `- ${a.path}`).join('\n')}`);
-    }
+    const ctx = await buildPromptContext(activeFile, atts);
     const wire = ctx.length ? `${text}${text ? '\n\n' : ''}${ctx.join('\n\n')}` : text;
     try {
       ws.send(JSON.stringify({ t: 'prompt', text: wire }));
@@ -421,6 +415,56 @@ export function AgentView({
       setTurnActive(false);
       setBlocks((bs) => [...bs, { kind: 'error', id: nextId(), text: `Could not send message: ${errorText(err)}` }]);
     }
+  }
+
+  async function buildPromptContext(openFile: string | null, atts: Attachment[]): Promise<string[]> {
+    const lines: string[] = [];
+    if (openFile && !atts.some((a) => a.path === openFile)) {
+      lines.push(await formatCurrentFileContext(openFile));
+    }
+    if (atts.length) {
+      const rendered = await Promise.all(atts.map((a) => formatAttachmentContext(a)));
+      lines.push(`Attached files:\n${rendered.join('\n')}`);
+    }
+    return lines;
+  }
+
+  async function resolveSpaceContext(path: string): Promise<AgentContextFile | null> {
+    if (!knownFilePaths.has(path)) return null;
+    try {
+      return await api.agentContextFile(spaceRef.current, path);
+    } catch {
+      return null;
+    }
+  }
+
+  async function formatCurrentFileContext(path: string): Promise<string> {
+    const ctx = await resolveSpaceContext(path);
+    if (ctx?.kind === 'derived') {
+      return [
+        `Current file (open in the viewer): ${ctx.sourcePath}`,
+        `For text context, read the extracted Markdown filesystem path first: ${ctx.readPath}`,
+        `Only read the original ${ctx.sourceFormat} if you need raw visual or binary detail.`,
+      ].join('\n');
+    }
+    if (ctx && !ctx.available && (ctx.sourceFormat === 'pdf' || ctx.sourceFormat === 'image')) {
+      return [
+        `Current file (open in the viewer): ${ctx.sourcePath}`,
+        `Extracted Markdown is not available yet for this ${ctx.sourceFormat}; read the original only if necessary.`,
+      ].join('\n');
+    }
+    return `Current file (open in the viewer): ${path}`;
+  }
+
+  async function formatAttachmentContext(att: Attachment): Promise<string> {
+    const ctx = await resolveSpaceContext(att.path);
+    if (ctx?.kind === 'derived') {
+      return `- ${ctx.sourcePath} (read extracted Markdown filesystem path first: ${ctx.readPath}; use the original ${ctx.sourceFormat} only for raw visual or binary detail)`;
+    }
+    if (ctx && !ctx.available && (ctx.sourceFormat === 'pdf' || ctx.sourceFormat === 'image')) {
+      return `- ${ctx.sourcePath} (extracted Markdown is not available yet; read the original only if necessary)`;
+    }
+    return `- ${att.path}`;
   }
 
   /** Attach OS files (dropped from Finder or picked via `+`) as transient
