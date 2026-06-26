@@ -89,6 +89,7 @@ export function CodeEditor({
       indentOnInput(),
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       highlightActiveLine(),
+      EditorView.lineWrapping,
       highlightSelectionMatches(),
       // search() owns the SearchQuery state + match decorations even
       // though we never call openSearchPanel — our FindBar drives it
@@ -102,7 +103,10 @@ export function CodeEditor({
             '"SF Mono", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace',
           lineHeight: '1.55',
         },
-        '.cm-content': { padding: '12px 0' },
+        '.cm-line': {
+          overflowWrap: 'anywhere',
+        },
+        '.cm-content': { padding: '12px 0 12px 8px' },
         '.cm-gutters': {
           // Opaque so content scrolling horizontally doesn't show
           // through the line-number column — matches `.md-editor`'s
@@ -110,6 +114,7 @@ export function CodeEditor({
           background: 'var(--bg)',
           color: '#9aa0a6',
           border: 'none',
+          padding: '0 8px 0 12px',
         },
         '.cm-activeLine': { background: 'rgba(0,0,0,0.025)' },
         '.cm-activeLineGutter': { background: 'transparent', color: '#5f6368' },
