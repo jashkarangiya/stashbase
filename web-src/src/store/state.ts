@@ -202,12 +202,6 @@ export interface State {
   chatOpen: boolean;
   /** Chat panel width in pixels — user-resizable via drag handle. */
   chatWidth: number;
-  /** **Last-used** agent id — the agent the chat panel's split button
-   *  and the chrome toggle default to for a new tab. Updated (and
-   *  persisted server-side) each time a tab is started, so it follows
-   *  the user's latest pick. Existing tabs keep running their own
-   *  agent — this only affects future tabs. */
-  agent: string;
   /** Catalog of available agents from the server, populated on demand. */
   agents: Agent[];
   /** Active chat tabs. Each tab owns its own agent session so switching
@@ -342,7 +336,6 @@ export const initialState: State = {
   sidebarWidth: 280,
   chatOpen: false,
   chatWidth: 480,
-  agent: 'claude',
   agents: [],
   chatTabs: [],
   activeChatTabId: null,
@@ -414,8 +407,7 @@ export type Action =
   | { type: 'SIDEBAR_WIDTH'; width: number }
   | { type: 'CHAT_TOGGLE' }
   | { type: 'CHAT_WIDTH'; width: number }
-  | { type: 'AGENTS_LOADED'; current: string; agents: State['agents'] }
-  | { type: 'AGENT_SET'; id: string }
+  | { type: 'AGENTS_LOADED'; agents: State['agents'] }
   | { type: 'CHAT_TAB_NEW'; tab: ChatTab }
   | { type: 'CHAT_TAB_CLOSE'; id: string }
   | { type: 'CHAT_TAB_ACTIVATE'; id: string }
@@ -829,9 +821,7 @@ export function reducer(s: State, a: Action): State {
       // word; above ~70% of viewport leaves no room for content.
       return { ...s, chatWidth: Math.max(280, Math.min(a.width, 1200)) };
     case 'AGENTS_LOADED':
-      return { ...s, agent: a.current, agents: a.agents };
-    case 'AGENT_SET':
-      return { ...s, agent: a.id };
+      return { ...s, agents: a.agents };
     case 'CHAT_TAB_NEW':
       return {
         ...s,

@@ -1,22 +1,16 @@
 /**
  * Agent CLI registry routes: enumerate the supported CLIs (with their
- * installed-state) and record the user's last-used default. The chat
- * panel reads these to populate its launchers; the CLIs themselves run
- * via structured agent bridges, not a PTY.
+ * installed-state). The chat panel reads these to populate its launchers;
+ * the CLIs themselves run via structured agent bridges, not a PTY.
  */
 import express from 'express';
 import { checkCliInstalled, CLIS, launchCommandFor } from '../terminal.ts';
-import { setTerminalCli, getTerminalCli } from '../app-config.ts';
-import { sendError } from '../http.ts';
 
 export function mount(app: express.Express): void {
-  // Agent CLI registry + user preference. The renderer reads this to
-  // populate the launchers and know each CLI's installed-state.
+  // Agent CLI registry. The renderer reads this to populate the launchers
+  // and know each CLI's installed-state.
   app.get('/api/terminal/clis', (_req, res) => {
-    const configured = getTerminalCli();
-    const current = CLIS[configured] ? configured : 'claude';
     res.json({
-      current,
       clis: Object.values(CLIS).map((c) => ({
         id: c.id,
         label: c.label,
@@ -26,18 +20,5 @@ export function mount(app: express.Express): void {
         launchCommand: launchCommandFor(c),
       })),
     });
-  });
-
-  // Record the *default* agent the chat panel opens next. Existing tabs
-  // keep their own agent (locked at tab creation).
-  app.put('/api/terminal/cli', (req, res) => {
-    const id = typeof req.body?.id === 'string' ? req.body.id : '';
-    if (!CLIS[id]) return res.status(400).json({ error: 'unknown cli id' });
-    try {
-      setTerminalCli(id);
-      res.json({ current: id });
-    } catch (err: unknown) {
-      sendError(res, err);
-    }
   });
 }

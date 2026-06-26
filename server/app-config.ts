@@ -49,9 +49,8 @@ export interface AppConfigFile extends SpaceConfigFile {
    *  `apiKey` on read; we keep the type loose so legacy reads don't
    *  trip the parser. */
   embedder?: { provider?: EmbedderProvider; openaiKey?: string };
-  /** Currently selected CLI for the right-side terminal panel. The
-   *  server knows the canonical registry; this just records which
-   *  entry the user last picked. Defaults to 'claude'. */
+  /** Legacy last-used agent field. No longer written or read by the
+   *  chat panel; kept so old config files parse without churn. */
   terminalCli?: string;
   /** Set once the bundled built-in space (the product manual) has been
    *  seeded into a fresh KB on first launch. A latch, not live state:
@@ -127,20 +126,6 @@ export function setGeminiKey(key: string | undefined): void {
   const cfg = readAppConfig();
   if (key && key.trim()) cfg.geminiKey = key.trim();
   else delete cfg.geminiKey;
-  writeAppConfigStrict(cfg);
-}
-
-/** Currently selected CLI for the terminal panel. Defaults to
- *  'claude' so a fresh install opens the most popular option. */
-export function getTerminalCli(): string {
-  const v = readAppConfig().terminalCli;
-  return typeof v === 'string' && v ? v : 'claude';
-}
-
-export function setTerminalCli(id: string): void {
-  if (typeof id !== 'string' || !id) throw new Error('cli id required');
-  const cfg = readAppConfig();
-  cfg.terminalCli = id;
   writeAppConfigStrict(cfg);
 }
 

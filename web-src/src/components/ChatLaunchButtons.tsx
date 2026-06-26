@@ -6,8 +6,6 @@
  * panel folds itself back up once the user closes the last tab (handled
  * in the reducer's CHAT_TAB_CLOSE), so there's no separate hide switch.
  *
- * The clicked agent becomes the remembered default (`state.agent`), so
- * the chat panel's split button and a `+` there default to it next.
  */
 import { useEffect, useRef, type ComponentType } from 'react';
 import { api, type AgentsResponse } from '../api';
@@ -36,7 +34,7 @@ export function ChatLaunchButtons() {
     if (refreshedRef.current) return;
     refreshedRef.current = true;
     api.listAgents().then((r: AgentsResponse) => {
-      dispatch({ type: 'AGENTS_LOADED', current: r.current, agents: r.clis });
+      dispatch({ type: 'AGENTS_LOADED', agents: r.clis });
     }).catch(() => { /* renderer falls back to local defaults */ });
   }, [dispatch]);
 
@@ -52,12 +50,6 @@ export function ChatLaunchButtons() {
     const title = sameAgent.length === 0 ? base : `${base} ${sameAgent.length + 1}`;
     const tab: ChatTab = { id: crypto.randomUUID(), agent: agentId, title };
     dispatch({ type: 'CHAT_TAB_NEW', tab });
-    // Remember which agent we just opened so the panel's split button
-    // defaults to it. Persisted best-effort.
-    if (agentId !== state.agent) {
-      dispatch({ type: 'AGENT_SET', id: agentId });
-      api.setAgent(agentId).catch(() => { /* best-effort */ });
-    }
   }
 
   return (

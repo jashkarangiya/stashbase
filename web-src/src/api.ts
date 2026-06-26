@@ -265,7 +265,6 @@ export interface Agent {
 }
 
 export interface AgentsResponse {
-  current: string;
   clis: Agent[];
 }
 
@@ -601,11 +600,8 @@ export const api = {
   // Agents (chat-panel CLIs) -----------------------------------
   // Server routes stay under `/api/terminal/*` for historical reasons;
   // the renderer just calls them "agents". `listAgents` populates the
-  // launcher registry / installed-state; `setAgent` records the last-used
-  // agent so the panel defaults to it.
+  // launcher registry / installed-state.
   listAgents: () => getJson<AgentsResponse>('/api/terminal/clis'),
-  setAgent: (id: string) =>
-    send<{ current: string }>('PUT', '/api/terminal/cli', { id }),
   mcpStatus: () =>
     getJson<{ clients: Record<string, boolean>; command: string; config: unknown }>('/api/mcp/status'),
   listMcpTools: () =>

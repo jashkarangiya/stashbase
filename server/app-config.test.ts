@@ -71,12 +71,10 @@ test('migrateLegacyEmbedderConfig keeps an existing top-level apiKey', () => {
 test('preference setters use strict writes', () => {
   cfg.setApiKey('  sk-new  ');
   cfg.setGeminiKey('  gemini-new  ');
-  cfg.setTerminalCli('codex');
 
   const read = cfg.readAppConfig();
   assert.equal(read.apiKey, 'sk-new');
   assert.equal(read.geminiKey, 'gemini-new');
-  assert.equal(read.terminalCli, 'codex');
 });
 
 test('key setters clear stored credentials when unset', () => {
