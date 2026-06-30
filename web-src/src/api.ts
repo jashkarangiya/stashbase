@@ -618,7 +618,11 @@ export const api = {
   // launcher registry / installed-state.
   listAgents: () => getJson<AgentsResponse>('/api/terminal/clis'),
   mcpStatus: () =>
-    getJson<{ clients: Record<string, boolean>; command: string; config: unknown }>('/api/mcp/status'),
+    getJson<{
+      clients: Record<string, boolean | { configured?: boolean; cliInstalled?: boolean; restartRequired?: boolean }>;
+      command: string;
+      config: unknown;
+    }>('/api/mcp/status'),
   listMcpTools: () =>
     getJson<{ tools: { server: string; name: string; fqName: string; description?: string; inputSchema: unknown }[] }>('/api/mcp/tools'),
   callMcpTool: (name: string, args: Record<string, unknown> = {}) =>

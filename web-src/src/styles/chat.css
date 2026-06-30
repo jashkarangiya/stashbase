@@ -194,7 +194,7 @@
 
     /* ===================================================================
      * Structured agent panel (AgentView) — VSCode-style chat surface.
-     * See design-docs/chat-panel.md.
+     * See design-docs/architecture.md §8.
      * =================================================================== */
     .agent-view {
       position: relative;
@@ -897,16 +897,29 @@
       box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
     }
     .agent-mode-menu.effort-only {
-      width: 240px;
+      width: 300px;
       padding: 6px 8px;
     }
     .agent-mode-menu-head {
       display: flex;
-      align-items: center;
-      justify-content: space-between;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
       padding: 4px 8px 8px;
       color: var(--muted);
       font-size: 12px;
+    }
+    .agent-mode-menu-head > span:first-child {
+      color: var(--fg);
+      font-weight: 600;
+    }
+    .agent-mode-menu-head > span + span {
+      font-size: 11.5px;
+      line-height: 1.35;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .agent-mode-opt {
       display: flex;

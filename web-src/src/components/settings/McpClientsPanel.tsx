@@ -5,9 +5,8 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
+import { MCP_CLIENTS, mcpClientLabel, type McpClientId } from '../../agentCatalog';
 import { CopyIcon, CheckIcon } from '../../icons';
-
-type McpClientId = 'claude-code' | 'codex-cli' | 'claude-desktop';
 
 interface McpConfigureResult {
   ok: boolean;
@@ -22,17 +21,17 @@ interface ElectronBridge {
   disconnectMcp?: (client: McpClientId) => Promise<McpConfigureResult>;
 }
 
-const MCP_CLIENTS: { id: McpClientId; name: string }[] = [
-  { id: 'claude-code', name: 'Claude Code' },
-  { id: 'codex-cli', name: 'Codex CLI' },
-  { id: 'claude-desktop', name: 'Claude Desktop' },
-];
+type McpClientStatus = {
+  configured: boolean;
+  cliInstalled?: boolean;
+  restartRequired?: boolean;
+};
 
 export function McpClientsPanel() {
   const mountedRef = useRef(true);
   const copyResetTimerRef = useRef<number | null>(null);
   const [busy, setBusy] = useState<McpClientId | null>(null);
-  const [connected, setConnected] = useState<Record<string, boolean>>({});
+  const [clientStatus, setClientStatus] = useState<Record<string, McpClientStatus>>({});
   const [status, setStatus] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const [config, setConfig] = useState<string>('');
   const [copied, setCopied] = useState(false);
@@ -49,7 +48,7 @@ export function McpClientsPanel() {
     api.mcpStatus()
       .then((res) => {
         if (cancelled) return;
-        setConnected(res.clients);
+        setClientStatus(normalizeClientStatuses(res.clients));
         setConfig(JSON.stringify(res.config ?? {}, null, 2));
       })
       .catch(() => { /* status is best-effort */ });
@@ -68,8 +67,11 @@ export function McpClientsPanel() {
         return;
       }
       const file = result.file ? ` (${result.file})` : '';
-      setConnected((next) => ({ ...next, [client]: true }));
-      setStatus({ kind: 'ok', text: `Connected ${clientLabel(client)}${file}.` });
+      setClientStatus((next) => ({
+        ...next,
+        [client]: { ...(next[client] ?? { configured: false }), configured: true, restartRequired: true },
+      }));
+      setStatus({ kind: 'ok', text: `Connected ${mcpClientLabel(client)}${file}.` });
     } catch (err: unknown) {
       if (!mountedRef.current) return;
       const text = err instanceof Error ? err.message : String(err);
@@ -91,8 +93,11 @@ export function McpClientsPanel() {
         return;
       }
       const file = result.file ? ` (${result.file})` : '';
-      setConnected((next) => ({ ...next, [client]: false }));
-      setStatus({ kind: 'ok', text: `Disconnected ${clientLabel(client)}${file}.` });
+      setClientStatus((next) => ({
+        ...next,
+        [client]: { ...(next[client] ?? { configured: true }), configured: false, restartRequired: false },
+      }));
+      setStatus({ kind: 'ok', text: `Disconnected ${mcpClientLabel(client)}${file}.` });
     } catch (err: unknown) {
       if (!mountedRef.current) return;
       const text = err instanceof Error ? err.message : String(err);
@@ -144,25 +149,40 @@ export function McpClientsPanel() {
         Click Connect to add StashBase to a tool’s MCP config, then restart the tool.
       </div>
       <div className="mcp-client-list">
-        {MCP_CLIENTS.map((client) => (
-          <div className="mcp-client-row" key={client.id}>
-            <span className="mcp-client-label">
-              <span className={'mcp-status-dot' + (connected[client.id] ? ' on' : '')} />
-              <span className="mcp-client-name">{client.name}</span>
-            </span>
-            <button
-              type="button"
-              className={'modal-btn mcp-connector-btn' + (connected[client.id] ? ' connected' : '')}
-              disabled={busy != null}
-              onClick={() => void (connected[client.id] ? disconnect(client.id) : connect(client.id))}
-              title={connected[client.id] ? `Disconnect ${client.name}` : `Connect ${client.name}`}
-            >
-              {busy === client.id
-                ? (connected[client.id] ? 'Disconnecting…' : 'Connecting…')
-                : connected[client.id] ? 'Disconnect' : 'Connect'}
-            </button>
-          </div>
-        ))}
+        {MCP_CLIENTS.map((client) => {
+          const status = clientStatus[client.id] ?? { configured: false };
+          const badge = clientBadge(client, status);
+          const isConnected = status.configured;
+          const isBusy = busy === client.id;
+          const Icon = client.Icon;
+          return (
+            <div className="mcp-client-row" key={client.id}>
+              <span className="mcp-client-label">
+                <span className="mcp-client-icon">
+                  <Icon />
+                </span>
+                <span className="mcp-client-copy">
+                  <span className="mcp-client-name">{client.name}</span>
+                  <span className="mcp-client-detail">{client.detail}</span>
+                </span>
+              </span>
+              <span className={'mcp-status-pill ' + badge.tone} title={badge.title}>
+                {badge.label}
+              </span>
+              <button
+                type="button"
+                className={'modal-btn mcp-connector-btn' + (isConnected ? ' connected' : '')}
+                disabled={busy != null}
+                onClick={() => void (isConnected ? disconnect(client.id) : connect(client.id))}
+                title={isConnected ? `Disconnect ${client.name}` : `Connect ${client.name}`}
+              >
+                {isBusy
+                  ? (isConnected ? 'Disconnecting…' : 'Connecting…')
+                  : isConnected ? 'Disconnect' : 'Connect'}
+              </button>
+            </div>
+          );
+        })}
       </div>
       {status && (
         <div className={status.kind === 'error' ? 'modal-error' : 'mcp-success'}>
@@ -224,6 +244,47 @@ async function disconnectMcp(
   return await api.disconnectMcp(client) as McpConfigureResult;
 }
 
-function clientLabel(id: McpClientId): string {
-  return MCP_CLIENTS.find((c) => c.id === id)?.name ?? id;
+function normalizeClientStatuses(
+  clients: Record<string, boolean | { configured?: boolean; cliInstalled?: boolean; restartRequired?: boolean }>,
+): Record<string, McpClientStatus> {
+  return Object.fromEntries(Object.entries(clients).map(([id, value]) => {
+    if (typeof value === 'boolean') return [id, { configured: value, restartRequired: value }];
+    return [id, {
+      configured: value.configured === true,
+      ...(typeof value.cliInstalled === 'boolean' ? { cliInstalled: value.cliInstalled } : {}),
+      restartRequired: value.restartRequired === true,
+    }];
+  }));
+}
+
+function clientBadge(
+  client: { cliId?: string },
+  status: McpClientStatus,
+): { label: string; tone: string; title: string } {
+  if (client.cliId && status.cliInstalled === false) {
+    return {
+      label: 'CLI missing',
+      tone: 'warn',
+      title: 'Install the CLI before starting the built-in chat.',
+    };
+  }
+  if (!status.configured) {
+    return {
+      label: 'Not configured',
+      tone: 'off',
+      title: 'StashBase has not been added to this client yet.',
+    };
+  }
+  if (status.restartRequired) {
+    return {
+      label: 'Restart client',
+      tone: 'pending',
+      title: 'The config is written. Restart the client so it picks up StashBase.',
+    };
+  }
+  return {
+    label: 'Configured',
+    tone: 'on',
+    title: 'StashBase is present in this client config.',
+  };
 }

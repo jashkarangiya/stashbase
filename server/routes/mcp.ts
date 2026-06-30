@@ -5,6 +5,7 @@ import path from 'node:path';
 import { currentWindowId } from '../space.ts';
 import { callSpaceMcpTool, listSpaceMcpTools } from '../mcp-host.ts';
 import { sendError } from '../http.ts';
+import { checkCliInstalled } from '../terminal.ts';
 
 const APP_ROOT = process.env.STASHBASE_APP_ROOT
   ? path.resolve(process.env.STASHBASE_APP_ROOT)
@@ -43,7 +44,7 @@ export function mount(app: express.Express): void {
       const wrapper = fs.existsSync(MCP_ENTRY) ? writeMcpWrapper() : currentMcpWrapper();
       res.json({
         clients: Object.fromEntries(
-          MCP_CLIENT_IDS.map((client) => [client, isMcpClientConnected(client, wrapper)]),
+          MCP_CLIENT_IDS.map((client) => [client, mcpClientStatus(client, wrapper)]),
         ),
         command: wrapper,
         config: getStandardMcpJson(wrapper),
@@ -81,6 +82,22 @@ const MCP_CLIENT_IDS = [
   'codex-cli',
   'claude-desktop',
 ];
+
+function mcpClientStatus(client: string, wrapper: string): Record<string, unknown> {
+  const configured = isMcpClientConnected(client, wrapper);
+  const cliId = cliIdForMcpClient(client);
+  return {
+    configured,
+    ...(cliId ? { cliInstalled: checkCliInstalled(cliId) } : {}),
+    restartRequired: false,
+  };
+}
+
+function cliIdForMcpClient(client: string): string | null {
+  if (client === 'claude-code') return 'claude';
+  if (client === 'codex-cli') return 'codex';
+  return null;
+}
 
 function configureMcpClient(client: string): Record<string, unknown> {
   if (!fs.existsSync(MCP_ENTRY)) {

@@ -52,7 +52,7 @@ sudo dpkg -i ./StashBase-*-linux-amd64.deb
 Once the app is running:
 
 1. **Open `👋 Start Here`**, already waiting on your Welcome screen.
-2. Open the **built-in Claude agent** and let it do the reading for you. Ask it something like *"How is StashBase different from a notes app or other knowledge bases?"*
+2. Open a **built-in agent** (Claude Code or Codex) and let it do the reading for you. Ask it something like *"How is StashBase different from a notes app or other knowledge bases?"*
 3. Want a real example? Clone the [CS183B starter](https://github.com/0-bingwu-0/stashbase-cs183b) (Stanford's **How to Start a Startup**, 20 lectures) and bring it in with **Import folder**:
    ```bash
    git clone https://github.com/0-bingwu-0/stashbase-cs183b
@@ -60,7 +60,7 @@ Once the app is running:
    Skim `founder_playbook.html`, then work with the agent: discuss it, or drop in a new article and let it update the playbook.
 4. Bring your own: hit **New space** and drag in your files (Markdown, HTML, PDFs, images), or record your screen and get back a structured note.
 
-Want this memory in Claude Desktop, ChatGPT, or Codex too? **Settings → MCP** → click **Connector** for your client, restart it, then `@stashbase` from there.
+Want this memory in Claude Desktop, ChatGPT, or Codex too? **Settings → MCP** → click **Connect** for a supported client, restart it when prompted, then `@stashbase` from there.
 
 **Embeddings.** StashBase asks for an OpenAI API key when you open your first space — used **only for embeddings** (no chat completions). `text-embedding-3-small` is only $0.02 per 1M tokens. [Create a key.](https://platform.openai.com/api-keys) Without a key, files still save, preview, and stay searchable by exact keyword — only semantic search waits for the key.
 
@@ -145,7 +145,7 @@ Hybrid retrieval: dense vector kNN + BM25, fused server-side via RRF in a single
 
 ### One-click MCP connector
 
-**Settings → MCP** writes the StashBase MCP server entry directly into your AI client's global config (Claude Code, Claude Desktop, Codex CLI, Gemini CLI, Qwen Code) or copies the right stdio snippet for GUI-managed clients. One-time setup; afterwards the KB stays reachable from those clients **even when the StashBase app is closed**.
+**Settings → MCP** writes the StashBase MCP server entry directly into stable global configs for Claude Code, Codex CLI, and Claude Desktop. Other MCP-aware tools can use the copyable stdio snippet. One-time setup; afterwards the KB stays reachable from those clients **even when the StashBase app is closed**.
 
 The tool surface is just what the filesystem can't do, since the client is on the same machine as the KB:
 
@@ -166,7 +166,7 @@ A structured chat panel runs Claude Code and Codex inside StashBase: message bub
 * Runs the CLI already on your machine: your login, your subscription, your global config. Nothing separate to install or configure.
 * `cwd` automatically set to the current space, with that space's rules, skills, and MCP servers in view
 * Reads pass silently; file edits and commands round-trip to you for approval
-* Permission modes (default / accept-edits / plan / auto) and thinking-effort switchable in-panel
+* Claude exposes permission modes (default / accept-edits / plan / auto) plus thinking effort; Codex uses its fixed approval/sandbox policy with thinking effort in-panel
 * Sessions stored in the CLI's standard location (`~/.claude/`): start a conversation in the panel, resume it in your terminal, or the other way around
 * Multiple tabs = multiple parallel sessions; files dragged into the panel become temporary context, never KB imports
 
@@ -283,12 +283,12 @@ Early alpha. macOS arm64 and Linux x86_64 are the supported platforms today; Win
 * Event-point reconcile (space open, window focus, agent turn end, manual sync); rename/move without re-embedding
 * Conversion pipeline: PDF extraction, image OCR (local), with persisted failures + Retry
 * Screen recording → structured note with the original video attached (Gemini video understanding; key required, checked before capture starts)
-* Structured Claude chat panel: tool calls, inline diff approve/reject, permission modes, history & resume
+* Structured Claude/Codex chat panel: tool calls, inline diff approve/reject, shared history/resume shell, agent-specific controls
 * Multi-window, per-space MCP server injection, KB root migration, space snapshot import
 
 ### Evolving in V1
 
-* **Codex chat panel** — the panel shell is in place; the structured Codex session is landing now
+* **Agent chat polish** — richer controls, session ergonomics, and tighter cross-agent UI parity
 * **Recording pipeline polish** — extraction quality, noise filtering, long recordings
 * **`STASHBASE.md` schema** — V1 stays freeform natural language; a precise, checkable schema is a separate RFC
 * **Retrieval filters** — file type / time range, pushed down into the index query

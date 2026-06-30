@@ -9,18 +9,19 @@
  * bottom sends prompts, stops a running turn, takes dropped files, and
  * `@`-mentions KB files.
  *
- * This is Phase 1 of design-docs/chat-panel.md.
+ * See design-docs/architecture.md §8 for the bridge and lifecycle model.
  */
 import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { api, getWindowId, type AgentContextFile, type SessionInfo } from '../api';
+import { AGENT_META, type AgentKind } from '../agentCatalog';
 import { FILE_MIME } from '../dragMime';
 import { renderMarkdownInline } from '../markdown';
 import { useApp } from '../store/AppContext';
 import { getActiveTab, type ChatTab } from '../store/state';
 import {
-  ChevronDownIcon, ClaudeIcon, HistoryIcon, PlusIcon, NewChatIcon, FileGenericIcon, CodeIcon,
+  ChevronDownIcon, HistoryIcon, PlusIcon, NewChatIcon, FileGenericIcon, CodeIcon,
   HandIcon, ClipboardListIcon, BoltIcon, CheckIcon, DumbbellIcon, SlashSquareIcon,
-  ArrowUpIcon, EditIcon, TrashIcon, CodexIcon,
+  ArrowUpIcon, EditIcon, TrashIcon,
 } from '../icons';
 
 // ----- permission modes (composer "Modes" dropdown) ----------------------
@@ -85,37 +86,6 @@ type ServerEvent =
   | { t: 'turn-end'; isError: boolean }
   | { t: 'error'; message: string }
   | { t: 'exit' };
-
-type AgentKind = 'claude' | 'codex';
-
-const AGENT_META: Record<AgentKind, {
-  name: string;
-  shortName: string;
-  endpoint: string;
-  supportsHistory: boolean;
-  supportsModes: boolean;
-  supportsEffort: boolean;
-  Icon: ComponentType<{ className?: string }>;
-}> = {
-  claude: {
-    name: 'Claude Code',
-    shortName: 'Claude',
-    endpoint: '/ws/agent',
-    supportsHistory: true,
-    supportsModes: true,
-    supportsEffort: true,
-    Icon: ClaudeIcon,
-  },
-  codex: {
-    name: 'Codex',
-    shortName: 'Codex',
-    endpoint: '/ws/codex',
-    supportsHistory: true,
-    supportsModes: false,
-    supportsEffort: true,
-    Icon: CodexIcon,
-  },
-};
 
 let blockSeq = 0;
 const nextId = () => `b${++blockSeq}`;
@@ -685,6 +655,7 @@ export function AgentView({
         onSetMode={changeMode}
         effort={effort}
         onSetEffort={changeEffort}
+        controlsNote={meta.controlsNote}
         showModeMenu={meta.supportsModes}
         showEffortMenu={meta.supportsEffort && !meta.supportsModes}
         agentShortName={meta.shortName}
@@ -931,7 +902,14 @@ function MessageList({
       {turns.map((turn) => (
         <div className="agent-turn" key={turn.key}>
           {turn.head && <UserTurnHead block={turn.head} scrollRef={ref} />}
-          {turn.body.map((b) => <BlockView key={b.id} block={b} onPermission={onPermission} />)}
+          {turn.body.map((b) => (
+            <BlockView
+              key={b.id}
+              block={b}
+              agentShortName={agentShortName}
+              onPermission={onPermission}
+            />
+          ))}
         </div>
       ))}
       {turnActive && <div className="agent-working"><span className="agent-dot" />{agentShortName} is working…</div>}
@@ -1038,7 +1016,15 @@ function PixelMascot() {
   );
 }
 
-function BlockView({ block, onPermission }: { block: Block; onPermission: (t: string, p: string, a: boolean) => void }) {
+function BlockView({
+  block,
+  agentShortName,
+  onPermission,
+}: {
+  block: Block;
+  agentShortName: string;
+  onPermission: (t: string, p: string, a: boolean) => void;
+}) {
   switch (block.kind) {
     case 'user':
       // User messages normally render as the turn's sticky header (see
@@ -1055,7 +1041,7 @@ function BlockView({ block, onPermission }: { block: Block; onPermission: (t: st
     case 'error':
       return <div className="agent-error">{block.text}</div>;
     case 'tool':
-      return <ToolCard block={block} onPermission={onPermission} />;
+      return <ToolCard block={block} agentShortName={agentShortName} onPermission={onPermission} />;
   }
 }
 
@@ -1082,7 +1068,15 @@ const STATUS_LABEL: Record<ToolStatus, string> = {
   denied: 'Denied',
 };
 
-function ToolCard({ block, onPermission }: { block: ToolBlock; onPermission: (t: string, p: string, a: boolean) => void }) {
+function ToolCard({
+  block,
+  agentShortName,
+  onPermission,
+}: {
+  block: ToolBlock;
+  agentShortName: string;
+  onPermission: (t: string, p: string, a: boolean) => void;
+}) {
   const [open, setOpen] = useState(block.status === 'awaiting' || block.name === 'Bash');
   const diff = useMemo(() => buildDiff(block.name, block.input), [block.name, block.input]);
   const summary = toolSummary(block.name, block.input);
@@ -1101,7 +1095,7 @@ function ToolCard({ block, onPermission }: { block: ToolBlock; onPermission: (t:
 
       {block.status === 'awaiting' && block.permId && (
         <div className="agent-perm">
-          <div className="agent-perm-title">{block.permTitle ?? `Allow Claude to run ${block.name}?`}</div>
+          <div className="agent-perm-title">{block.permTitle ?? `Allow ${agentShortName} to run ${block.name}?`}</div>
           {diff && <DiffView diff={diff} />}
           {!diff && block.name === 'Bash' && (
             <pre className="agent-bash">{String(block.input.command ?? '')}</pre>
@@ -1151,6 +1145,9 @@ function DiffView({ diff }: { diff: { file: string; rows: DiffRow[] } }) {
  *  when the tool isn't a file edit. */
 function buildDiff(name: string, input: Record<string, unknown>): { file: string; rows: DiffRow[] } | null {
   const file = String(input.file_path ?? input.path ?? '');
+  if (name === 'File change') {
+    return buildCodexFileChangeDiff(input);
+  }
   if (name === 'Edit') {
     return { file, rows: lineDiff(String(input.old_string ?? ''), String(input.new_string ?? '')) };
   }
@@ -1165,6 +1162,81 @@ function buildDiff(name: string, input: Record<string, unknown>): { file: string
     return { file, rows: lineDiff('', String(input.content ?? '')) };
   }
   return null;
+}
+
+function buildCodexFileChangeDiff(input: Record<string, unknown>): { file: string; rows: DiffRow[] } | null {
+  const changes = Array.isArray(input.changes) ? input.changes : [];
+  if (changes.length === 0) return null;
+  const rows: DiffRow[] = [];
+  const files: string[] = [];
+  for (const raw of changes) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const change = raw as Record<string, unknown>;
+    const file = codexChangePath(change);
+    if (file) files.push(file);
+    const diffRows = codexChangeRows(change);
+    if (diffRows.length === 0) continue;
+    if (changes.length > 1 && file) rows.push({ type: 'ctx', text: `--- ${file}` });
+    rows.push(...diffRows);
+  }
+  if (rows.length === 0) return null;
+  const uniqueFiles = [...new Set(files)];
+  return {
+    file: uniqueFiles.length === 1 ? uniqueFiles[0] : `${uniqueFiles.length || changes.length} file changes`,
+    rows,
+  };
+}
+
+function codexChangePath(change: Record<string, unknown>): string {
+  return stringProp(change, 'path')
+    || stringProp(change, 'file_path')
+    || stringProp(change, 'filePath')
+    || stringProp(change, 'pathAfter')
+    || stringProp(change, 'path_before')
+    || stringProp(change, 'pathBefore')
+    || stringProp(change, 'uri')
+    || '';
+}
+
+function codexChangeRows(change: Record<string, unknown>): DiffRow[] {
+  const patch = stringProp(change, 'patch') || stringProp(change, 'diff') || stringProp(change, 'unifiedDiff');
+  if (patch) {
+    const rows = rowsFromUnifiedDiff(patch);
+    if (rows.length) return rows;
+  }
+  const oldStr = firstStringProp(change, ['oldText', 'old_text', 'before', 'previous', 'oldContent', 'old_content']);
+  const newStr = firstStringProp(change, ['newText', 'new_text', 'after', 'current', 'newContent', 'new_content']);
+  if (oldStr != null || newStr != null) return lineDiff(oldStr ?? '', newStr ?? '');
+  const action = stringProp(change, 'action') || stringProp(change, 'type') || '';
+  const content = firstStringProp(change, ['content', 'text']);
+  if (content != null && /add|create|write/i.test(action)) return lineDiff('', content);
+  if (content != null && /delete|remove/i.test(action)) return lineDiff(content, '');
+  return [];
+}
+
+function rowsFromUnifiedDiff(patch: string): DiffRow[] {
+  return patch.split('\n')
+    .filter((line) => !line.startsWith('diff ') && !line.startsWith('index ') && !line.startsWith('@@'))
+    .map((line): DiffRow | null => {
+      if (line.startsWith('+++') || line.startsWith('---')) return null;
+      if (line.startsWith('+')) return { type: 'add', text: line.slice(1) };
+      if (line.startsWith('-')) return { type: 'del', text: line.slice(1) };
+      return { type: 'ctx', text: line.startsWith(' ') ? line.slice(1) : line };
+    })
+    .filter((row): row is DiffRow => row != null);
+}
+
+function firstStringProp(obj: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = stringProp(obj, key);
+    if (value != null) return value;
+  }
+  return null;
+}
+
+function stringProp(obj: Record<string, unknown>, key: string): string | null {
+  const value = obj[key];
+  return typeof value === 'string' ? value : null;
 }
 
 /** Trim shared head/tail lines, show the differing middle as -/+ with a
@@ -1234,10 +1306,11 @@ function readImageDims(file: File): Promise<string | undefined> {
  *  Auto). The active mode gets a check; ⇧+Tab cycles (handled in the
  *  composer's keydown). */
 function ModeMenu({
-  mode, effort, open, disabled, wrapRef, onToggle, onPick, onSetEffort,
+  mode, effort, controlsNote, open, disabled, wrapRef, onToggle, onPick, onSetEffort,
 }: {
   mode: PermMode;
   effort: EffortLevel;
+  controlsNote: string;
   open: boolean;
   disabled: boolean;
   wrapRef: React.RefObject<HTMLDivElement | null>;
@@ -1252,7 +1325,8 @@ function ModeMenu({
       {open && (
         <div className="agent-mode-menu" role="menu">
           <div className="agent-mode-menu-head">
-            <span>Modes</span>
+            <span>Controls</span>
+            <span>{controlsNote}</span>
           </div>
           {MODES.map((m) => {
             const Icon = m.Icon;
@@ -1283,7 +1357,7 @@ function ModeMenu({
         disabled={disabled}
         aria-haspopup="menu"
         aria-expanded={open}
-        title="Permission mode (⇧+Tab)"
+        title="Agent controls (Shift+Tab)"
         onClick={onToggle}
       >
         <ActiveIcon className="agent-mode-icon" />
@@ -1327,9 +1401,10 @@ function EffortBar({ effort, onSet }: { effort: EffortLevel; onSet: (l: EffortLe
 }
 
 function EffortMenu({
-  effort, open, disabled, wrapRef, onToggle, onSetEffort,
+  effort, controlsNote, open, disabled, wrapRef, onToggle, onSetEffort,
 }: {
   effort: EffortLevel;
+  controlsNote: string;
   open: boolean;
   disabled: boolean;
   wrapRef: React.RefObject<HTMLDivElement | null>;
@@ -1340,6 +1415,10 @@ function EffortMenu({
     <div className="agent-mode-wrap" ref={wrapRef}>
       {open && (
         <div className="agent-mode-menu effort-only" role="menu">
+          <div className="agent-mode-menu-head">
+            <span>Controls</span>
+            <span>{controlsNote}</span>
+          </div>
           <EffortBar effort={effort} onSet={onSetEffort} />
         </div>
       )}
@@ -1349,7 +1428,7 @@ function EffortMenu({
         disabled={disabled}
         aria-haspopup="menu"
         aria-expanded={open}
-        title="Effort"
+        title="Agent controls"
         onClick={onToggle}
       >
         <DumbbellIcon className="agent-mode-icon" />
@@ -1361,7 +1440,7 @@ function EffortMenu({
 
 function Composer({
   phase, disabled, turnActive, active, activeFile, mode, onSetMode, effort, onSetEffort,
-  attachments, uploading, agentShortName, showModeMenu, showEffortMenu, onPickFiles, onRemoveAttachment, onSend, onStop,
+  attachments, uploading, agentShortName, controlsNote, showModeMenu, showEffortMenu, onPickFiles, onRemoveAttachment, onSend, onStop,
 }: {
   phase: 'connecting' | 'live' | 'closed';
   disabled: boolean;
@@ -1375,6 +1454,7 @@ function Composer({
   attachments: Attachment[];
   uploading: boolean;
   agentShortName: string;
+  controlsNote: string;
   showModeMenu: boolean;
   showEffortMenu: boolean;
   onPickFiles: (files: File[]) => void;
@@ -1554,6 +1634,7 @@ function Composer({
             <ModeMenu
               mode={mode}
               effort={effort}
+              controlsNote={controlsNote}
               open={modeOpen}
               disabled={disabled}
               wrapRef={modeWrapRef}
@@ -1565,6 +1646,7 @@ function Composer({
           {showEffortMenu && (
             <EffortMenu
               effort={effort}
+              controlsNote={controlsNote}
               open={modeOpen}
               disabled={disabled}
               wrapRef={modeWrapRef}

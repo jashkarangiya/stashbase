@@ -8,14 +8,13 @@
  * ChatLaunchButtons) — this panel just renders + switches between them.
  */
 import { AgentView } from './AgentView';
-import { ClaudeIcon, CodexIcon } from '../icons';
+import { agentMeta, isAgentKind } from '../agentCatalog';
 import { useApp } from '../store/AppContext';
 
 /** Brand glyph for a tab's agent, shown before its title. */
 function AgentGlyph({ agent }: { agent: string }) {
-  if (agent === 'claude') return <ClaudeIcon className="chat-tab-icon" />;
-  if (agent === 'codex') return <CodexIcon className="chat-tab-icon" />;
-  return null;
+  const Icon = agentMeta(agent).Icon;
+  return <Icon className="chat-tab-icon" />;
 }
 
 export function ChatPane() {
@@ -67,7 +66,7 @@ export function ChatPane() {
               active={tab.id === activeId}
               id={tab.id}
               title={tab.title}
-              agent={tab.agent === 'codex' ? 'codex' : 'claude'}
+              agent={isAgentKind(tab.agent) ? tab.agent : 'claude'}
             />
           </div>
         ))}

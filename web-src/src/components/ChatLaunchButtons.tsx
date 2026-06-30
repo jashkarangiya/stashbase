@@ -7,21 +7,12 @@
  * in the reducer's CHAT_TAB_CLOSE), so there's no separate hide switch.
  *
  */
-import { useEffect, useRef, type ComponentType } from 'react';
+import { useEffect, useRef } from 'react';
 import { api, type AgentsResponse } from '../api';
-import { ClaudeIcon, CodexIcon } from '../icons';
+import { AGENTS, type AgentMeta } from '../agentCatalog';
 import { useApp } from '../store/AppContext';
 import { useHoverTip } from '../hooks/useHoverTip';
 import type { ChatTab } from '../store/state';
-
-/** Agents that get their own chrome launcher, in left→right display
- *  order. Each pairs an agent id with its brand glyph; the label feeds
- *  the hover title and the spawned tab's name. Both launch into the
- *  structured chat panel; their backends differ behind the shared UI. */
-const LAUNCHERS = [
-  { id: 'claude', label: 'Claude Code', Icon: ClaudeIcon },
-  { id: 'codex', label: 'Codex', Icon: CodexIcon },
-];
 
 export function ChatLaunchButtons() {
   const { state, dispatch } = useApp();
@@ -54,13 +45,12 @@ export function ChatLaunchButtons() {
 
   return (
     <div className="chat-launchers">
-      {LAUNCHERS.map(({ id, label, Icon }) => (
+      {AGENTS.map((agent) => (
         <LaunchButton
-          key={id}
-          label={`New ${label} chat`}
-          Icon={Icon}
-          active={state.chatOpen && activeTab?.agent === id}
-          onClick={() => launch(id)}
+          key={agent.id}
+          agent={agent}
+          active={state.chatOpen && activeTab?.agent === agent.id}
+          onClick={() => launch(agent.id)}
         />
       ))}
     </div>
@@ -72,16 +62,16 @@ export function ChatLaunchButtons() {
  *  `app-chrome` drag region, where the native `title` tooltip never
  *  appears. Tip drops below — they sit at the top-right of the window. */
 function LaunchButton({
-  label,
-  Icon,
+  agent,
   active,
   onClick,
 }: {
-  label: string;
-  Icon: ComponentType;
+  agent: AgentMeta;
   active: boolean;
   onClick: () => void;
 }) {
+  const label = `New ${agent.launcherLabel} chat`;
+  const Icon = agent.Icon;
   const { tipProps, tip } = useHoverTip(label, 'bottom');
   return (
     <button

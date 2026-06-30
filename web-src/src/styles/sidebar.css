@@ -302,11 +302,11 @@
     }
 
     .mcp-client-row {
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
       align-items: center;
-      justify-content: space-between;
-      gap: 14px;
-      padding: 8px 14px;
+      gap: 12px;
+      padding: 10px 12px;
     }
 
     .mcp-client-row + .mcp-client-row {
@@ -316,29 +316,89 @@
     .mcp-client-label {
       display: inline-flex;
       align-items: center;
-      gap: 9px;
+      gap: 10px;
       min-width: 0;
     }
 
-    /* At-a-glance connection state: solid accent dot when connected,
-     * hollow grey when not — complements the Connect/Disconnect button. */
-    .mcp-status-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
+    .mcp-client-icon {
+      display: inline-grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--pane);
+      color: var(--fg);
       flex-shrink: 0;
-      border: 1.5px solid var(--border);
-      background: transparent;
     }
-    .mcp-status-dot.on {
-      border-color: var(--accent);
-      background: var(--accent);
+
+    .mcp-client-icon svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .mcp-client-copy {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
     }
 
     .mcp-client-name {
       font-size: 13px;
       font-weight: 600;
       color: var(--fg);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .mcp-client-detail {
+      font-size: 11.5px;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .mcp-status-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 98px;
+      height: 24px;
+      padding: 0 9px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--pane);
+      color: var(--muted);
+      font-size: 11.5px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    .mcp-status-pill.off {
+      border-color: var(--border);
+      background: var(--pane);
+      color: var(--muted);
+    }
+
+    .mcp-status-pill.on {
+      border-color: rgba(var(--accent-rgb), 0.32);
+      background: rgba(var(--accent-rgb), 0.08);
+      color: var(--accent);
+    }
+
+    .mcp-status-pill.pending {
+      border-color: rgba(217, 119, 6, 0.26);
+      background: rgba(217, 119, 6, 0.08);
+      color: #b45309;
+    }
+
+    .mcp-status-pill.warn {
+      border-color: rgba(220, 38, 38, 0.28);
+      background: rgba(220, 38, 38, 0.06);
+      color: var(--danger);
     }
 
     /* Compact connect/disconnect — smaller than a default modal button
