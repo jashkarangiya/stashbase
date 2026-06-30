@@ -7,7 +7,6 @@ import { ImagePreview } from './ImagePreview';
 import { MarkdownPreview } from './MarkdownPreview';
 import { PdfPreview } from './PdfPreview';
 import { CodeEditor } from './CodeEditor';
-import { StashingPlaceholder } from './StashingPlaceholder';
 import { TabStrip } from './TabStrip';
 
 /**
@@ -27,12 +26,6 @@ export function MainPane() {
   const saveStatus = activeTab?.saveStatus ?? { text: '', cls: '' };
   const hasTabs = state.tabs.length > 0;
   const emptyTab = !!activeTab && !cur;
-  // A recording's tab pops open before its analysis note exists, so its body
-  // is empty while it's still stashing. Show a calm "processing" state
-  // instead of a blank editor; it clears itself the moment the note
-  // lands (content fills) or the conversion drops out of flight.
-  const isStashingPlaceholder =
-    !!cur && cur.format === 'md' && !cur.content && state.pendingConversions.includes(cur.name);
 
   return (
     <main className={'main' + (hasTabs ? '' : ' no-file') + (cur ? ' fmt-' + cur.format : '')}>
@@ -57,8 +50,7 @@ export function MainPane() {
           </div>
         )}
         {emptyTab && <EmptyTabLanding />}
-        {isStashingPlaceholder && <StashingPlaceholder />}
-        {cur && !isStashingPlaceholder && !editMode && cur.format === 'md' && (
+        {cur && !editMode && cur.format === 'md' && (
           <MarkdownPreview name={cur.name} content={cur.content} />
         )}
         {cur && !editMode && cur.format === 'html' && (
@@ -76,7 +68,7 @@ export function MainPane() {
           // Images, like PDFs, are binary — no edit mode.
           <ImagePreview name={cur.name} />
         )}
-        {cur && !isStashingPlaceholder && editMode && cur.format === 'md' && (
+        {cur && editMode && cur.format === 'md' && (
           // Markdown is the only editable format — HTML/PDF/image are
           // read-only viewers. The editor is a single CodeMirror pane
           // (no source+preview split); save is scheduled on every edit.
@@ -96,7 +88,7 @@ export function MainPane() {
         </div>
       )}
       <FindBar />
-      {cur && !isStashingPlaceholder && cur.kind !== 'kb' && cur.format === 'md' && (
+      {cur && cur.format === 'md' && (
         <div className={'main-floating-actions' + (editMode ? ' editing' : '')}>
           {editMode && saveStatus.text && (
             <span className={'save-status' + (saveStatus.cls ? ' ' + saveStatus.cls : '')}>

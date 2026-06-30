@@ -1,30 +1,25 @@
 /**
  * PDF → markdown-with-bundle conversion, driven by `python/pdf_extract.py`.
  *
- * Wired from the upload route: whenever a `.pdf` lands in a space we
- * spawn the extractor in the background. It writes `.<sourceBasename>.md` and
- * `.<sourceBasename>_files/` alongside the PDF; on completion the note is pushed into the index directly and the pipeline picks
- * them up and the indexer embeds the new note. Both the derived note
- * and its bundle are dot-prefixed — they're app-maintained artifacts,
- * not user content, so they sit alongside `.stashbase/` / `.claude/`
- * in our "dot-prefix = system, no-prefix = user" convention. The PDF
- * itself stays on disk as a regular file — the user-facing copy.
- *
- * Hidden in the sidebar via `files.ts walk()`'s sibling-bound hide
- * rule (a `paper.pdf` next to `.paper.pdf.md` collapses the derived files
- * into the PDF row), but the indexer still picks them up so RAG sees
- * the structured content.
+ * Wired from upload/sync/retry: whenever a `.pdf` needs text extraction we
+ * spawn the extractor in the background. It writes derived Markdown and any
+ * extracted asset bundle under AppData (`derived-store.ts`), never next to
+ * the user's PDF. On completion the derived Markdown is pushed into the
+ * semantic index under the original PDF path when an API key is available.
+ * The PDF itself stays on disk as the user-facing source.
  *
  * Default `pymupdf` route uses `pymupdf4llm` for LLM-friendly markdown
  * (heading detection, table extraction, figure screenshots), falling back
  * to plain PyMuPDF text extraction when the richer layout pass fails.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { isDerivedNoteName, matchDerivedNote, NOTE_EXTS } from './format.ts';
+import { derivedNoteFor, derivedBundleFor, derivedBatchesFor, derivedDir } from './derived-store.ts';
 import { extractorSpawn } from './python-host.ts';
-import { discoverNewSources, maybeConvert, type ConversionSpec } from './conversion.ts';
+import { discoverNewSources, indexFreshDerived, maybeConvert, TransientConversionError, type ConversionSpec } from './conversion.ts';
+import { spawnOptionsForExtractor, terminateExtractorTree } from './extractor-process.ts';
 import type { ConversionProgress } from './conversion-status.ts';
 import { logger } from './log.ts';
 
@@ -32,27 +27,21 @@ const log = logger('pdf');
 const STDERR_TAIL_BYTES = 64 * 1024;
 
 export interface ConvertResult {
-  /** Absolute path of the written `.<sourceBasename>.md` (dot-prefixed app-
-   *  derived note; hidden from the sidebar via sibling-bound rules
-   *  in files.ts walk()). */
+  /** Absolute AppData path of the written derived Markdown. */
   notePath: string;
-  /** Absolute path of the `.<sourceBasename>_files/` bundle (dot-prefixed for
-   *  the same reason). */
+  /** Absolute AppData path of the extracted asset bundle. */
   bundleDir: string;
 }
 
-/** Derive the dot-prefixed sibling paths for a given PDF — the file
- *  layout the rest of this module operates on. Returns both the
- *  markdown note we'll emit and the image bundle dir, so callers
- *  don't need to repeat the naming. */
+/** Derive the AppData paths for a given PDF. Returns both the markdown note
+ *  and the extracted asset bundle dir so callers don't repeat the naming. */
 export function derivedPathsForPdf(pdfAbsPath: string): { notePath: string; bundleDir: string } {
-  const dir = path.dirname(pdfAbsPath);
-  // Derived names carry the full source filename (`paper.pdf`) so a
-  // `paper.pdf` and a `paper.png` don't collide on `.paper.pdf.md`.
-  const base = path.basename(pdfAbsPath);
+  // Derived artifacts live in per-machine app data, NEVER in the user's
+  // opened folder (see `derived-store.ts`). The PDF resume-batch scratch
+  // follows `notePath` automatically (`pdf_extract.py:_resume_dir_for`).
   return {
-    notePath: path.join(dir, `.${base}.md`),
-    bundleDir: path.join(dir, `.${base}_files`),
+    notePath: derivedNoteFor(pdfAbsPath),
+    bundleDir: derivedBundleFor(pdfAbsPath),
   };
 }
 
@@ -60,40 +49,18 @@ function cleanupDerivedPdf(pdfAbsPath: string): void {
   const { notePath, bundleDir } = derivedPathsForPdf(pdfAbsPath);
   rmSync(notePath, { force: true });
   rmSync(bundleDir, { recursive: true, force: true });
-  cleanupDerivedPdfScratch(pdfAbsPath);
+  rmSync(derivedBatchesFor(pdfAbsPath), { recursive: true, force: true });
 }
 
-function cleanupDerivedPdfScratch(pdfAbsPath: string): void {
-  const dir = path.dirname(pdfAbsPath);
-  const base = path.basename(pdfAbsPath);
-  const stem = base.replace(/\.pdf$/i, '');
-  const sourceNames = [base, stem].filter(Boolean).map(escapeRegExp).join('|');
-  const scratchRe = new RegExp(
-    `^(?:\\.{1,2}(?:${sourceNames})_files\\.(?:tmp|batch)-.*|\\.${escapeRegExp(base)}\\.md\\.tmp-.*|\\.${escapeRegExp(base)}\\.md\\.batches)$`,
-    'i',
-  );
-  let entries;
-  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
-  for (const ent of entries) {
-    if (scratchRe.test(ent.name)) {
-      rmSync(path.join(dir, ent.name), { recursive: ent.isDirectory(), force: true });
-    }
-  }
-}
-
-function escapeRegExp(raw: string): string {
-  return raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/** Given a POSIX-relative path to a dot-prefixed app-derived note
+/** Given a POSIX-relative path to a legacy dot-prefixed derived note
  *  (`.paper.pdf.md` / `.shot.png.md`), return the relative path of its
  *  parent binary source (PDF / image) when that source exists on disk —
  *  or null if the shape doesn't match or the source is gone. The source
  *  filename is encoded in the derived name, so this is a direct read +
  *  existence check (no extension probing). Used by the search routes to
  *  rewrite hits so users see the PDF / image row rather than the hidden
- *  derived note. `baseAbs` is the root the relative path resolves against
- *  (space root for /api/search, kb root for /api/kb/search). */
+ *  derived note. `baseAbs` is the folder root for relative GUI hits; absolute
+ *  library hits already carry their full source identity. */
 function originalForDerivedNote(noteRel: string, baseAbs: string): string | null {
   // The derived name encodes the full source filename, so the source is
   // read straight off it — no extension probing.
@@ -110,8 +77,8 @@ function originalForLegacyDerivedNote(noteRel: string, baseAbs: string): string 
   const m = base.match(new RegExp(`^\\.(.+)\\.(${extAlt})$`, 'i'));
   if (!m) return null;
   const stem = m[1];
-  // Current derived notes (`.paper.pdf.md`) are handled above. Treat
-  // extension-less legacy names (`.paper.md`) as derived only when a
+  // Extension-bearing legacy artifacts (`.paper.pdf.md`) are handled above.
+  // Treat extension-less legacy names (`.paper.md`) as derived only when a
   // source with the same stem exists next to them; this keeps ordinary
   // user-authored hidden notes visible unless they collide with a legacy
   // converter artifact.
@@ -124,19 +91,20 @@ function originalForLegacyDerivedNote(noteRel: string, baseAbs: string): string 
   return null;
 }
 
-/** The single remap-or-drop rule every search route applies to a hit's
- *  path so a hidden derived note is never shown to the user:
+/** Compatibility remap for legacy dot-prefixed derived notes that may still
+ *  exist in user folders. Current PDF/image derived Markdown lives in AppData
+ *  and search routes map it to the source file before display.
  *
- *    • app-derived note (`.paper.pdf.md` / `.shot.png.md`) with a live source
+ *    • legacy derived note (`.paper.pdf.md` / `.shot.png.md`) with a live source
  *        → the source PDF / image (the clickable, openable original);
  *    • derived note whose source is gone (orphan)
  *        → `null`, i.e. drop the hit — the bare `.md` is hidden in the
  *          sidebar and must never surface as an unopenable row;
  *    • any normal file → unchanged.
  *
- *  `rel` is relative to `baseAbs` (space root for the GUI routes, KB root
- *  for MCP). Centralised here so `/api/search`, `/api/keyword-search`,
- *  and `/api/kb/search` can't drift apart. */
+ *  `rel` is relative to `baseAbs` for GUI routes, and may already be absolute
+ *  for library/MCP routes. Centralised here so `/api/search`,
+ *  `/api/keyword-search`, and `/api/library/search` can't drift apart. */
 export function displayPathForHit(rel: string, baseAbs: string): string | null {
   const source = originalForDerivedNote(rel, baseAbs);
   if (source) return source;
@@ -156,6 +124,7 @@ function convertPdf(
   signal?: AbortSignal,
 ): Promise<ConvertResult> {
   const { notePath, bundleDir } = derivedPathsForPdf(pdfAbsPath);
+  mkdirSync(derivedDir(), { recursive: true });
 
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -165,13 +134,13 @@ function convertPdf(
     const { cmd, args } = extractorSpawn('pdf', 'pdf_extract.py', [
       pdfAbsPath, notePath, bundleDir,
     ]);
-    const proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(cmd, args, spawnOptionsForExtractor());
     let stderr = '';
     let stderrLineBuffer = '';
     let cancelled = false;
     const onAbort = () => {
       cancelled = true;
-      proc.kill('SIGTERM');
+      terminateExtractorTree(proc);
     };
     signal?.addEventListener('abort', onAbort, { once: true });
     const handleStderrLine = (line: string) => {
@@ -205,14 +174,15 @@ function convertPdf(
         stderrLineBuffer = '';
       }
       if (cancelled) {
-        reject(new Error('pdf_extract cancelled'));
+        reject(new TransientConversionError('pdf_extract cancelled'));
         return;
       }
       if (code === 0) {
         resolve({ notePath, bundleDir });
       } else {
         const tail = stderr.trim().split('\n').slice(-3).join('\n');
-        reject(new Error(`pdf_extract exit ${code}: ${tail || '(no stderr)'}`));
+        const message = `pdf_extract exit ${code}: ${tail || '(no stderr)'}`;
+        reject(code === null ? new TransientConversionError(message) : new Error(message));
       }
     });
   });
@@ -234,9 +204,12 @@ export function maybeConvertPdf(pdfAbsPath: string): void {
   maybeConvert(pdfAbsPath, PDF_SPEC);
 }
 
-/** Reconcile hook: convert any untracked `.pdf` under the space (dropped
- *  in via git checkout / external copy / `mv`), back-filling a `done`
- *  record when the sibling note already exists. */
-export function discoverNewPdfs(spaceAbs: string): void {
-  discoverNewSources(spaceAbs, PDF_SPEC);
+/** Reconcile hook: convert any untracked `.pdf` under the folder (dropped
+ *  in via git checkout / external copy / `mv`). */
+export function discoverNewPdfs(folderAbs: string): void {
+  discoverNewSources(folderAbs, PDF_SPEC);
+}
+
+export function indexFreshPdf(pdfAbsPath: string): Promise<boolean> {
+  return indexFreshDerived(pdfAbsPath, PDF_SPEC);
 }

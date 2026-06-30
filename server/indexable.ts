@@ -3,8 +3,8 @@ import { detectFormat } from './format.ts';
 import { analyzeHtml } from './html.ts';
 
 /** Directories that are usually generated, dependency caches, VCS state,
- *  or source-project internals. If a user accidentally points the KB root
- *  at a code checkout, these skips keep indexing bounded and predictable. */
+ *  or source-project internals. If a user opens a code checkout, these
+ *  skips keep indexing bounded and predictable. */
 export const INDEX_EXCLUDED_DIRS = new Set<string>([
   '.cache',
   '.git',
@@ -64,12 +64,11 @@ function isGeneratedPdfBatchCacheDir(seg: string): boolean {
 }
 
 /** Legacy agent-maintained sidecar files. The metadata subsystem was
- *  removed, but existing knowledge bases may still have these on disk;
- *  keep them out of the index so they don't surface as bogus hits.
- *  (STASHBASE.md is intentionally indexable and is NOT listed here.) */
+ *  removed, but existing libraries may still have these on disk;
+ *  keep them out of the index so they don't surface as bogus hits. */
 const EXCLUDED_BASENAMES = new Set<string>([
   'file-metadata.md',
-  'space-metadata.md',
+  'folder-metadata.md',
 ]);
 
 export function shouldIndexFilePath(relPath: string): boolean {
@@ -80,11 +79,8 @@ export function shouldIndexFilePath(relPath: string): boolean {
   return !dipsIntoIndexExcludedDir(relPath);
 }
 
-export function shouldIndexKbRel(kbRelPath: string): boolean {
-  const norm = kbRelPath.replace(/\\/g, '/').replace(/^\/+/, '');
-  const slash = norm.indexOf('/');
-  if (slash < 0) return false;
-  return shouldIndexFilePath(norm.slice(slash + 1));
+export function shouldIndexSourcePath(sourcePath: string): boolean {
+  return shouldIndexFilePath(sourcePath);
 }
 
 export function indexableFileSizeError(absPath: string): string | null {

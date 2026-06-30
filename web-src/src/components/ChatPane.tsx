@@ -20,11 +20,11 @@ function AgentGlyph({ agent }: { agent: string }) {
 
 export function ChatPane() {
   const { state, dispatch } = useApp();
-  const space = state.space;
+  const folder = state.folder;
   const tabs = state.chatTabs;
   const activeId = state.activeChatTabId;
 
-  if (!space) return null;
+  if (!folder) return null;
 
   return (
     <div className="chat-pane-shell">

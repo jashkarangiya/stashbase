@@ -95,7 +95,7 @@
       gap: 4px;
     }
 
-    /* Centered space name, VSCode-titlebar style. Absolutely positioned
+    /* Centered folder name, VSCode-titlebar style. Absolutely positioned
      * so traffic lights (left) and embedder picker (right) can grow
      * independently without nudging it off-center. `max-width` leaves
      * a guard band so a long name truncates with ellipsis instead of

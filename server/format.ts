@@ -7,11 +7,10 @@
  *     the single source of truth and is indexed directly — markdown
  *     as-is; HTML via a cheap in-memory "→ heading markdown" optimization
  *     at MFS-feed time (`analyzeHtml`), NOT materialized to disk.
- *   - **Unstructured** (`UNSTRUCTURED_SOURCE_EXTS`: pdf, images): on
- *     import a converter EXTRACTS structured content into a hidden
- *     `.<sourceBasename>.md` derived note (pdf_extract / ocr_extract);
- *     that derived markdown is the single source of truth for the file's
- *     indexed content. The binary source stays only for viewing.
+ *   - **Convertible** (`UNSTRUCTURED_SOURCE_EXTS`: pdf, images): a converter
+ *     extracts text into AppData-derived Markdown. That text layer feeds
+ *     search; PDFs also use it for Agent text reading, while images remain
+ *     the read/view source.
  * So MFS only ever sees markdown; all format knowledge lives here / in
  * the converters, never in MFS.
  *
@@ -27,8 +26,8 @@
 export type FileFormat = 'md' | 'html';
 
 /** Everything the renderer can open in the file tree: the structured
- *  note formats plus the unstructured binaries (pdf, image) that are
- *  viewable but indexed only via their hidden derived `.md`. Kept
+ *  note formats plus the convertible binaries (pdf, image) that are
+ *  viewable but searched via AppData-derived Markdown. Kept
  *  distinct from `FileFormat` so the indexing pipeline (chunker, daemon
  *  upsert, scan_diff) only ever sees structured `md` / `html`. */
 export type ViewerFormat = FileFormat | 'pdf' | 'image';
@@ -47,18 +46,15 @@ const NOTE_FORMATS: Array<{ exts: string[]; format: FileFormat }> = [
  *  Single source for the alternation baked into the regexes below. */
 export const NOTE_EXTS: readonly string[] = NOTE_FORMATS.flatMap((f) => f.exts);
 
-/** Unstructured source extensions — PDFs (pdf_extract) and images
- *  (ocr_extract). On import each is extracted into a hidden derived note
- *  whose name carries the FULL source filename incl. extension
- *  (`report.pdf` → `.report.pdf.md`), so `report.pdf` and `report.png`
- *  don't collide on `.report.md` and the remap back to the source is
- *  deterministic (strip the leading `.` and trailing `.md` — no probing). */
+/** Convertible source extensions — PDFs (pdf_extract) and images
+ *  (ocr_extract). Current derived Markdown lives in AppData. The hidden
+ *  sibling-note regex below remains for legacy cleanup/remap only. */
 const UNSTRUCTURED_SOURCE_EXTS = ['pdf', 'png', 'jpg', 'jpeg', 'webp'] as const;
 
 const NOTE_EXT_ALT = NOTE_EXTS.join('|');
 const SRC_EXT_ALT = UNSTRUCTURED_SOURCE_EXTS.join('|');
 const NOTE_EXT_RE = new RegExp(`\\.(${NOTE_EXT_ALT})$`, 'i');
-/** `<dir>/.<sourceBasename>.md` — an app-derived hidden note, where
+/** Legacy `<dir>/.<sourceBasename>.md` — an app-derived hidden note, where
  *  `sourceBasename` is the full source filename incl. extension. Capture
  *  1 = dir (trailing slash kept), capture 2 = the source basename. The
  *  required source extension is what keeps a user's own hidden `.foo.md`
@@ -75,10 +71,9 @@ export function isNoteName(name: string): boolean {
 }
 
 
-/** True when a path/basename has the app-derived hidden-note shape
- *  (`.<sourceBasename>.md`, e.g. `.report.pdf.md`). Used by search
- *  remap/drop and the sidebar hide rule so a hidden derived note never
- *  leaks. */
+/** True when a path/basename has the legacy hidden-note shape
+ *  (`.<sourceBasename>.md`, e.g. `.report.pdf.md`). Used for cleanup/remap
+ *  so old on-disk derived notes do not leak. */
 export function isDerivedNoteName(pathOrName: string): boolean {
   return DERIVED_NOTE_RE.test(pathOrName);
 }
@@ -114,6 +109,15 @@ const VIEWER_ONLY_FORMATS: Array<{ pattern: RegExp; format: ViewerFormat }> = [
  *  derived-note remap to probe for an image original. */
 export function isImageFile(name: string): boolean {
   return IMAGE_PATTERN.test(name);
+}
+
+/** True for an unstructured **convertible source** (PDF or image) — files
+ *  whose searchable text comes from an app-data derived note and are
+ *  indexed under their own path. They are NOT directly index-readable
+ *  (raw bytes would be garbage), so reconcile must not treat them as plain
+ *  notes; it lets the conversion path own their index entry. */
+export function isConvertibleSource(name: string): boolean {
+  return /\.pdf$/i.test(name) || isImageFile(name);
 }
 
 const NOTE_FORMAT_RES: Array<{ re: RegExp; format: FileFormat }> = NOTE_FORMATS.map((f) => ({

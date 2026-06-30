@@ -1,27 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
-import { FilesViewIcon, RecordIcon, SearchIcon, SettingsIcon, StopIcon } from '../icons';
+import { FilesViewIcon, SearchIcon, SettingsIcon } from '../icons';
 import { useApp } from '../store/AppContext';
-import { api } from '../api';
 import { openSettings } from './SettingsModal';
-import { RequireGeminiKeyModal } from './embedder/RequireGeminiKeyModal';
 import { useHoverTip } from '../hooks/useHoverTip';
-
-interface CaptureBridge {
-  /** Start screen recording → Gemini video understanding → note. */
-  startRecording?: (context?: { space?: string; dir?: string }) => void;
-  stopRecording?: () => void;
-  onRecordingState?: (handler: (recording: boolean) => void) => (() => void);
-}
-
-function captureBridge(): CaptureBridge | undefined {
-  return (window as { electron?: CaptureBridge }).electron;
-}
 
 /**
  * Narrow left rail (à la VS Code / Obsidian) holding one icon per
  * sidebar view. Two mutually-exclusive views:
  *
- *   - files   → KB-root files + space-scoped tree
+ *   - files   → folder-home files + folder-scoped tree
  *   - search  → search input + result list
  *
  * Exactly one icon is "active" at a time — the active state is bound
@@ -32,58 +18,8 @@ function captureBridge(): CaptureBridge | undefined {
  */
 export function ActivityBar() {
   const { state, dispatch, actions } = useApp();
-  const stateRef = useRef(state);
-  useEffect(() => { stateRef.current = state; }, [state]);
 
-  // Screen recording trigger (desktop app only). The button doubles as
-  // the stop control while recording — main pushes the state so it stays
-  // in sync no matter how recording was started or stopped (e.g. the
-  // macOS recording indicator).
-  const [recording, setRecording] = useState(false);
-  const [needGeminiKey, setNeedGeminiKey] = useState(false);
-  const [pendingRecordingContext, setPendingRecordingContext] = useState<{ space: string; dir: string } | null>(null);
-  const isElectron = !!captureBridge();
-  useEffect(() => captureBridge()?.onRecordingState?.(setRecording), []);
-
-  const recordLabel = recording ? 'Stop recording' : 'Record screen (video understanding)';
-  const recordTip = useHoverTip(recordLabel);
   const settingsTip = useHoverTip('Settings');
-
-  async function toggleRecording() {
-    const bridge = captureBridge();
-    if (recording) { bridge?.stopRecording?.(); return; }
-    if (state.welcomeVisible || !state.space) {
-      actions.toast('Open a space before starting a recording.', { level: 'warning' });
-      return;
-    }
-    const target = { space: state.space, dir: state.activeFolder };
-    // Recording is Gemini-only (no local fallback) — check the key BEFORE
-    // capture starts, so the user never loses a recording to a missing key.
-    // No key → pop the add-key modal (mirrors the embedder gate) and start
-    // recording once it's saved, rather than bouncing the user to Settings.
-    try {
-      const { hasKey } = await api.getGeminiKey();
-      if (!hasKey) {
-        if (stateRef.current.welcomeVisible || stateRef.current.space !== target.space) {
-          actions.toast('Recording was not started because the space changed.', { level: 'warning' });
-          return;
-        }
-        setPendingRecordingContext(target);
-        setNeedGeminiKey(true);
-        return;
-      }
-    } catch {
-      actions.toast('Could not verify the Gemini key, so recording was not started. Try again when StashBase is connected.', {
-        level: 'error',
-      });
-      return;
-    }
-    if (stateRef.current.welcomeVisible || stateRef.current.space !== target.space) {
-      actions.toast('Recording was not started because the space changed.', { level: 'warning' });
-      return;
-    }
-    bridge?.startRecording?.(target);
-  }
 
   /** VSCode rail semantics: clicking the *active* view toggles the
    *  panel collapsed; clicking another view (or any view while
@@ -121,40 +57,6 @@ export function ActivityBar() {
       >
         <SearchIcon />
       </ActivityIcon>
-      {/* Screen recording — desktop only. Video understanding (recording →
-          Gemini). Doubles as the stop control while recording. */}
-      {isElectron && (
-        <button
-          type="button"
-          className={'activity-bar-btn' + (recording ? ' recording' : '')}
-          onClick={toggleRecording}
-          aria-label={recordLabel}
-          aria-pressed={recording}
-          {...recordTip.tipProps}
-        >
-          {recording ? <StopIcon /> : <RecordIcon />}
-          {recordTip.tip}
-        </button>
-      )}
-      {needGeminiKey && (
-        <RequireGeminiKeyModal
-          onSaved={() => {
-            const target = pendingRecordingContext;
-            setNeedGeminiKey(false);
-            setPendingRecordingContext(null);
-            if (!target) return;
-            if (stateRef.current.welcomeVisible || stateRef.current.space !== target.space) {
-              actions.toast('Recording was not started because the space changed.', { level: 'warning' });
-              return;
-            }
-            captureBridge()?.startRecording?.(target);
-          }}
-          onLater={() => {
-            setNeedGeminiKey(false);
-            setPendingRecordingContext(null);
-          }}
-        />
-      )}
       {/* Settings pinned to the bottom of the rail, VSCode-style. The
           spacer above (margin-top:auto on this button) pushes it down
           so view toggles stay grouped at the top. */}

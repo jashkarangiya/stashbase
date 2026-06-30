@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, assetUrl, errorMessage } from '../api';
 import { useApp } from '../store/AppContext';
+import { getConversionFailure } from '../store/fileReadiness';
 
 /**
  * In-pane viewer for a standalone image file. The image binary is
@@ -36,15 +37,15 @@ export function ImagePreview({ name }: { name: string }) {
   const { state } = useApp();
   const src = useMemo(() => assetUrl(name), [name]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const currentRef = useRef({ space: state.space, name });
-  currentRef.current = { space: state.space, name };
+  const currentRef = useRef({ folderPath: state.folderPath, name });
+  currentRef.current = { folderPath: state.folderPath, name };
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   const [scale, setScale] = useState(1);
   const [retryBusy, setRetryBusy] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState(false);
   const alt = name.split('/').pop() ?? name;
-  const failure = state.conversionFailures.find((f) => f.path === name);
+  const failure = getConversionFailure(state, name);
   const failureMessage = failure ? imageOcrFailureMessage(failure.lastError) : '';
   // Device pixel ratio: the baseline (100%) maps one image pixel to one
   // physical pixel, so a Retina screenshot shows at captured size + sharp.
@@ -88,12 +89,12 @@ export function ImagePreview({ name }: { name: string }) {
   async function onRetry() {
     setRetryBusy(true);
     setRetryError(null);
-    const spaceAtStart = state.space;
+    const folderPathAtStart = state.folderPath;
     const nameAtStart = name;
     const stillCurrent = () =>
-      currentRef.current.space === spaceAtStart && currentRef.current.name === nameAtStart;
+      currentRef.current.folderPath === folderPathAtStart && currentRef.current.name === nameAtStart;
     try {
-      await api.retryConversion(name, { space: spaceAtStart || undefined });
+      await api.retryConversion(name, { folder: folderPathAtStart || undefined });
       // The failures list / banner clear on the next index-status poll.
     } catch (err: unknown) {
       if (!stillCurrent()) return;

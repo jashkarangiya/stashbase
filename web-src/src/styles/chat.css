@@ -339,7 +339,7 @@
     }
     /* Time and actions share the one right-hand slot: time shows at rest,
      * hover swaps it for edit/delete (toggling `display` so neither
-     * reserves the other's space — time stays flush-right at rest). */
+     * reserves the other's folder — time stays flush-right at rest). */
     .agent-history-row-actions {
       display: none;
       gap: 1px;

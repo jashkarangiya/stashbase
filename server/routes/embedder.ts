@@ -9,9 +9,9 @@
  */
 import express from 'express';
 import { logger, errorMessage } from '../log.ts';
-import { currentWindowId, getCurrentSpace } from '../space.ts';
+import { currentWindowId, getCurrentFolder } from '../folder.ts';
 import { getApiKey, getEmbedderProvider, setApiKey } from '../app-config.ts';
-import { bootBindAllSpaces, resetIndexerRuntime, scheduleIndexerSync } from '../state.ts';
+import { bootBindAllFolders, resetIndexerRuntime, scheduleIndexerSync } from '../state.ts';
 import { sendError, validateOpenAIKey } from '../http.ts';
 
 const log = logger('routes/embedder');
@@ -44,8 +44,8 @@ export function mount(app: express.Express): void {
     }
     try {
       await resetIndexerRuntime({ forgetBindings: true });
-      await bootBindAllSpaces();
-      const cur = getCurrentSpace();
+      await bootBindAllFolders();
+      const cur = getCurrentFolder();
       if (cur) {
         scheduleIndexerSync(cur, 'embedder key set', currentWindowId());
       }
@@ -66,7 +66,7 @@ export function mount(app: express.Express): void {
     }
     try {
       await resetIndexerRuntime({ forgetBindings: true });
-      await bootBindAllSpaces();
+      await bootBindAllFolders();
     } catch (err: unknown) {
       log.warn(`key delete: runtime reset failed: ${errorMessage(err)}`);
     }

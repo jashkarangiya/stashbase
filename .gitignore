@@ -21,6 +21,10 @@ package-lock.json
 # the repo's design-doc maintenance loop.
 update-use-cases.md
 
+# Chinese mirrors / drafts. The committed docs are English-only
+# (see CLAUDE.md); Chinese Markdown variants stay local.
+*.zh.md
+
 # Per-space sidecars StashBase itself writes when the repo is opened
 # as a space. Never meant to travel with the repo.
 .stashbase/

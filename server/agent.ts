@@ -4,7 +4,7 @@
  * stream of structured panel events (text / thinking / tool calls /
  * permission prompts), so the renderer can paint a VSCode-style chat
  * panel instead of a terminal. One session per chat tab; switching
- * spaces tears every session down (the SDK's cwd is then stale).
+ * folders tears every session down (the SDK's cwd is then stale).
  *
  * Auth: the SDK reads the same credential store the user's `claude`
  * login populated (Keychain / `~/.claude`), so a Pro/Max subscription
@@ -50,7 +50,7 @@ import {
   type SpawnedProcess,
 } from '@anthropic-ai/claude-agent-sdk';
 import { logger, errorMessage } from './log.ts';
-import { getCurrentSpace, runWithWindowId } from './space.ts';
+import { getCurrentFolder, runWithWindowId } from './folder.ts';
 import { buildStashbasePreamble } from './agent-preamble.ts';
 
 const log = logger('agent');
@@ -189,16 +189,16 @@ class AgentSession {
 
   private async start(): Promise<void> {
     if (this.closed) return;
-    const cwd = getCurrentSpace();
+    const cwd = getCurrentFolder();
     if (!cwd) {
-      this.send({ t: 'error', message: 'No space open.' });
+      this.send({ t: 'error', message: 'No folder open.' });
       this.finish();
       return;
     }
     if (this.closed) return;
     if (this.resume && !(await resumeMatchesCwd(this.resume, cwd))) {
       if (this.closed) return;
-      this.send({ t: 'error', message: 'That session belongs to a different space.' });
+      this.send({ t: 'error', message: 'That session belongs to a different folder.' });
       this.finish();
       return;
     }
@@ -212,9 +212,9 @@ class AgentSession {
           permissionMode: 'default',
           // Orient the panel inside StashBase. settingSources below loads
           // CLAUDE.md / skills / MCP, but nothing tells the model it's in a
-          // StashBase space, what search_kb/reindex are for, or the house
+          // StashBase folder, what search_library/reindex are for, or the house
           // rules (those reach the model only via the advisory MCP
-          // `instructions` field + an optional kb_info call). Inject that
+          // `instructions` field + an optional library_info call). Inject that
           // deterministically as a system-prompt append. See
           // agent-preamble.ts and architecture.md §8.4.
           systemPrompt: { type: 'preset', preset: 'claude_code', append: buildStashbasePreamble(cwd) },
@@ -227,9 +227,9 @@ class AgentSession {
           // (unlike permissionMode), so it's fixed for the session's lifetime
           // — the renderer reconnects to change it. Omit → SDK default ('high').
           ...(this.effort ? { effort: this.effort } : {}),
-          // Load the user's global config + the space's project/local
+          // Load the user's global config + the folder's project/local
           // settings so the panel sees the same CLAUDE.md, skills, and
-          // MCP servers the terminal Claude does (incl. StashBase's KB
+          // MCP servers the terminal Claude does (incl. StashBase's library
           // MCP wired into ~/.claude.json). Without this the SDK runs
           // bare — no project context, no MCP.
           settingSources: ['user', 'project', 'local'],
@@ -468,7 +468,7 @@ function stringifyToolResult(content: unknown): string {
   return content == null ? '' : JSON.stringify(content);
 }
 
-/** Live agent sessions — one per structured chat tab. Space switch tears
+/** Live agent sessions — one per structured chat tab. Folder switch tears
  *  them all down (the SDK cwd is then meaningless). */
 const sessions = new Set<AgentSession>();
 
@@ -485,7 +485,7 @@ export function attachAgentWebSocket(ws: WebSocket, windowId = 'default', effort
 }
 
 /** Kill every live agent session (optionally for one window). Called on
- *  space switch / close — the session's cwd no longer makes sense. */
+ *  folder switch / close — the session's cwd no longer makes sense. */
 export function killActiveAgent(windowId?: string): void {
   for (const session of [...sessions]) {
     if (!windowId || session.windowId === windowId) {
@@ -493,16 +493,6 @@ export function killActiveAgent(windowId?: string): void {
       sessions.delete(session);
     }
   }
-}
-
-export function __activeAgentSessionCountForTest(): number {
-  return sessions.size;
-}
-
-export function __setAgentSessionForTest(session: { windowId: string; dispose: () => void }): () => void {
-  const testSession = session as unknown as AgentSession;
-  sessions.add(testSession);
-  return () => sessions.delete(testSession);
 }
 
 function normalizeAgentWindowId(windowId: string | null | undefined): string {

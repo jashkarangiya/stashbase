@@ -2,7 +2,7 @@
  * Settings → Embedding panel. V1 fixes the embedder to OpenAI, so this
  * is just the OpenAI API key: add / change / remove. With no key set,
  * indexing and search are disabled (files still save and preview); the
- * `RequireApiKeyModal` auto-pop on space load lives in
+ * `RequireApiKeyModal` auto-pop on folder load lives in
  * `EmbedderRequireKeyGate` so it fires whether or not Settings is open.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';

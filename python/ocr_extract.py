@@ -2,7 +2,7 @@
 """Image → OCR text note.
 
 Invoked by `server/image.ts` after the user drops / pastes an image
-into a space. Runs RapidOCR (ONNX, bundled Chinese+English models, no
+into a folder. Runs RapidOCR (ONNX, bundled Chinese+English models, no
 system binary like tesseract) over the image and writes a derived note
 (`.<stem>.md`, dot-prefixed because it's an app-maintained artifact
 rather than user content) alongside the image. The image itself stays

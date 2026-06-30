@@ -1,5 +1,6 @@
 import { api } from '../api';
 import { useApp } from '../store/AppContext';
+import { getConversionFailure } from '../store/fileReadiness';
 import { Menu, type MenuItem } from './Menu';
 
 /** Drag-import veil. Visibility flows from the global drag handler in
@@ -17,7 +18,7 @@ export function ContextMenu() {
   const { state, dispatch, actions } = useApp();
   if (!state.ctxMenu) return null;
   const { x, y, target, kind } = state.ctxMenu;
-  const spaceAtOpen = state.space;
+  const folderPathAtOpen = state.folderPath;
   const close = () => dispatch({ type: 'CTX_MENU', menu: null });
 
   // "Retry conversion" is only meaningful when the target is a PDF or
@@ -26,7 +27,7 @@ export function ContextMenu() {
   // route deletes the derived `.<stem>.md` (+ PDF `_files/`) before
   // re-running. Membership already implies the file is a PDF / image.
   const conversionFailure = kind === 'file'
-    ? state.conversionFailures.find((f) => conversionFailureMatchesTarget(f.path, target))
+    ? getConversionFailure(state, target)
     : undefined;
   const canRetryConversion = Boolean(conversionFailure);
 
@@ -47,7 +48,7 @@ export function ContextMenu() {
             // banner flipping `failed` → in-flight → done.
             onSelect: () => {
               actions.toast('Retrying text extraction…', { level: 'info' });
-              void api.retryConversion(target, { space: spaceAtOpen || undefined })
+              void api.retryConversion(target, { folder: folderPathAtOpen || undefined })
                 .then(() => actions.refreshIndexState())
                 .catch((err) => {
                   const msg = err instanceof Error ? err.message : String(err);
@@ -67,14 +68,6 @@ export function ContextMenu() {
   ];
 
   return <Menu anchor={{ x, y }} items={items} onClose={close} />;
-}
-
-function conversionFailureMatchesTarget(failurePath: string, target: string): boolean {
-  if (failurePath === target) return true;
-  const slash = target.lastIndexOf('/');
-  const dir = slash >= 0 ? target.slice(0, slash + 1) : '';
-  const base = slash >= 0 ? target.slice(slash + 1) : target;
-  return failurePath === `${dir}.${base}.md`;
 }
 
 /** OS-appropriate label for the reveal-in-file-manager action. macOS

@@ -6,12 +6,11 @@
  * to requests by an auto-incrementing id. Auto-respawns if the daemon
  * dies (in-flight requests get rejected with the exit info).
  *
- * The daemon is anchored at the **KB root** for disk scans: every space
- * lives under `<kb_root>/<space>/...`. The Milvus DB itself is
- * per-machine app data (see `local-data.ts`) so iCloud-synced
- * Documents folders never carry WAL / lock-heavy database files. The
- * Node side ensures each known space is `bind_space`-ed (recorded
- * here so a respawn can replay them).
+ * The daemon owns ONE global Milvus DB in per-machine app data (see
+ * `local-data.ts:globalVectorStoreDir`) and is **not** anchored to a default
+ * folder home: every opened folder registers an **absolute root** and is indexed
+ * into the one collection, keyed by absolute path. The Node side records
+ * each bound root here so a respawn can replay them.
  *
  * Python lives in `<project>/python/.venv.nosync/bin/python` after the user
  * runs `pnpm setup:python`. In packaged Electron a portable Python
@@ -27,7 +26,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { logger } from './log.ts';
-import { vectorStoreDirForKb } from './local-data.ts';
+import { globalVectorStoreDir } from './local-data.ts';
 
 const log = logger('mfs');
 
@@ -66,7 +65,7 @@ const CALL_TIMEOUT_MS = 10 * 60_000;
  *  call() — pending forever. */
 const READY_TIMEOUT_MS = 90_000;
 
-export interface BindSpaceArgs {
+export interface BindFolderArgs {
   provider: 'openai';
   apiKey?: string;
   model?: string;
@@ -84,28 +83,10 @@ class MfsDaemon extends EventEmitter {
    *  the value at config time — if it changed, re-issue the config op. */
   private generation = 0;
 
-  /** KB-root passed to every Python child via `--kb-root`. Configured
-   *  exactly once via `configure()` before the first `ensureReady()`. */
-  private kbRoot: string | null = null;
-
-  /** Every space the server has asked us to bind. Keyed by the
-   *  kb-root-relative space name (e.g. `cs183b` or `work/research`).
-   *  Persisted in memory so we can replay them after a respawn — the
-   *  Python child loses its `_bindings` map on exit. */
-  private bindings = new Map<string, BindSpaceArgs>();
-
-  /** Set the KB root before the first spawn. Must be called once at
-   *  startup; later spawns reuse the same value. Idempotent on the
-   *  same path. */
-  configure(opts: { kbRoot: string }): void {
-    if (this.kbRoot !== null && this.kbRoot !== opts.kbRoot) {
-      if (this.proc || this.readyP) {
-        throw new Error(`kbRoot already configured to ${this.kbRoot}; close daemon before reconfigure`);
-      }
-      this.bindings.clear();
-    }
-    this.kbRoot = opts.kbRoot;
-  }
+  /** Every folder root the server has asked us to bind. Keyed by the
+   *  absolute POSIX folder root. Persisted in memory so we can replay them
+   *  after a respawn — the Python child loses its bound set on exit. */
+  private bindings = new Map<string, BindFolderArgs>();
 
   /** Spawn (idempotent) and resolve once the daemon emits `ready`. */
   async ensureReady(): Promise<void> {
@@ -120,13 +101,13 @@ class MfsDaemon extends EventEmitter {
     return this.generation;
   }
 
-  /** Issue a `bind_space` op, recording the binding for replay on a
+  /** Issue a `bind_folder` op, recording the binding for replay on a
    *  later respawn. Safe to call repeatedly with the same args (the
    *  daemon-side op is idempotent). */
-  async bindSpace(space: string, cfg: BindSpaceArgs): Promise<void> {
-    this.bindings.set(space, cfg);
-    await this.call('bind_space', {
-      space,
+  async bindFolder(folder: string, cfg: BindFolderArgs): Promise<void> {
+    this.bindings.set(folder, cfg);
+    await this.call('bind_folder', {
+      folder,
       provider: cfg.provider,
       ...(cfg.apiKey ? { api_key: cfg.apiKey } : {}),
       ...(cfg.model ? { model: cfg.model } : {}),
@@ -135,20 +116,18 @@ class MfsDaemon extends EventEmitter {
   }
 
   /** Drop the renderer-side binding entry AND ask the daemon to stop
-   *  routing new files for the space. Existing rows stay searchable
+   *  routing new files for the folder. Existing rows stay searchable
    *  until explicit delete. */
-  async unbindSpace(space: string): Promise<void> {
-    this.bindings.delete(space);
+  async unbindFolder(folder: string): Promise<void> {
+    this.bindings.delete(folder);
     if (this.proc) {
-      try { await this.call('unbind_space', { space }); }
-      catch (err) { log.warn(`unbind_space ${space} failed: ${(err as Error).message}`); }
+      try { await this.call('unbind_folder', { folder }); }
+      catch (err) { log.warn(`unbind_folder ${folder} failed: ${(err as Error).message}`); }
     }
   }
 
-  /** Snapshot of every space currently bound on the renderer side.
-   *  Used by the boot path to seed all spaces under kbRoot before the
-   *  first search. */
-  knownBindings(): ReadonlyMap<string, BindSpaceArgs> {
+  /** Snapshot of every folder currently bound on the renderer side. */
+  knownBindings(): ReadonlyMap<string, BindFolderArgs> {
     return this.bindings;
   }
 
@@ -162,11 +141,7 @@ class MfsDaemon extends EventEmitter {
 
   private spawnAndWait(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      if (!this.kbRoot) {
-        reject(new Error('MfsDaemon.configure({ kbRoot }) must be called before ensureReady'));
-        return;
-      }
-      const daemon = resolveDaemonCommand(this.kbRoot);
+      const daemon = resolveDaemonCommand();
       log.info(`spawning ${daemon.command} ${daemon.args.join(' ')}`);
       const proc = spawn(daemon.command, daemon.args, {
         cwd: daemon.cwd,
@@ -246,7 +221,7 @@ class MfsDaemon extends EventEmitter {
       // a listener).
       this.emit(`daemon:${msg.event}`, msg);
       if (msg.event === 'ready') {
-        log.info(`daemon ready: kb_root=${msg.kb_root}`);
+        log.info(`daemon ready: store=${msg.db}`);
         // Push the indexing rules before anything else: Node is the
         // single source of truth for admission knowledge
         // (server/indexable.ts / format.ts) — the daemon's built-in
@@ -257,24 +232,32 @@ class MfsDaemon extends EventEmitter {
         this.call('set_rules', {
           excluded_dirs: [...INDEX_EXCLUDED_DIRS],
           max_indexable_bytes: MAX_INDEXABLE_BYTES,
-          include_extensions: NOTE_EXTS.map((e) => `.${e}`),
+          include_extensions: [
+            ...NOTE_EXTS.map((e) => `.${e}`),
+            // Convertible sources (PDF/image) are TRACKED by the disk walk so
+            // their index entry — whose content is the app-data derived note,
+            // indexed under the source path — isn't orphan-deleted, and so
+            // scan_diff detects source changes. The daemon only lists/hashes
+            // them; the markdown content is pushed by the conversion path.
+            '.pdf', '.png', '.jpg', '.jpeg', '.webp',
+          ],
         }).catch((err) => log.warn(
           `set_rules failed — daemon binary may predate rule push, indexing rules can drift ` +
             `(rebuild with: pnpm build:python-sidecar): ${(err as Error).message}`,
         ));
-        // Replay every space binding the renderer has seen so far so a
+        // Replay every folder binding the renderer has seen so far so a
         // crash + respawn doesn't strand the daemon empty-handed. Fire-
         // and-forget; if any individual rebind fails, the next user op
-        // for that space surfaces the error.
+        // for that folder surfaces the error.
         if (this.bindings.size > 0) {
-          for (const [space, cfg] of this.bindings) {
-            this.call('bind_space', {
-              space,
+          for (const [folder, cfg] of this.bindings) {
+            this.call('bind_folder', {
+              folder,
               provider: cfg.provider,
               ...(cfg.apiKey ? { api_key: cfg.apiKey } : {}),
               ...(cfg.model ? { model: cfg.model } : {}),
               ...(cfg.dimension ? { dimension: cfg.dimension } : {}),
-            }).catch((err) => log.warn(`rebind ${space} after respawn failed: ${(err as Error).message}`));
+            }).catch((err) => log.warn(`rebind ${folder} after respawn failed: ${(err as Error).message}`));
           }
         }
         readyResolve();
@@ -421,15 +404,15 @@ function pythonCandidates(root: string): string[] {
       ];
 }
 
-function resolveDaemonCommand(kbRoot: string): { command: string; args: string[]; cwd: string } {
+function resolveDaemonCommand(): { command: string; args: string[]; cwd: string } {
   const binary = resolveDaemonBinary();
-  const storeArgs = ['--store-root', vectorStoreDirForKb(kbRoot)];
+  const storeArgs = ['--store-root', globalVectorStoreDir()];
   if (binary) {
-    return { command: binary, args: ['--kb-root', kbRoot, ...storeArgs], cwd: path.dirname(binary) };
+    return { command: binary, args: [...storeArgs], cwd: path.dirname(binary) };
   }
   const pythonBin = resolvePythonBin();
   const script = resolvePythonDaemonScript();
-  return { command: pythonBin, args: ['-u', script, '--kb-root', kbRoot, ...storeArgs], cwd: PROJECT_ROOT };
+  return { command: pythonBin, args: ['-u', script, ...storeArgs], cwd: PROJECT_ROOT };
 }
 
 function resolveDaemonBinary(): string | null {

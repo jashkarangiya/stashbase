@@ -1,272 +1,122 @@
 # Overview
 
-StashBase is a local-first Persistent Memory Layer for both humans and Agents.
-The user decides what is worth remembering. The Agent handles organizing, maintaining, and retrieving.
-Over time, this content gradually accumulates into a personal knowledge base that keeps growing, without requiring the user to invest ongoing maintenance effort.
+StashBase turns local files into Agent-ready context.
+
+HTML, Markdown, PDF, images, folders — these files were built for people to store and read, not for Agents to search and reuse. StashBase prepares them for retrieval, indexes them, and exposes the result through MCP.
+
+You choose which local files an Agent should be able to use. The original files stay on your computer. The extracted content and indexes become shared context for Claude, ChatGPT, Codex, and any MCP-capable client.
+
+That is the core value today: **make local files readable and searchable for Agents**.
+
+Over time, as Agents keep using that context and writing new output back into local files, the system grows into a personal knowledge base that can compound.
+
+That knowledge base is not a new workspace the user has to move into. It is the user's existing local folders, made readable, searchable, and reusable for Agents.
 
 ---
 
-# 1. Problem
+# 1. The Problem
 
-Many people have tried to build a "second brain"—a personal knowledge base that accumulates over the long term and can be reused continuously—but very few actually stick with it.
-From seeing a piece of content, to saving it, organizing it, and building connections, then later finding it again and using it, the whole process requires ongoing effort.
+Agents are getting better at complex work, but the local files on a computer are still hard for them to use.
 
-While existing note-taking and knowledge-management tools have optimized some of these steps, most still default to making the user responsible for maintaining the knowledge structure.
-The result is often this: the knowledge base becomes a document warehouse, not a memory system that keeps growing.
+Some formats are not built for Agent reading. PDFs are optimized for display and printing. Scans are images. Web pages carry structure and noise around the content. They may be readable to a person, but not cleanly usable by an Agent.
+
+Even when an Agent can read one file, it still needs to find the right file first. A person can rely on memory: where something was saved, what it looked like, when they last saw it. An Agent without an index cannot search local files by meaning.
+
+The knowledge is already on disk. It just has not become stable, searchable context an Agent can use again and again.
 
 ---
 
 # 2. Why Now
 
-## 2.1 Agent workflows are already proven in the coding scenario
+Claude Code and Codex have proved that Agents can understand and work inside a large, evolving codebase. They can read across many files, find relevant information, and complete complex tasks with enough context.
 
-Claude Code and Codex have already shown that, under user supervision, an Agent can maintain a complex, structured, continuously evolving codebase.
-A knowledge base is essentially also a long-term evolving structured system. So this is the natural next scenario for Agent workflows to extend into.
+If Agents are going to do more work outside code, the next bottleneck is not another chat window. It is access to the working environment: the documents, notes, research, project files, and AI outputs already on the machine.
 
-## 2.2 Content is shifting from Human-authored to Agent-authored
-
-Karpathy's proposed LLM Wiki, and the Claude Code team's "HTML is the new Markdown," both point to the same trend: more and more content will be generated, organized, and maintained by Agents.
-Once Agents become the primary authors, the knowledge base is no longer just a note-taking tool. It gradually becomes a workspace continuously maintained by Agents.
+StashBase focuses on that layer. It takes local knowledge and makes it Agent-ready: converted, indexed, and available across sessions and clients.
 
 ---
 
-# 3. Product Principles
+# 3. How StashBase Solves It
 
-## Agent-native
+StashBase does two things: **Convert** and **Index**.
 
-The user expresses intent. The Agent does the work.
-Any design that pushes the maintenance burden back onto the user is rejected.
+The product surface stays intentionally small: choose local folders, make their contents readable, make them searchable, and expose them to Agents through MCP.
 
-## Sees Only What You See
+## Convert: prepare hard formats
 
-The system's scope of visibility is aligned with the user's. It can only process what you can see. What you can't see, it won't fetch on its own.
-Any design that bypasses the user's field of view to actively scrape content is rejected.
+Local files come in formats that Agents do not handle equally well. StashBase keeps the original files in place and creates derived text only where the format needs it.
 
-## Local-first
+- **PDF**: converts layout-heavy documents into Markdown.
+- **Images**: uses OCR so text inside images can be searched.
 
-Data is stored locally by default. Cloud services are an optional capability, not a prerequisite for use.
-Any core capability that can only run by depending on the server is rejected.
+Derived content is app-owned data and can be regenerated.
 
-## User-owned
+## Index: make files searchable
 
-Knowledge should remain portable, offline-capable, and cross-model usable over the long term.
-Any design that locks the user's Context into a single platform is rejected.
+StashBase indexes existing text from Markdown and HTML, PDF-derived Markdown, and OCR text from images. Agents can search by meaning and by keyword instead of relying on file names, paths, or manual folder structure.
 
----
+For the Agent, local files stop being a pile of static documents. They become searchable context.
 
-# 4. Solution
+Everything remains local-first. The source files are local; extracted content and indexes are built from them. Through MCP, any MCP-capable Agent can read and search the same context.
 
-StashBase treats Memory as a long-term asset shared by humans and Agents.
-Not all information becomes Memory. Only content that the user has seen and actively decided to keep enters persistent memory.
+Some Agents can read and write the host filesystem directly. Others run in sandboxes. StashBase supports both: MCP exposes search and reindexing, plus bounded file helpers for the folders the user has opened.
 
-We call the user's active act of saving Stash. A Bookmark saves a link; a Stash saves the content itself.
-Once it has been Stashed, the content belongs to the user. It can be retrieved, reused, and migrated, and no longer depends on the original platform.
+> **A typical loop.** You add a PDF paper to StashBase. It converts the paper into Agent-readable Markdown and indexes it. Weeks later, when you discuss a related topic in Claude, ChatGPT, or Codex, the Agent can search that paper directly without you uploading it again or remembering where it lives.
 
-The user only needs to do two things:
-1. Browse information
-2. Decide what is worth keeping
-
-Everything else is left to the Agent. The Agent handles organizing, building connections, maintaining structure, updating the index, and retrieving relevant memory when needed.
-This is also the foundation on which the persistent memory layer rests.
+As more local files become readable and searchable, they become reusable context. Over time, that context naturally becomes a knowledge base.
 
 ---
 
-# 5. Product
+# 4. Principles
 
-## 5.1 What StashBase Is
+**Agent-native.** Whatever a person can read and recall, an Agent should be able to read and search too: human-facing files become usable context, and what a person would recall from memory an Agent retrieves by meaning. The goal is not to make people manage files harder — it is to make the same content first-class for Agents.
 
-StashBase is a persistent memory layer delivered as a desktop application.
-Content is stored on the local disk in open formats such as HTML, Markdown, and PDF.
+**File-first.** Local files are the source of truth. Extracted content, indexes, and product state are derived from files.
 
-Users can create multiple Spaces.
-Retrieval can either cover the entire knowledge base or be scoped to a single Space.
+**Local-first.** Data stays on the user's computer by default. Cloud can add sync, sharing, or hosting, but the core workflow does not depend on it.
 
-The entire knowledge base is exposed externally through MCP by default.
-AI Clients such as Claude, ChatGPT, and Codex can all access it directly.
+**Open.** StashBase does not lock context inside one AI product. Through MCP, the same local context can be used by Claude, ChatGPT, Codex, and other clients.
 
-### A typical scenario
-
-The user imports a paper into a Research Space.
-The Agent automatically generates a summary, extracts the core points, connects to existing materials, and writes the result back to the knowledge base.
-Weeks later, whether asking a question in Claude, ChatGPT, or Codex, the relevant content can be automatically retrieved and referenced.
+**Small surface.** StashBase avoids inventing a new container model. The user chooses folders; StashBase converts, indexes, retrieves, and reindexes. Everything else should justify itself against that core loop.
 
 ---
 
-## 5.2 Core Capabilities
+# 5. Why We're Different
 
-### Stash
+StashBase is not another Agent, and it does not try to replace Claude Code, Codex, ChatGPT, or Cursor.
 
-Stash is the act of adding content to the memory layer. Content can come from:
-* Files
-* Folders
-* GitHub Repos
-* Screenshots
+Those products prove the Agent workflow. StashBase gives them better access to the local files on the computer.
 
-Only content the user actively saves enters the memory layer.
+The infrastructure layer is simple:
 
-## Retrieval
+**convert local files into context any Agent can read and search.**
 
-Uses Hybrid Retrieval.
-Vector search handles semantic relevance. BM25 handles keyword matching.
+- **Claude Code and Codex** show how Agents can work inside large codebases. StashBase extends that pattern to local files beyond code.
+- **NotebookLM** is useful for reading uploaded sources, but the context primarily lives inside NotebookLM. StashBase keeps files local and makes the same context available across Agents.
+- **ChatGPT, Claude, and Gemini Projects** maintain context inside their own products. StashBase avoids creating another isolated context silo; it makes local files the shared context layer.
+- **Notion, Obsidian, Roam, and Logseq** help people organize knowledge. StashBase focuses on helping Agents read and search knowledge.
 
-## MCP Exposure
-
-The entire knowledge base is exposed by default as an MCP Server.
-Any MCP-compatible AI Client can access it directly.
-
-## Maintenance
-
-Maintenance rules are defined in `STASHBASE.md`. The Agent completes knowledge maintenance in sync while carrying out the user's tasks.
-Maintenance is not an extra process. It is a natural byproduct of everyday work.
+StashBase does not own your knowledge or ask you to move into a new workspace. It turns local files into Agent-readable, Agent-searchable context and exposes that context through MCP.
 
 ---
 
-## 5.3 Vision-first Capture
+# 6. Where It's Going
 
-StashBase provides two content entry points:
-- For local content such as files, folders, and Repos, import the raw files directly.
-- For non-local content such as web pages and Apps, use visual capture.
+**Who it's for first.** Developers and technical founders who already use Claude Code, Codex, and Cursor. They know that better context makes Agents dramatically more useful. StashBase brings that workflow from code to local files.
 
-The system records the view the user sees, then uses a multimodal model to reconstruct structured text. This approach does not depend on website interfaces, nor on export capabilities.
+**V1.** The first version focuses on two core capabilities:
 
-Compared with traditional parser-based approaches, it has several advantages:
-* Universal, not dependent on site structure
-* Zero maintenance, no need to continuously adapt to website redesigns
-* What you see is what you get, preserving the content the user actually saw
+- **Convert**: turn PDFs into Agent-readable text and images into OCR text for search.
+- **Index**: build semantic and keyword indexes so Agents can search that content.
 
-The principle behind it is simple: **Memory begins with what the user sees.**
+MCP makes the same local context available to multiple Agents. Windows, cloud sync, mobile, and team collaboration can come later, but they do not change the core model: make local files readable and searchable for Agents.
 
----
+**How it grows.** Early growth comes from the Agent community: GitHub, MCP directories, and real workflow demos. The bet is simple: if local files become easy for Agents to read and search, people will reuse more of what they already have instead of re-uploading, re-organizing, and re-explaining context every time.
 
-## 5.4 Runtime Model
+Agent outputs can enter the same loop. A summary from Claude, a plan from Codex, or a report from a web Agent can become a local file, then be converted, indexed, and reused as context for the next task.
 
-### Desktop-first Runtime
+That is how StashBase thinks about knowledge bases: users do not need to build one upfront. Each local file and each Agent output becomes context for future work. When that loop repeats, the knowledge base grows naturally.
 
-The desktop application is the product's primary form.
+**Business.** The core product stays open source under Apache 2.0. Revenue comes from optional services: cloud sync, hosted knowledge services, multi-device access, and shared team context.
 
-### Built-in Agents
-
-Claude Code and Codex are built into the product.
-On launch, they automatically load the current Space's Context and Skills.
-
-### MCP Always Available
-
-Even when the GUI is closed, the MCP Server keeps running.
-The knowledge base can still be accessed by external AI Clients.
-
-### No Background Autonomy
-
-The product does not continuously run an Autonomous Agent in the background.
-Maintenance happens during the collaboration between the user and the Agent, not by continuously consuming Tokens in the background.
-
----
-
-### V1 Scope
-
-The initial release includes:
-* macOS desktop application
-* Linux x86_64 Debian package
-* Space management
-* HTML / Markdown / PDF / image / folder import (clone the repo yourself, then import it as a folder)
-* Hybrid Retrieval
-* MCP Server
-* Claude Code & Codex integration
-
-The subsequent roadmap includes:
-* Windows
-* Cloud sync
-* Mobile access
-* Team collaboration
-
-These capabilities will not change the product's core model.
-
----
-
-# 6. Competitive Landscape
-
-The real difference is not in features. It is in: **who is responsible for maintaining the knowledge structure.**
-
-## Human-maintained Systems
-
-### Notion
-
-AI handles editing. The user maintains the structure.
-
-### Obsidian / Roam / Logseq
-
-Knowledge organization relies primarily on manual maintenance by the user.
-
-### NotebookLM
-
-Knowledge exists mainly as AI Context and is bound within the Google ecosystem.
-
-## Agent-assisted Development Tools
-
-### Claude Projects / ChatGPT Projects / Gemini Gems
-
-Context is confined within a single Project. It cannot be reused across AI Clients, nor migrated over the long term.
-
-### Cursor / Claude Code
-
-Proved the viability of the Agent + Retrieval workflow. But the core goal is still software development.
-
-## AI-native Knowledge Tools
-
-### Mem / Reflect / Heptabase / Capacities
-
-To Do
-
-### Cabinet
-
-To Do
-
----
-
-# 7. Initial Users
-
-The first users are developers and Technical Founders who already use Claude Code, Codex, and Cursor over the long term.
-They are already used to collaborating with Agents, and already used to accumulating Context.
-StashBase simply extends this way of working from code to personal knowledge.
-
----
-
-# 8. Go-to-Market
-
-Early growth comes mainly from the Agent community.
-
-Core channels include:
-* GitHub
-* Homebrew
-* YouTube Workflow Demo
-* Reddit
-* X
-* MCP Directory
-
-The core judgment is simple: if Agents can significantly lower the cost of maintaining knowledge, users will be more willing to accumulate and reuse Context over the long term.
-
----
-
-# 9. Business Model
-
-The Core is permanently open source (Apache 2.0). Revenue comes from services, not feature licensing.
-
-Possible commercialization directions include:
-* Cloud sync
-* Hosted KB
-* Multi-device access
-* Team collaboration
-* Shared Space
-
-Once persistent memory extends from the individual to the team, it naturally evolves into a shared Context Layer.
-
-The long-term model is closer to:
-* Plausible
-* PostHog
-* Sentry
-
-That is, open-source core + hosted services.
-
-In the future, it may also give rise to:
-* A template marketplace
-* An Agent Skills marketplace
-* A Knowledge Workflow ecosystem
+The model is open core, closer to Plausible, PostHog, or Sentry. The local file should remain the user's asset; StashBase provides the infrastructure that makes it useful to Agents.

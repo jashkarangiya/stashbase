@@ -1,5 +1,5 @@
 /**
- * KB-level transactional state in the per-machine app data directory.
+ * Library-level transactional state in the per-machine app data directory.
  *
  * This is StashBase-owned state, separate from MFS/Milvus' `store/`
  * schema. It holds exactly one thing: failed PDF / image conversion
@@ -9,15 +9,15 @@
  * Everything else lives at its authoritative source: the daemon/store
  * owns the per-file hash + index state (via `scan_diff`), the filesystem
  * answers "does this file exist", and `~/.stashbase/config.json` holds
- * recents / kbRoot / embedder config. (Earlier `files` and `index_queue`
+ * library folders and embedder config. (Earlier `files` and `index_queue`
  * tables duplicated daemon/reconcile state write-only and were removed.)
  */
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import { logger, errorMessage } from './log.ts';
-import { getKbRoot } from './space.ts';
-import { stateDbPathForKb } from './local-data.ts';
+import { getFolderHome } from './folder.ts';
+import { appStateDbPath, stateDbPathForRoot } from './local-data.ts';
 
 const log = logger('state-db');
 
@@ -35,7 +35,7 @@ let db: Database.Database | null = null;
 let dbPath: string | null = null;
 
 function stateDbPath(): string {
-  return stateDbPathForKb(getKbRoot());
+  return appStateDbPath();
 }
 
 function getStateDb(): Database.Database {
@@ -57,13 +57,31 @@ function getStateDb(): Database.Database {
   return db;
 }
 
-function legacyStateDbPath(): string {
-  return path.join(getKbRoot(), '.stashbase', 'state.db');
+function legacyFolderStateDbPath(): string {
+  return path.join(getFolderHome(), '.stashbase', 'state.db');
+}
+
+function legacyStateDbPaths(): string[] {
+  const target = path.resolve(stateDbPath());
+  const candidates = [
+    stateDbPathForRoot(getFolderHome()),
+    legacyFolderStateDbPath(),
+  ];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate);
+    if (resolved === target || seen.has(resolved)) continue;
+    seen.add(resolved);
+    out.push(candidate);
+  }
+  return out;
 }
 
 function migrateLegacyStateDb(target: string): void {
-  const legacy = legacyStateDbPath();
-  if (!fs.existsSync(legacy) || fs.existsSync(target)) return;
+  if (fs.existsSync(target)) return;
+  const legacy = legacyStateDbPaths().find((candidate) => fs.existsSync(candidate));
+  if (!legacy) return;
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const suffixes = ['', '-wal', '-shm'].filter((suffix) => fs.existsSync(legacy + suffix));
   const nonce = `${process.pid}.${Date.now()}`;
@@ -81,7 +99,7 @@ function migrateLegacyStateDb(target: string): void {
     for (const suffix of suffixes) {
       try { fs.unlinkSync(legacy + suffix); } catch { /* keep retry-safe source cleanup best-effort */ }
     }
-    log.info(`migrated state.db out of KB root → ${target}`);
+    log.info(`migrated legacy state.db → ${target}`);
   } catch (err: unknown) {
     for (const { path: tmp } of temps) {
       try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
@@ -138,7 +156,10 @@ function migrate(conn: Database.Database): void {
 }
 
 function migrateLegacyStateDbRows(conn: Database.Database): void {
-  const legacy = legacyStateDbPath();
+  for (const legacy of legacyStateDbPaths()) migrateLegacyStateDbRowsFrom(conn, legacy);
+}
+
+function migrateLegacyStateDbRowsFrom(conn: Database.Database, legacy: string): void {
   if (!fs.existsSync(legacy)) return;
   let attached = false;
   try {
@@ -179,7 +200,7 @@ function migrateLegacyStateDbRows(conn: Database.Database): void {
 }
 
 function migrateLegacyStatusJson(conn: Database.Database): void {
-  const legacy = path.join(getKbRoot(), '.stashbase', 'pdf-status.json');
+  const legacy = path.join(getFolderHome(), '.stashbase', 'pdf-status.json');
   const migrated = legacy + '.migrated';
   if (!fs.existsSync(legacy) || fs.existsSync(migrated)) return;
   try {
@@ -317,43 +338,4 @@ export function listConversionStatus(status: ConversionStatus): Array<{ path: st
       ...(row.doneAt ? { doneAt: row.doneAt } : {}),
     },
   }));
-}
-
-/** Drop a deleted space's rows from `conversions`. Without this, a
- *  stale conversion record survives the space's deletion and makes
- *  `discoverNewSources` skip auto-conversion for a later same-named PDF /
- *  image (it sees a "record" and assumes it was already handled). `space`
- *  is the kbRoot-relative name (its rows are `space` itself or
- *  `space/...`); the `substr` prefix match avoids LIKE wildcard escaping
- *  on arbitrary space names. */
-export function deleteSpaceState(space: string): void {
-  clearConversionStatusUnder(space);
-}
-
-/** Carry conversion failures through a space rename. Unlike delete, a
- *  rename preserves the user's Retry context: a failed PDF/image is
- *  still failed after the folder's name changes. Destination rows should
- *  not exist for a freshly-renamed space, but remove them first so a
- *  stale row from an older same-named space cannot conflict or win. */
-export function renameSpaceState(oldSpace: string, newSpace: string): void {
-  const oldName = oldSpace.replace(/\/+$/, '');
-  const newName = newSpace.replace(/\/+$/, '');
-  if (!oldName || !newName || oldName === newName) return;
-  const oldPrefix = oldName + '/';
-  const newPrefix = newName + '/';
-  const conn = getStateDb();
-  const tx = conn.transaction(() => {
-    conn.prepare(
-      'DELETE FROM conversions WHERE path = @newName OR substr(path, 1, @newPlen) = @newPrefix',
-    ).run({ newName, newPrefix, newPlen: newPrefix.length });
-    conn.prepare(`
-      UPDATE conversions
-      SET path = CASE
-        WHEN path = @oldName THEN @newName
-        ELSE @newPrefix || substr(path, @oldPlen + 1)
-      END
-      WHERE path = @oldName OR substr(path, 1, @oldPlen) = @oldPrefix
-    `).run({ oldName, newName, oldPrefix, oldPlen: oldPrefix.length, newPrefix });
-  });
-  tx();
 }

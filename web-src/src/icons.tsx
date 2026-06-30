@@ -279,15 +279,14 @@ export function CheckIcon({ className }: IconProps) {
 }
 
 /* Agent rules-books are tagged with the logo of the agent that owns
- * them: STASHBASE.md → StashBase, CLAUDE.md → Claude, AGENTS.md →
- * OpenAI/Codex. Each keeps its brand mark recognisable rather than
- * sharing one generic "rules" glyph. The marks carry explicit colour
- * (so they survive the `.meta-file` mute that targets `currentColor`)
- * except Codex, whose mono mark follows `--fg` to read on either theme. */
+ * them: CLAUDE.md → Claude, AGENTS.md → OpenAI/Codex. Each keeps its
+ * brand mark recognisable rather than sharing one generic "rules" glyph.
+ * The marks carry explicit colour except Codex, whose mono mark follows
+ * `--fg` to read on either theme. */
 
 /** StashBase mark — the app's own cube logo (`build/icon.svg`, minus
  *  the rounded background plate that would render as a white square at
- *  16px). File glyph for STASHBASE.md, the KB rules book. */
+ *  16px). Used as the stashing-progress pill/list logo. */
 export function StashBaseIcon({ className }: IconProps) {
   return (
     <svg className={className} viewBox="31 25 450 450" fill="none">
@@ -357,46 +356,6 @@ export function SettingsIcon({ className }: IconProps) {
   );
 }
 
-/** Start a visual capture — viewfinder corner marks framing the classic
- *  record symbol (a single filled dot): "frame this region and capture it".
- *  The brackets carry the screen-capture metaphor, the record dot the
- *  start-recording affordance. Pairs with StopIcon as the capture⇄stop
- *  transport metaphor. */
-export function RecordIcon({ className }: IconProps) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" strokeWidth={1.6} {...stroke}>
-      <path d="M8 3 H5 A2 2 0 0 0 3 5 V8" />
-      <path d="M16 3 H19 A2 2 0 0 1 21 5 V8" />
-      <path d="M8 21 H5 A2 2 0 0 1 3 19 V16" />
-      <path d="M16 21 H19 A2 2 0 0 0 21 19 V16" />
-      <circle cx="12" cy="12" r="4.5" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
-/** Stop the active capture — a filled square wrapped in the same viewfinder
- *  corner marks as RecordIcon, so the capture⇄stop toggle stays inside one
- *  consistent frame. */
-export function StopIcon({ className }: IconProps) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" strokeWidth={1.6} {...stroke}>
-      <path d="M8 3 H5 A2 2 0 0 0 3 5 V8" />
-      <path d="M16 3 H19 A2 2 0 0 1 21 5 V8" />
-      <path d="M8 21 H5 A2 2 0 0 1 3 19 V16" />
-      <path d="M16 21 H19 A2 2 0 0 0 21 19 V16" />
-      <rect x="8" y="8" width="8" height="8" rx="1.5" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
-export function SidebarLeftIcon({ className }: IconProps) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" strokeWidth={1.5} {...stroke}>
-      <rect x="3" y="4" width="18" height="16" rx="2" />
-      <line x1="9" y1="4" x2="9" y2="20" />
-    </svg>
-  );
-}
 
 export function CubeLogoIcon({ className }: IconProps) {
   return (
@@ -417,7 +376,7 @@ export function CubeLogoIcon({ className }: IconProps) {
 }
 
 /** House — chrome-strip button that returns to the Welcome screen
- *  (`actions.goHome()`). The clean way to switch spaces without
+ *  (`actions.goHome()`). The clean way to switch folders without
  *  losing tab/nav state to a full page reload. */
 export function HomeIcon({ className }: IconProps) {
   return (

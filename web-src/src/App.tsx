@@ -10,30 +10,8 @@ interface ElectronBridge {
   openFolderDialog?: (opts?: unknown) => Promise<string | null>;
   openExternal?: (url: string) => Promise<boolean>;
   configureMcp?: (client: string) => Promise<unknown>;
-  onCaptureCreated?: (handler: (capture: CapturePayload) => void) => (() => void);
-  onCaptureError?: (handler: (error: CaptureErrorPayload) => void) => (() => void);
   onClipboardImage?: (handler: (offer: ClipboardOffer) => void) => (() => void);
   markClipboardHandled?: (hash: string) => void;
-}
-
-interface CapturePayload {
-  ok?: boolean;
-  mode?: 'recording';
-  mime?: string;
-  dataUrl?: string;
-  width?: number;
-  height?: number;
-  sourceTitle?: string;
-  filename?: string;
-  space?: string;
-  dir?: string;
-}
-
-interface CaptureErrorPayload {
-  kind?: 'permission' | 'capture-failed' | string;
-  title?: string;
-  message?: string;
-  detail?: string;
 }
 import { Welcome } from './components/Welcome';
 import { Sidebar } from './components/Sidebar';
@@ -105,82 +83,24 @@ function AppBody() {
   // push even when the window starts in fullscreen) — see preload.cjs.
   useEffect(() => {
     const bridge = (window as { electron?: ElectronBridge }).electron;
-    return bridge?.onCaptureCreated?.((capture) => {
-      void handleCaptureCreated(capture);
-    });
-
-    async function handleCaptureCreated(capture: CapturePayload) {
-      // `capture:created` only ever carries a screen recording now — the
-      // built-in screenshot tool was removed; system screenshots come in
-      // through the clipboard offer instead. Recordings are saved into
-      // the note's asset bundle while Gemini fills in the visible note.
-      if (!capture.dataUrl || !capture.mime?.startsWith('video/')) return;
-      const targetSpace = capture.space || state.space;
-      const targetDir = typeof capture.dir === 'string' ? capture.dir : state.activeFolder;
-      if (!targetSpace) {
-        actions.toast('Open a space to save this recording.', { level: 'warning' });
-        return;
-      }
-      try {
-        const file = await dataUrlToFile(
-          capture.dataUrl,
-          capture.filename || defaultCaptureFilename(),
-          capture.mime ?? 'video/webm',
-        );
-        const ok = await actions.recordVideo(file, targetDir, targetSpace);
-        if (ok) {
-          actions.toast(
-            targetSpace === state.space
-              ? 'Recording captured — analyzing video…'
-              : `Recording captured — analyzing video in ${targetSpace}.`,
-            { level: 'info' },
-          );
-        }
-      } catch (err) {
-        console.warn('[capture] save failed:', err);
-        actions.toast('Recording captured, but it could not be processed.', { level: 'error' });
-      }
-    }
-  }, [actions, state.activeFolder, state.space, state.welcomeVisible]);
-  useEffect(() => {
-    const bridge = (window as { electron?: ElectronBridge }).electron;
     return bridge?.onClipboardImage?.((offer) => {
       if (!offer.dataUrl || !offer.mime?.startsWith('image/')) return;
       // If the app is still on Welcome, keep the offer in renderer
       // memory. Main has already de-duped this hash, so dropping it here
-      // would make a screenshot copied just before opening a space vanish
+      // would make a screenshot copied just before opening a folder vanish
       // until the user copies it again.
-      if (state.welcomeVisible || !state.space) {
+      if (state.welcomeVisible || !state.folder) {
         setPendingClipboardOffer(offer);
         return;
       }
       setClipboardOffer(offer);
     });
-  }, [state.space, state.welcomeVisible]);
+  }, [state.folder, state.welcomeVisible]);
   useEffect(() => {
-    if (state.welcomeVisible || !state.space || !pendingClipboardOffer || clipboardOffer) return;
+    if (state.welcomeVisible || !state.folder || !pendingClipboardOffer || clipboardOffer) return;
     setClipboardOffer(pendingClipboardOffer);
     setPendingClipboardOffer(null);
-  }, [clipboardOffer, pendingClipboardOffer, state.space, state.welcomeVisible]);
-  useEffect(() => {
-    const bridge = (window as { electron?: ElectronBridge }).electron;
-    return bridge?.onCaptureError?.((error) => {
-      if (error.detail) console.warn('[capture] failed:', error.detail);
-      const isPermission = error.kind === 'permission';
-      actions.toast(
-        error.message || (isPermission
-          ? 'Turn on Screen Recording for StashBase, then restart the app.'
-          : 'Recording did not finish. Try again.'),
-        {
-          level: isPermission ? 'warning' : 'error',
-          ttl: isPermission ? null : undefined,
-          action: isPermission
-            ? { label: 'Open settings', onClick: () => openSettings('capture') }
-            : undefined,
-        },
-      );
-    });
-  }, [actions]);
+  }, [clipboardOffer, pendingClipboardOffer, state.folder, state.welcomeVisible]);
   useEffect(() => {
     function onMessage(e: MessageEvent) {
       if (!e.data) return;
@@ -223,10 +143,10 @@ function AppBody() {
         const url = new URL(href);
         if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
         // Same-origin asset links (e.g. a recording's webm, opened in the
-        // system browser to play) need the window's space context — the
+        // system browser to play) need the window's folder context — the
         // browser can't send our header, so carry the windowId in the
         // query the way `assetUrl` does. Without it the server has no open
-        // space for the request and answers NO_SPACE.
+        // folder for the request and answers NO_FOLDER.
         if (url.origin === window.location.origin && url.pathname.startsWith('/asset/')
           && !url.pathname.startsWith('/asset/__window/')
           && !url.searchParams.has('windowId')) {
@@ -267,8 +187,8 @@ function AppBody() {
       <Welcome />
       {/* Dedicated chrome strip across the very top of the window.
        *  In Electron it doubles as the macOS `hiddenInset` drag region;
-       *  the centered space name plays the role VSCode's titlebar fills
-       *  (workspace identity), and the embedder picker sits at the
+       *  the centered folder name plays the role VSCode's titlebar fills
+       *  (current folder identity), and the embedder picker sits at the
        *  right. The sidebar has no explicit toggle button — it's
        *  resized (and collapsed) by dragging its right edge, à la
        *  VSCode; the activity rail always stays visible. Pulled out of
@@ -278,8 +198,8 @@ function AppBody() {
         <div className="app-chrome-left">
           {!state.welcomeVisible && <HomeChromeButton onClick={() => { void actions.goHome(); }} />}
         </div>
-        {!state.welcomeVisible && state.space && (
-          <div className="app-chrome-title">{state.space}</div>
+        {!state.welcomeVisible && state.folder && (
+          <div className="app-chrome-title">{state.folder}</div>
         )}
         <div className="app-chrome-right">
           {!state.welcomeVisible && <ChatLaunchButtons />}
@@ -312,7 +232,7 @@ function AppBody() {
           onClose={() => setPreviewImage(null)}
         />
       )}
-      {clipboardOffer && state.space && !state.welcomeVisible && (
+      {clipboardOffer && state.folder && !state.welcomeVisible && (
         <ClipboardImportModal
           offer={clipboardOffer}
           onClose={() => {
@@ -330,11 +250,6 @@ function AppBody() {
       <SettingsPortal />
     </>
   );
-}
-
-function defaultCaptureFilename(): string {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return `recording-${stamp}.webm`;
 }
 
 /** Home button in the top chrome. Its own component so the hover-tip hook

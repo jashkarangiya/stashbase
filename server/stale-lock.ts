@@ -1,16 +1,16 @@
 /**
  * Defensive cleanup of an orphaned Milvus Lite flock before binding a
- * space. The story we keep hitting:
+ * folder. The story we keep hitting:
  *
  *   1. Previous StashBase session held the lock on
- *      the per-machine Milvus DB for this KB.
+ *      the per-machine Milvus DB for this library.
  *   2. It exited dirtily — `kill -9`, force-quit, OS shutdown, or a
  *      shutdown that ran past our 4 s `indexer.close()` ceiling on a
  *      big library where Milvus's own flush takes longer.
  *   3. The previous Python daemon orphans, kernel keeps the flock
  *      held against its dead FD reference (rare on POSIX but happens
  *      with adopted orphans / FS quirks).
- *   4. New session spawns a fresh daemon, calls `set_space`,
+   *   4. New session spawns a fresh daemon, binds a folder,
  *      pymilvus raises `DataDirLockedError`, the user is stuck.
  *
  * What we do here: list the PIDs holding the db file via `lsof -t`,
@@ -28,20 +28,17 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from './log.ts';
-import { vectorStoreDirForKb } from './local-data.ts';
+import { globalVectorStoreDir } from './local-data.ts';
 
 const log = logger('stale-lock');
 
-/** Kill any orphaned stashbase daemon still holding the flock on
- *  this KB's `milvus.db`. No-op when the db doesn't exist yet,
- *  when `lsof` isn't available, or when no one's holding the lock. */
-export function clearStaleMilvusLock(kbRoot: string): void {
+/** Kill any orphaned stashbase daemon still holding the flock on the
+ *  global `milvus.db`. No-op when the db doesn't exist yet, when `lsof`
+ *  isn't available, or when no one's holding the lock. */
+export function clearStaleMilvusLock(): void {
   if (process.platform === 'win32') return;
   const candidates = [
-    path.join(vectorStoreDirForKb(kbRoot), 'milvus.db'),
-    path.join(kbRoot, '.stashbase', 'store.nosync', 'milvus.db'),
-    path.join(kbRoot, '.stashbase', 'store', 'milvus.db'),
-    path.join(kbRoot, '.stashbase', 'mfs', 'milvus.db'),
+    path.join(globalVectorStoreDir(), 'milvus.db'),
   ].filter((p) => fs.existsSync(p));
   if (candidates.length === 0) return;
 
@@ -80,9 +77,9 @@ export function clearStaleMilvusLock(kbRoot: string): void {
   }
 }
 
-/** Kill orphaned stashbase daemons for this kbRoot — leftovers from a
- *  previous server that died without reaping its child (kill -9, crash,
- *  Electron force-quit, or losing the `:8090` startup race). Unlike
+/** Kill orphaned stashbase daemons bound to the global store — leftovers
+ *  from a previous server that died without reaping its child (kill -9,
+ *  crash, Electron force-quit, or losing the `:8090` startup race). Unlike
  *  `clearStaleMilvusLock`, these may NOT hold `milvus.db` — the lock-fight
  *  loser never grabbed it, yet its mere presence lets the rightful
  *  daemon's writes vanish into the loser (the write-black-hole, data-layer
@@ -90,14 +87,15 @@ export function clearStaleMilvusLock(kbRoot: string): void {
  *
  *  MUST be called only AFTER winning the `:8090` arbiter and BEFORE
  *  spawning this server's own daemon: that ordering guarantees any other
- *  daemon for this kbRoot is an orphan, never a live peer, so there's
+ *  daemon on the global store is an orphan, never a live peer, so there's
  *  nothing to spare. Server-only — the MCP host must never run it.
  *
  *  macOS + Linux only (uses `ps`); Windows falls through silently. */
-export function reapOrphanDaemons(kbRoot: string): void {
+export function reapOrphanDaemons(): void {
   if (process.platform === 'win32') return;
+  const storeRoot = globalVectorStoreDir();
   // `-axww` = every process, full (untruncated) command line — the daemon
-  // path + `--kb-root <abs>` can be long.
+  // path + `--store-root <abs>` can be long.
   const ps = spawnSync('ps', ['-axww', '-o', 'pid=,command='], { encoding: 'utf8' });
   if (ps.status !== 0 || !ps.stdout) return;
   for (const line of ps.stdout.split('\n')) {
@@ -107,11 +105,11 @@ export function reapOrphanDaemons(kbRoot: string): void {
     const cmd = m[2];
     if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) continue;
     // Frozen binary (`…/stashbase-daemon`) or dev mode (`python …
-    // stashbase_daemon.py`), scoped to THIS kb via its `--kb-root` arg so
-    // a daemon for a different StashBase root is left untouched.
+    // stashbase_daemon.py`), scoped to OUR store via its `--store-root` arg
+    // so an unrelated StashBase install's daemon is left untouched.
     const isDaemon = cmd.includes('stashbase-daemon') || cmd.includes('stashbase_daemon');
-    if (!isDaemon || !cmd.includes(`--kb-root ${kbRoot}`)) continue;
-    log.warn(`reaping orphan daemon pid=${pid} (kbRoot=${kbRoot})`);
+    if (!isDaemon || !cmd.includes(`--store-root ${storeRoot}`)) continue;
+    log.warn(`reaping orphan daemon pid=${pid} (store=${storeRoot})`);
     try {
       process.kill(pid, 'SIGKILL');
     } catch {

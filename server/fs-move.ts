@@ -1,8 +1,7 @@
 /**
- * Filesystem copy/move primitives shared by the folder-import path and
- * the KB-root migration path. Kept dependency-free (no app modules) so
- * both `import-folder.ts` and `space.ts` can use it without an import
- * cycle.
+ * Filesystem copy/move primitives used by the folder-home migration path.
+ * Kept dependency-free (no app modules) so `folder.ts` can use it without
+ * an import cycle.
  *
  * Everything here dereferences symlinks (copies their targets), refuses
  * to follow directory cycles, and never overwrites — the destination

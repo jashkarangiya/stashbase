@@ -2,8 +2,6 @@ import express from 'express';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { currentWindowId } from '../space.ts';
-import { callSpaceMcpTool, listSpaceMcpTools } from '../mcp-host.ts';
 import { sendError } from '../http.ts';
 
 const APP_ROOT = process.env.STASHBASE_APP_ROOT
@@ -15,27 +13,6 @@ const MCP_ENTRY = fs.existsSync(path.join(APP_ROOT, 'dist', 'mcp', 'server.mjs')
   : path.join(APP_ROOT, 'mcp', 'server.ts');
 
 export function mount(app: express.Express): void {
-  app.get('/api/mcp/tools', async (_req, res) => {
-    try {
-      res.json({ tools: await listSpaceMcpTools(currentWindowId()) });
-    } catch (err: unknown) {
-      sendError(res, err);
-    }
-  });
-
-  app.post('/api/mcp/tools/call', async (req, res) => {
-    const name = typeof req.body?.name === 'string' ? req.body.name : '';
-    const args = req.body?.arguments && typeof req.body.arguments === 'object' && !Array.isArray(req.body.arguments)
-      ? req.body.arguments as Record<string, unknown>
-      : {};
-    try {
-      if (!name) return res.status(400).json({ error: 'name required' });
-      res.json({ result: await callSpaceMcpTool(currentWindowId(), name, args) });
-    } catch (err: unknown) {
-      sendError(res, err);
-    }
-  });
-
   app.get('/api/mcp/status', (_req, res) => {
     try {
       // Ensure the launcher exists so the inline config we hand back actually

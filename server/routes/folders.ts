@@ -1,7 +1,7 @@
 /**
  * Folder CRUD: create / delete (recursive) / rename. Rename uses the
  * shared `renameWithRollback` ladder + a cross-reference link cascade
- * so anchors elsewhere in the space still resolve after the move.
+ * so anchors elsewhere in the folder still resolve after the move.
  */
 import express from 'express';
 import {
@@ -14,7 +14,7 @@ import {
   sanitizeFilename,
 } from '../files.ts';
 import { applyRenamePlan, planRenameLinks } from '../links.ts';
-import { toKbRel } from '../space.ts';
+import { toSourcePath } from '../folder.ts';
 import { getApiKey } from '../app-config.ts';
 import { errorMessage, logger } from '../log.ts';
 import { indexer } from '../state.ts';
@@ -23,6 +23,7 @@ import { renameWithRollback } from '../rename-helpers.ts';
 import { noteTreeChanged } from '../watcher.ts';
 import { remapFileOrderPath, removeFileOrderPath } from '../file-order.ts';
 import { clearRecordsUnder, hasInFlightUnder } from '../conversion-status.ts';
+import { deleteDerivedUnderFolder } from '../derived-store.ts';
 
 const log = logger('routes/folders');
 
@@ -37,7 +38,7 @@ export interface InFlightFolderRouteError {
 }
 
 export function inFlightFolderOperationError(p: string, action: InFlightFolderAction): InFlightFolderRouteError | null {
-  if (!hasInFlightUnder(toKbRel(p))) return null;
+  if (!hasInFlightUnder(toSourcePath(p))) return null;
   const actionText = action === 'rename' ? 'Rename it' : 'Delete it';
   return {
     status: 409,
@@ -70,16 +71,18 @@ export function mount(app: express.Express): void {
       // confirm prompt to be the guardrail against "oops, I just
       // wiped a populated folder". Index cleanup fires async so we
       // can respond fast (same fire-and-forget pattern as file delete).
+      try { deleteDerivedUnderFolder(toSourcePath(p)); }
+      catch (err: unknown) { log.warn(`delete_prefix: derived cleanup failed for ${p}: ${errorMessage(err)}`); }
       const removed = deleteFolder(p);
       if (removed) {
         noteTreeChanged();
         try { removeFileOrderPath(p, 'folder'); }
         catch (err: unknown) { log.warn(`file-order cleanup failed for ${p}: ${errorMessage(err)}`); }
       }
-      try { clearRecordsUnder(toKbRel(p)); }
+      try { clearRecordsUnder(toSourcePath(p)); }
       catch (err: unknown) { log.warn(`delete_prefix: conversion status cleanup failed for ${p}: ${errorMessage(err)}`); }
       res.json({ alreadyGone: !removed });
-      indexer.deletePathPrefix(toKbRel(p)).catch((err) => {
+      indexer.deletePathPrefix(toSourcePath(p)).catch((err) => {
         log.warn(`delete_prefix: index cleanup failed for ${p}: ${errorMessage(err)}`);
       });
     } catch (err: unknown) {
@@ -134,11 +137,11 @@ export function mount(app: express.Express): void {
           // entries, so we map new → old names.
           const filesUnder = listIndexableTextFilesUnder(newPath)
             .map((f) => ({
-              // Indexer's renamePathPrefix takes OLD-keyed paths, kbRoot-relative.
-              path: toKbRel(oldPath + f.name.slice(newPath.length)),
+              // Indexer's renamePathPrefix takes OLD-keyed absolute paths.
+              path: toSourcePath(oldPath + f.name.slice(newPath.length)),
               content: f.content,
             }));
-          await indexer.renamePathPrefix(toKbRel(oldPath), toKbRel(newPath), filesUnder);
+          await indexer.renamePathPrefix(toSourcePath(oldPath), toSourcePath(newPath), filesUnder);
 
           // Files OUTSIDE the renamed folder that had links rewritten
           // need a separate upsert — the prefix rename only touches rows
@@ -147,7 +150,7 @@ export function mount(app: express.Express): void {
             if (u.name === newPath || u.name.startsWith(newPath + '/')) continue;
             const body = readText(u.name);
             if (body == null) continue;
-            await indexer.upsertFile(toKbRel(u.name), body);
+            await indexer.upsertFile(toSourcePath(u.name), body);
           }
         } catch (err) {
           applied?.rollback();

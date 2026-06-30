@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build your founder playbook</title>
+<style>
+  :root {
+    --paper: #fafaf7;
+    --ink: #0f1419;
+    --muted: #5a6068;
+    --rule: #e6e4de;
+    --accent: #0891b2;
+    --accent-ink: #075e76;
+    --tint: #ecf7fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #14181b;
+      --ink: #e9eaec;
+      --muted: #9aa1a8;
+      --rule: #2b3138;
+      --accent: #38b6c9;
+      --accent-ink: #7fd3df;
+      --tint: #15242b;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+  }
+
+  body {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino,
+                 "Book Antiqua", Georgia, "Times New Roman", ui-serif, serif;
+    font-size: 18px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .page {
+    max-width: 40rem;
+    margin: 0 auto;
+    padding: clamp(2.5rem, 6vw, 5rem) clamp(1.25rem, 5vw, 2rem) 4rem;
+  }
+
+  .eyebrow {
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--accent-ink);
+    margin: 0 0 0.6rem;
+  }
+
+  h1 {
+    font-size: clamp(1.9rem, 4vw, 2.4rem);
+    font-weight: 600;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    margin: 0 0 0.9rem;
+  }
+
+  .intro { margin: 0 0 0.5rem; }
+  .intro em { font-style: italic; }
+
+  .steps {
+    list-style: none;
+    counter-reset: step;
+    margin: 2.25rem 0 0;
+    padding: 0;
+  }
+  .steps > li {
+    counter-increment: step;
+    position: relative;
+    padding: 0 0 1.7rem 3.1rem;
+  }
+  .steps > li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 1.85rem;
+    height: 1.85rem;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--paper);
+    font-size: 0.95rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .steps > li:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    left: 0.9rem;
+    top: 2.1rem;
+    bottom: 0.2rem;
+    width: 1px;
+    background: var(--rule);
+  }
+  .steps h2 {
+    font-size: 1.12rem;
+    font-weight: 600;
+    margin: 0.15rem 0 0.4rem;
+  }
+  .steps p { margin: 0 0 0.6rem; }
+  .steps p:last-child { margin-bottom: 0; }
+
+  code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.86em;
+    background: var(--rule);
+    padding: 0.05em 0.35em;
+    border-radius: 4px;
+  }
+  pre.cmd-block {
+    background: var(--tint);
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    padding: 0.7rem 0.9rem;
+    overflow-x: auto;
+    margin: 0.2rem 0 0.7rem;
+  }
+  pre.cmd-block code {
+    background: none;
+    padding: 0;
+    font-size: 0.84rem;
+  }
+
+  /* the compounding step gets quiet emphasis */
+  .steps > li.key .body {
+    background: var(--tint);
+    border-radius: 9px;
+    padding: 0.9rem 1.1rem;
+    margin-top: 0.1rem;
+  }
+  .tag {
+    display: inline-block;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: var(--paper);
+    background: var(--accent);
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    margin-bottom: 0.5rem;
+  }
+
+  .asks {
+    list-style: none;
+    margin: 0.4rem 0 0;
+    padding: 0;
+  }
+  .asks li {
+    padding-left: 1rem;
+    position: relative;
+    font-style: italic;
+    color: var(--ink);
+    margin-bottom: 0.25rem;
+  }
+  .asks li::before {
+    content: "\201C";
+    position: absolute;
+    left: 0;
+    color: var(--accent-ink);
+  }
+  .asks li::after { content: "\201D"; }
+
+  .note {
+    margin-top: 1.6rem;
+    padding-top: 1.3rem;
+    border-top: 1px solid var(--rule);
+    font-size: 0.95rem;
+    color: var(--muted);
+  }
+  .note b { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+  <main class="page">
+    <p class="eyebrow">Example &middot; for builders</p>
+    <h1>Build your founder playbook</h1>
+
+    <p class="intro">You&rsquo;re building something &mdash; so you don&rsquo;t want to just <em>watch</em> a startup course, you want to turn it into principles you&rsquo;ll actually reach for, and keep adding to as you go. Here&rsquo;s a real corpus to start from, and the loop that makes it compound.</p>
+
+    <ol class="steps">
+      <li>
+        <h2>Clone the starter folder, then open it</h2>
+        <div class="body">
+          <p><code>stashbase-cs183b</code> is a ready-made folder: full transcripts of all 20 lectures from Stanford <b>CS183B &mdash; How to Start a Startup</b> (the Y&nbsp;Combinator / Sam Altman course), plus a founder playbook distilled from them.</p>
+          <pre class="cmd-block"><code>git clone https://github.com/0-bingwu-0/stashbase-cs183b</code></pre>
+          <p>Then open the folder in StashBase. Its embeddings are <b>prebuilt and ship with the repo</b>, so StashBase can reuse them instead of re-embedding the whole course.</p>
+        </div>
+      </li>
+
+      <li>
+        <h2>Read the distilled playbook</h2>
+        <div class="body">
+          <p>Open <code>founder_playbook.html</code> in StashBase. It&rsquo;s ~60 founder questions, each answered as <em>Principles &rarr; Decision Framework &rarr; Field Checklist &rarr; Traps to Avoid &rarr; Drawn From</em>, cited back to the lectures. This is what a curated layer looks like sitting on top of 20 raw transcripts &mdash; the source kept read-only, the playbook derived from it.</p>
+        </div>
+      </li>
+
+      <li>
+        <h2>Ask in your own words</h2>
+        <div class="body">
+          <p>Open the built-in Claude agent and just ask. It searches across the playbook and all 20 transcripts, and answers with sources you can open. Three to start, straight from the playbook:</p>
+          <ul class="asks">
+            <li>How do I find a startup idea?</li>
+            <li>How do I know if I have product-market fit?</li>
+            <li>Should I worry about competitors and being copied?</li>
+          </ul>
+        </div>
+      </li>
+
+      <li class="key">
+        <h2>Make it yours</h2>
+        <div class="body">
+          <span class="tag">The compounding part</span>
+          <p>Don&rsquo;t stop at the course. Drop your own material into <code>transcripts/</code> &mdash; a YC essay, notes from a customer interview, a talk that stuck with you &mdash; and ask the agent to reconcile the playbook: extend an answer, or add a new question, always citing the new source (source always wins).</p>
+          <p>Over weeks the playbook stops being &ldquo;Sam Altman&rsquo;s course&rdquo; and becomes <em>your</em> operating manual &mdash; kept current by the agent as a side effect of the work you&rsquo;re already doing.</p>
+        </div>
+      </li>
+    </ol>
+
+    <p class="note"><b>One-time setup:</b> search and the agent run on an OpenAI key &mdash; if you haven&rsquo;t added one yet, it&rsquo;s a quick step in Settings.</p>
+  </main>
+</body>
+</html>

@@ -2,9 +2,9 @@
  * Tree-version signal — the surviving piece of the old fs.watch layer.
  *
  * 2026-06 simplification: StashBase no longer watches the filesystem.
- * Reconcile runs at deterministic event points instead — space
+ * Reconcile runs at deterministic event points instead — folder
  * open/switch, window focus, agent turn end, the manual Sync button, and
- * MCP `update_index`. That deleted the debounce window, the self-write
+ * MCP `reindex`. That deleted the debounce window, the self-write
  * suppression TTL, the watcher-vs-import race gate, and the whole class
  * of "fs event arrived at the wrong moment" bugs. External edits made
  * while the app is focused surface on the next event point; everything

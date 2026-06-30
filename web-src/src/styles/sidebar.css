@@ -67,21 +67,7 @@
       background: var(--accent);
       border-radius: 0 2px 2px 0;
     }
-    /* Recording: the record button turns red and softly pulses while a
-     * capture is in progress. */
-    .activity-bar-btn.recording {
-      color: #dc2626;
-      animation: activity-rec-pulse 1.6s ease-in-out infinite;
-    }
-    .activity-bar-btn.recording:hover {
-      color: #dc2626;
-    }
-    @keyframes activity-rec-pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.45; }
-    }
-    /* Shared breathing pulse used by the stashing placeholder logo and
-     * tab / pill stashing marks. */
+    /* Shared breathing pulse used by the tab / pill stashing marks. */
     @keyframes stashing-pulse {
       0%, 100% { opacity: 0.35; }
       50% { opacity: 0.8; }
@@ -97,8 +83,8 @@
     }
 
     /* The right-hand 280px column of the sidebar. Owns the vertical
-     * stack: header / file-list (or search/kb
-     * equivalents). `.activity-bar` is sibling on the left; this is
+     * stack: header / file-list / search equivalents.
+     * `.activity-bar` is sibling on the left; this is
      * the panel that swaps content based on `state.activeSidebarView`. */
     .sidebar-panel {
       flex: 1 1 auto;
@@ -626,38 +612,10 @@
       cursor: pointer;
     }
 
-    /* Library-overview row — sits above the space header and is shown
-     * for every space (the AGENT.md it points at lives at kbRoot, not
-     * inside a space). Styled as a soft nav row so it doesn't compete
-     * with the space tree below it, but with an accent tint on hover /
-     * when its tab is active so it reads as a peer to the workspace
-     * itself rather than a tree entry. */
-    .kb-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 12px;
-      margin: 2px 6px 6px;
-      border-radius: 5px;
-      color: var(--muted);
-      cursor: pointer;
-      font-size: 12.5px;
-      user-select: none;
-    }
-    .kb-row:hover {
-      background: var(--hover);
-      color: var(--fg);
-    }
-    .kb-row.active {
-      background: rgba(var(--accent-rgb), 0.08);
-      color: var(--accent);
-      font-weight: 500;
-    }
-
-    /* Second row: space label + VSCode-style action toolbar. */
+    /* Second row: folder label + VSCode-style action toolbar. */
     /* Top tier of the VSCode-style two-row header: a quiet section label
-     * ("SPACE") on the left + the space-actions ⋯ on the right. The
-     * folder row (.side-head) with the current space name + file-action
+     * ("FOLDER") on the left + the folder-actions ⋯ on the right. The
+     * folder row (.side-head) with the current folder name + file-action
      * icons sits directly below it. */
     .panel-section-head {
       display: flex;
@@ -681,14 +639,14 @@
       text-overflow: ellipsis;
     }
 
-    /* SPACE header: keep the "SPACE" label content-width so the stashing
+    /* FOLDER header: keep the "FOLDER" label content-width so the stashing
      * pill sits snug to its right, and push the ⋯ actions to the far
      * right edge (they're hover-only, so left-aligning the pill is the
      * only stable layout). */
-    .space-section-head .panel-section-title {
+    .folder-section-head .panel-section-title {
       flex: 0 0 auto;
     }
-    .space-section-head .side-actions {
+    .folder-section-head .side-actions {
       margin-left: auto;
     }
 
@@ -702,7 +660,7 @@
 
     /* Wraps chevron + label so they share one click target and one
      * hover-highlight rule, mirroring the VSCode workspace header. */
-    .space-title {
+    .folder-title {
       display: flex;
       align-items: center;
       gap: 2px;
@@ -712,11 +670,11 @@
       color: var(--muted);
     }
 
-    .space-title:hover {
+    .folder-title:hover {
       color: var(--fg);
     }
 
-    .space-chev {
+    .folder-chev {
       width: 16px;
       height: 16px;
       display: inline-flex;
@@ -726,15 +684,15 @@
       flex-shrink: 0;
     }
 
-    .space-chev svg {
+    .folder-chev svg {
       width: 14px;
       height: 14px;
     }
 
     /* Collapsed state: chevron points right, file list is hidden. The
      * `expanded` set inside the JS is untouched, so re-expanding the
-     * SPACE restores every inner folder's prior open/closed state. */
-    .space-title.collapsed .space-chev {
+     * FOLDER restores every inner folder's prior open/closed state. */
+    .folder-title.collapsed .folder-chev {
       transform: rotate(-90deg);
     }
 
@@ -742,8 +700,8 @@
       display: none;
     }
 
-    /* The current space name — the prominent row, brighter than the
-     * muted "SPACE" section label above it (mirrors VSCode's workspace
+    /* The current folder name — the prominent row, brighter than the
+     * muted "FOLDER" section label above it (mirrors VSCode's workspace
      * name reading stronger than the EXPLORER header). */
     .folder-label {
       font-size: 11px;
@@ -864,7 +822,7 @@
     /* Stashing indicator. A file is "stashing" while the server is still
      * converting it into searchable content (PyMuPDF on a PDF,
      * RapidOCR on an image, Gemini analysis on a recording) — the slow, user-
-     * visible phase. The "N stashing" pill lives in the SPACE header
+     * visible phase. The "N stashing" pill lives in the FOLDER header
      * (left of ⋯) and stays visible at all times; clicking it opens the
      * `.stashing-list` dropdown. Auto-dismisses when the conversion
      * finishes (the index-status poll drops the entry from
@@ -941,32 +899,27 @@
     }
     .stashing-pill-logo .s-cyan > path:nth-child(1),
     .stashing-list-logo .s-cyan > path:nth-child(1),
-    .tab-stashing-logo .s-cyan > path:nth-child(1),
-    .stashing-placeholder-logo .s-cyan > path:nth-child(1) {
+    .tab-stashing-logo .s-cyan > path:nth-child(1) {
       stroke-dasharray: 300; animation: s-draw-1 2.4s linear infinite;
     }
     .stashing-pill-logo .s-cyan > path:nth-child(2),
     .stashing-list-logo .s-cyan > path:nth-child(2),
-    .tab-stashing-logo .s-cyan > path:nth-child(2),
-    .stashing-placeholder-logo .s-cyan > path:nth-child(2) {
+    .tab-stashing-logo .s-cyan > path:nth-child(2) {
       stroke-dasharray: 400; animation: s-draw-2 2.4s linear infinite;
     }
     .stashing-pill-logo .s-cyan > path:nth-child(3),
     .stashing-list-logo .s-cyan > path:nth-child(3),
-    .tab-stashing-logo .s-cyan > path:nth-child(3),
-    .stashing-placeholder-logo .s-cyan > path:nth-child(3) {
+    .tab-stashing-logo .s-cyan > path:nth-child(3) {
       stroke-dasharray: 190; animation: s-draw-3 2.4s linear infinite;
     }
     .stashing-pill-logo .s-cyan > path:nth-child(4),
     .stashing-list-logo .s-cyan > path:nth-child(4),
-    .tab-stashing-logo .s-cyan > path:nth-child(4),
-    .stashing-placeholder-logo .s-cyan > path:nth-child(4) {
+    .tab-stashing-logo .s-cyan > path:nth-child(4) {
       stroke-dasharray: 200; animation: s-draw-4 2.4s linear infinite;
     }
     .stashing-pill-logo .s-cyan > path:nth-child(5),
     .stashing-list-logo .s-cyan > path:nth-child(5),
-    .tab-stashing-logo .s-cyan > path:nth-child(5),
-    .stashing-placeholder-logo .s-cyan > path:nth-child(5) {
+    .tab-stashing-logo .s-cyan > path:nth-child(5) {
       stroke-dasharray: 100; animation: s-draw-5 2.4s linear infinite;
     }
     /* Freeze paths fully assembled while hovering the pill. */
@@ -978,8 +931,7 @@
     @media (prefers-reduced-motion: reduce) {
       .stashing-pill-logo .s-cyan > path,
       .stashing-list-logo .s-cyan > path,
-      .tab-stashing-logo .s-cyan > path,
-      .stashing-placeholder-logo .s-cyan > path {
+      .tab-stashing-logo .s-cyan > path {
         animation: none;
         stroke-dashoffset: 0;
         opacity: 0.7;
@@ -1074,13 +1026,9 @@
       flex-shrink: 0;
     }
 
-    /* Snapshot-import warning. Sits above the file tree when the active
-     * space's most recent snapshot import skipped chunks whose embedder
-     * didn't match the library's current provider — searchable content is
-     * silently incomplete, so we surface it rather than report "imported".
-     * Shares the amber warning palette with .pdf-failure-banner. Dismiss
-     * (×) clears it via /api/index-status. */
-    .snapshot-warning {
+    /* Index warning. Sits above the file tree when background indexing
+     * failed and search may be incomplete. */
+    .index-warning {
       display: flex;
       align-items: flex-start;
       gap: 8px;
@@ -1090,21 +1038,21 @@
       color: #5a3b00;
       font-size: 12px;
     }
-    .snapshot-warning-body {
+    .index-warning-body {
       flex: 1;
       min-width: 0;
       display: flex;
       flex-direction: column;
       gap: 2px;
     }
-    .snapshot-warning-title {
+    .index-warning-title {
       font-weight: 600;
     }
-    .snapshot-warning-msg {
+    .index-warning-msg {
       line-height: 1.4;
       opacity: 0.92;
     }
-    .snapshot-warning-dismiss {
+    .index-warning-dismiss {
       flex-shrink: 0;
       width: 18px;
       height: 18px;
@@ -1118,11 +1066,11 @@
       cursor: pointer;
       opacity: 0.6;
     }
-    .snapshot-warning-dismiss:hover {
+    .index-warning-dismiss:hover {
       background: #fef0c5;
       opacity: 1;
     }
-    .snapshot-warning-dismiss svg {
+    .index-warning-dismiss svg {
       width: 14px;
       height: 14px;
       vertical-align: -2px;
@@ -1165,9 +1113,9 @@
       box-shadow: inset 2px 0 0 var(--accent);
     }
 
-    /* SPACE header gets the same selected-state styling as
+    /* FOLDER header gets the same selected-state styling as
      * `.tree-row.folder.active-folder` when `activeFolder === ''` —
-     * VSCode-style "workspace root selected" indication so the user
+     * VSCode-style folder-root selected indication so the user
      * can tell where `+ new note` will create. */
     .side-head.active-root {
       background: var(--active);
@@ -1190,7 +1138,7 @@
 
     /* Highlight a folder row while files are being dragged over it —
      * tells the user "drop here → into this folder". Cleared on drop
-     * or when the cursor leaves the row. The SPACE header gets the
+     * or when the cursor leaves the row. The FOLDER header gets the
      * same highlight when it's the drop target (= move to root). */
     .tree-row.folder.drop-target,
     .side-head.drop-target {
@@ -1232,7 +1180,7 @@
 
     /* Flex-center the glyph so it sits on the row's vertical midline.
      * Without this the span is inline and the SVG rides the text
-     * baseline (looks high) — same treatment as `.kb-file-icon`. */
+     * baseline (looks high). */
     .tree-row .icon {
       display: inline-flex;
       align-items: center;
@@ -1253,13 +1201,6 @@
      * carry their own brand `fill` — no `currentColor` tint here. The old
      * `.format-md` / `.format-html` colour rules were dropped: they only
      * affected `currentColor`, which the filled Material SVGs don't use. */
-
-    /* Agent-maintained meta files (STASHBASE.md, *-metadata.md) carry a
-     * bot / 目录 glyph (still `currentColor`) and stay neutral muted — they're
-     * system files, not notes. */
-    .tree-row.file.meta-file .icon svg {
-      color: var(--muted);
-    }
 
     .tree-row .label {
       flex: 1;
@@ -1465,56 +1406,4 @@
     }
     .keyword-truncated:hover {
       background: transparent;
-    }
-
-    /* KNOWLEDGE BASE section — the KB-root governance file (STASHBASE.md)
-     * pinned at the top of the Files panel under a `.panel-section-head`
-     * "Knowledge base" label. Rows mirror the file-tree row metrics
-     * exactly (3px rhythm, 16px icon, 12px indent aligning the icon with
-     * the SPACE header's chevron) so the two sections read as one tidy
-     * list. Per-space rules are NOT here — they live in the tree below,
-     * where they physically are. */
-    .kb-file-list {
-      padding: 0;
-    }
-    .kb-file-row {
-      appearance: none;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      width: 100%;
-      text-align: left;
-      padding: 3px 8px 3px 12px;
-      border: 0;
-      border-left: 2px solid transparent;
-      background: transparent;
-      color: var(--fg);
-      font: inherit;
-      font-size: 13px;
-      cursor: pointer;
-    }
-    .kb-file-row:hover {
-      background: var(--hover);
-    }
-    .kb-file-row.selected {
-      background: var(--active);
-      border-left-color: var(--accent);
-      font-weight: 500;
-    }
-    .kb-file-icon {
-      display: inline-flex;
-      align-items: center;
-      flex-shrink: 0;
-    }
-    .kb-file-icon svg {
-      width: 16px;
-      height: 16px;
-      color: var(--muted);
-    }
-    .kb-file-label {
-      flex: 1;
-      min-width: 0;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }

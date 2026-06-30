@@ -1,26 +1,27 @@
 /**
  * App-level config persistence — the single `~/.stashbase/config.json`
  * (0600). This module owns the file primitives and the user-preference
- * accessors (API keys, terminal CLI, embedder provider); `space.ts`
- * reuses the same primitives for its kbRoot / recents fields. Extracted
- * from space.ts: credentials and preferences have nothing to do with
- * the space registry, and routes that only need a key shouldn't import
- * the whole window-context machinery.
+ * accessors (API keys, terminal CLI, embedder provider); `folder.ts`
+ * reuses the same primitives for library membership. Extracted from folder.ts:
+ * credentials and preferences have nothing to do with the folder registry, and
+ * routes that only need a key shouldn't import the whole window-context machinery.
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { logger, errorMessage } from './log.ts';
-import type { SpaceConfigFile } from './space.ts';
 
 const log = logger('app-config');
 
 const CONFIG_DIR = path.join(os.homedir(), '.stashbase');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
-export interface RecentSpace {
+export interface RecentFolder {
   path: string;
   openedAt: string;
+  description?: string;
+  descriptionSource?: 'user' | 'ai';
+  descriptionUpdatedAt?: string;
 }
 
 /** V1 is OpenAI-only. Kept as a one-member type so the surrounding
@@ -28,22 +29,18 @@ export interface RecentSpace {
  *  has an obvious seam. */
 export type EmbedderProvider = 'openai';
 
-export interface AppConfigFile extends SpaceConfigFile {
-  /** Absolute path of the KB root. All spaces must live under it.
-   *  Defaults to `~/Documents/StashBase/`; persisted so a future UI
-   *  can rebase it without changing code. */
-  kbRoot?: string;
-  recentSpaces?: RecentSpace[];
+export interface AppConfigFile {
+  /** NOTE: the legacy `folderHome` field is no longer read or written — the
+   *  configurable folder-home concept is gone. Existing configs may still carry
+   *  it on disk; it is ignored. The default folder home is now a fixed,
+   *  non-configurable path (see `folder.ts:getFolderHome`). */
+  recentFolders?: RecentFolder[];
   /** Legacy field from when the concept was called "vault". Read for
    *  back-compat (existing users keep their recents) and rewritten as
-   *  `recentSpaces` on the next write. */
-  recentVaults?: RecentSpace[];
+   *  `recentFolders` on the next write. */
+  recentVaults?: RecentFolder[];
   apiKey?: string;
-  /** Gemini API key for video analysis in the recording pipeline.
-   *  Recording requires it — without a key the record button asks the
-   *  user to configure one first (no offline fallback). */
-  geminiKey?: string;
-  /** Embedder provider is KB-wide (one collection family per
+  /** Embedder provider is library-wide (one collection family per
    *  provider on the daemon). `openaiKey` is a leftover from the very
    *  first global-config schema — its content moved into the top-level
    *  `apiKey` on read; we keep the type loose so legacy reads don't
@@ -52,10 +49,10 @@ export interface AppConfigFile extends SpaceConfigFile {
   /** Legacy last-used agent field. No longer written or read by the
    *  chat panel; kept so old config files parse without churn. */
   terminalCli?: string;
-  /** Set once the bundled built-in space (the product manual) has been
-   *  seeded into a fresh KB on first launch. A latch, not live state:
-   *  it stays true even if the user later deletes the space, so we
-   *  never recreate it behind their back. See `seedBuiltinSpace`. */
+  /** Set once the bundled built-in folder (the product manual) has been
+   *  seeded into a fresh folder home on first launch. A latch, not live state:
+   *  it stays true even if the user later deletes the folder, so we
+   *  never recreate it behind their back. See `seedBuiltinFolder`. */
   builtinSeeded?: boolean;
 }
 
@@ -64,10 +61,10 @@ export function readAppConfig(): AppConfigFile {
     const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return {};
-    // Migrate `recentVaults` → `recentSpaces` on read so legacy users
+    // Migrate `recentVaults` → `recentFolders` on read so legacy users
     // don't lose their list when the rename rolls out.
-    if (parsed.recentVaults && !parsed.recentSpaces) {
-      parsed.recentSpaces = parsed.recentVaults;
+    if (parsed.recentVaults && !parsed.recentFolders) {
+      parsed.recentFolders = parsed.recentVaults;
     }
     return parsed as AppConfigFile;
   } catch {
@@ -112,20 +109,6 @@ export function setApiKey(key: string | undefined): void {
   const cfg = readAppConfig();
   if (key && key.trim()) cfg.apiKey = key.trim();
   else delete cfg.apiKey;
-  writeAppConfigStrict(cfg);
-}
-
-/** Returns the user's stored Gemini API key, or undefined if none. */
-export function getGeminiKey(): string | undefined {
-  const k = readAppConfig().geminiKey;
-  return k && typeof k === 'string' && k.trim() ? k : undefined;
-}
-
-/** Persist (or clear, when `key` is falsy) the user's Gemini key. */
-export function setGeminiKey(key: string | undefined): void {
-  const cfg = readAppConfig();
-  if (key && key.trim()) cfg.geminiKey = key.trim();
-  else delete cfg.geminiKey;
   writeAppConfigStrict(cfg);
 }
 

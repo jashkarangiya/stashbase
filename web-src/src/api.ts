@@ -3,18 +3,16 @@
  * (see `server/index.ts`). Throws `ApiError` on non-2xx so callers can
  * `try/catch` once at the action layer.
  *
- * Paths are always space-relative POSIX (`topic/note.md`). The server
+ * Paths are always folder-relative POSIX (`topic/note.md`). The server
  * url-encodes them for us inside route patterns; the client must do the
  * same for path segments embedded into the URL.
  */
 
 /** Viewer format the renderer uses for tab routing. `md` / `html` are
- *  indexed note formats (text loaded from `/api/files/*`); `pdf` and
- *  `image` are binary-only viewers (rendered straight from `/asset/*`
- *  — PDF.js for pdf, a plain `<img>` for image). The server's
- *  `detectFormat()` still excludes both because the binaries aren't
- *  indexed (their hidden derived `.md` notes are) — this type is wider
- *  than the server's on purpose. */
+ *  text formats loaded from `/api/files/*`; `pdf` and `image` are
+ *  binary viewers rendered from `/asset/*`. Their searchable text lives
+ *  in AppData-derived Markdown, so this type is wider than the server's
+ *  editable text format on purpose. */
 export type FileFormat = 'md' | 'html' | 'pdf' | 'image';
 
 export interface ApiKeySaveResult {
@@ -37,49 +35,16 @@ export interface FolderMeta {
   path: string;
 }
 
-export interface SpaceState {
+export interface FolderState {
   current: { path: string; name: string } | null;
   recent: { path: string; openedAt: string }[];
   homeDir?: string;
 }
 
-export interface SpaceConfig {
-  mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
-}
-
-export type ImportFolderMode = 'copy' | 'move';
-
-export interface FolderImportPreview {
-  source: string;
-  name: string;
-  destination: string;
-  exists: boolean;
-  entryCount: number;
-  totalBytes: number;
-  requiresConfirmation: boolean;
-  requiresLargeImportConfirmation: boolean;
-  largeImportReason?: string;
-  warnings: string[];
-  hasSnapshot: boolean;
-  /** A space with this name already exists — Import refuses (won't merge);
-   *  the modal surfaces it and disables the import button. */
-  nameTaken: boolean;
-}
-
-export interface FolderImportResult {
-  path: string;
-  name: string;
-  mode: ImportFolderMode;
-  /** Present only when a `move` import copied successfully but the
-   *  original folder could not be fully deleted; the new space is intact
-   *  and the original needs manual cleanup. */
-  warning?: string;
-}
-
 export interface FilesPayload {
   files: FileMeta[];
   folders: FolderMeta[];
-  space: string;
+  folder: string;
 }
 
 export interface FileBody {
@@ -109,7 +74,7 @@ export type SessionBlock =
   | { kind: 'tool'; id: string; name: string; input: Record<string, unknown>; status: 'done' | 'error'; result?: string };
 
 export interface IndexStatus {
-  space?: string;
+  folder?: string;
   total: number;
   indexed: number;
   pendingCount: number;
@@ -121,18 +86,18 @@ export interface IndexStatus {
    *  upToDate, this ignores orphaned/hidden index rows that are not
    *  rendered as "stashing" work in the file tree. */
   visibleIndexingSettled?: boolean;
-  /** False while the server is still loading the index cache for a space. */
+  /** False while the server is still loading the index cache for a folder. */
   indexReady?: boolean;
-  /** Space-relative paths of PDFs the server is currently converting
+  /** Folder-relative paths of PDFs the server is currently converting
    *  into a readable note + bundle. Empty when no conversions are in
    *  flight. Used by the sidebar to render a transient indicator. */
   pendingConversions?: string[];
-  /** Space-relative conversion progress keyed by visible source path.
+  /** Folder-relative conversion progress keyed by visible source path.
    *  Used by PDF preview banners for "Reading page X" / indexing copy. */
   conversionProgress?: Record<string, ConversionProgress>;
   /** Persistent failure list — PDFs (pdf_extract) and images
    *  (ocr_extract) whose most recent conversion attempt errored.
-   *  Survives app restart (read back from `<KB>/.stashbase/state.db`).
+   *  Survives app restart (read back from AppData `state.db`).
    *  Empty when no failures. Drives the per-file Retry banner in
    *  PdfPreview / ImagePreview and the context-menu Retry entry. */
   conversionFailures?: ConversionFailure[];
@@ -142,12 +107,7 @@ export interface IndexStatus {
    *  up writes from the chat panel (Claude Code, `touch`, …) even
    *  for non-indexable files / empty dirs that don't move `pending`. */
   treeVersion?: number;
-  /** Non-null when this space's most recent snapshot import skipped
-   *  chunks because their provider key didn't match the knowledge base's
-   *  current embedder. The renderer surfaces this as a dismissible
-   *  banner with a link to switch embedders. */
-  snapshotWarning?: SnapshotWarning | null;
-  /** Non-null when the active space's background index sync failed after
+  /** Non-null when the active folder's background index sync failed after
    *  opening/importing. Cleared by a successful manual/background sync or
    *  user dismissal. */
   indexWarning?: IndexWarning | null;
@@ -156,12 +116,6 @@ export interface IndexStatus {
 export type ConversionProgress =
   | { phase: 'extracting'; currentPage?: number }
   | { phase: 'indexing' };
-
-export interface SnapshotWarning {
-  skipped: number;
-  details: { provider: string; chunks: number }[];
-  at: string;
-}
 
 export interface IndexWarning {
   message: string;
@@ -176,8 +130,8 @@ export interface ConversionFailure {
   attempts: number;
 }
 
-/** Full PDF status entries returned by `GET /api/pdf/status`. Keyed by
- *  KB-relative path. PdfPreview uses this to pick out the entry for
+/** Full PDF/image conversion status entries returned by `GET /api/pdf/status`.
+ *  Keyed by absolute source path. PdfPreview uses this to pick out the entry for
  *  the file it's rendering and decide whether to show the failure
  *  banner. */
 export type PdfStatusKind = 'in-flight' | 'done' | 'failed' | 'cancelled';
@@ -213,7 +167,7 @@ export interface UploadResult {
 
 export interface AgentContextFile {
   path: string;
-  space: string;
+  folder: string;
   sourcePath: string;
   readPath: string;
   kind: 'direct' | 'derived';
@@ -248,7 +202,7 @@ export interface KeywordHitFile {
 
 export interface KeywordSearchResult {
   query: string;
-  space: string;
+  folder: string;
   files: KeywordHitFile[];
   totalMatches: number;
   truncated: boolean;
@@ -373,97 +327,29 @@ export function encodePath(p: string): string {
 }
 
 export const api = {
-  // Space ---------------------------------------------------------
-  getSpace: () => getJson<SpaceState>('/api/space'),
-  openSpace: (path: string) => send<SpaceState>('POST', '/api/space', { path }),
-  /** Open a space by name (single segment under the KB root).
-   *  Preferred over `openSpace(path)` for new flows now that spaces
-   *  are flat. `create:true` makes the server mkdir a missing folder;
-   *  `exclusiveCreate:true` makes existing spaces a 409 conflict. Without
-   *  create, opening a non-existent name errors
-   *  rather than resurrecting a since-deleted space as an empty dir. */
-  openSpaceByName: (name: string, opts?: { create?: boolean; exclusiveCreate?: boolean }) =>
-    send<SpaceState>('POST', '/api/space', {
+  // Folder ---------------------------------------------------------
+  getFolder: () => getJson<FolderState>('/api/folder'),
+  openFolder: (path: string) => send<FolderState>('POST', '/api/folder', { path }),
+  /** Open a direct child of the default StashBase home by name. Kept for
+   *  switch / rename flows that operate on known default-home folders. */
+  openFolderByName: (name: string, opts?: { create?: boolean; exclusiveCreate?: boolean }) =>
+    send<FolderState>('POST', '/api/folder', {
       name,
       create: opts?.create,
       exclusiveCreate: opts?.exclusiveCreate,
     }),
-  closeSpace: () => send<{ ok: boolean }>('DELETE', '/api/space'),
-  /** Absolute path of the KB root. All spaces live under it as direct
-   *  children; the renderer uses this to display the home-relative
-   *  form (`~/Documents/StashBase`) in copy. */
-  getKbRoot: () => getJson<{ path: string; needsPicker?: boolean }>('/api/kb-root'),
-  /** Pre-flight for the "move my spaces over" flow when changing the KB
-   *  root: which spaces would move and which collide with same-named
-   *  spaces already in the target. */
-  kbRootMigrationPreview: (target: string) =>
-    getJson<{ spaces: string[]; collisions: string[]; sameRoot: boolean }>(
-      '/api/kb-root/migration-preview?target=' + encodeURIComponent(target),
-    ),
-  setKbRoot: (
-    path: string,
-    opts: {
-      confirmNonEmpty?: boolean;
-      migrate?: { name: string; action: 'move' | 'overwrite' | 'rename' }[];
-    } = {},
-  ) =>
-    send<{ path: string; warnings?: string[] }>('PUT', '/api/kb-root', {
-      path,
-      confirmNonEmpty: opts.confirmNonEmpty ?? false,
-      migrate: opts.migrate,
-    }),
-  /** Direct-child directory names under kbRoot — every entry is a
-   *  candidate the server will accept as a space name. Powers the
-   *  "Open space" dropdown. */
-  listAvailableSpaces: () => getJson<{ names: string[] }>('/api/spaces/available'),
-  renameSpace: (name: string, nextName: string) =>
-    send<{ name: string; path: string }>('PATCH', '/api/spaces/' + encodeURIComponent(name), { name: nextName }),
-  deleteSpace: (name: string) =>
-    send<Record<string, never>>('DELETE', '/api/spaces/' + encodeURIComponent(name)),
-  getSpaceConfig: (name: string) =>
-    getJson<{ path: string; local: SpaceConfig; resolved: Required<SpaceConfig> }>(
-      '/api/spaces/' + encodeURIComponent(name) + '/config',
-    ),
-  putSpaceConfig: (name: string, config: SpaceConfig) =>
-    send<{ path: string; local: SpaceConfig; resolved: Required<SpaceConfig> }>(
-      'PUT',
-      '/api/spaces/' + encodeURIComponent(name) + '/config',
-      config,
-    ),
-  /** Read `<kbRoot>/STASHBASE.md` — the KB-level rules book. Powers the
-   *  Knowledge base section's "STASHBASE.md" row. */
-  getKbRules: () => getJson<{ content: string; version?: string }>('/api/kb/rules'),
-  putKbRules: (content: string, baseVersion?: string) =>
-    send<{ ok: true; version?: string }>(
-      'POST',
-      '/api/kb/rules',
-      { content, ...(baseVersion !== undefined ? { baseVersion } : {}) },
-    ),
-  /** Copy a local folder into kbRoot as a new space. `source` is an
-   *  absolute path; the renderer obtains it from
-   *  `window.electron.openFolderDialog` (Electron-only). `name`
-   *  defaults to the basename of `source` server-side. */
-  previewImportFolder: (source: string, name = '') =>
-    send<FolderImportPreview>('POST', '/api/space/import-folder/preview', { source, name }),
-  importFolder: (
-    source: string,
-    opts: {
-      name?: string;
-      mode?: ImportFolderMode;
-      confirmExisting?: boolean;
-      confirmLargeImport?: boolean;
-    } = {},
-  ) =>
-    send<FolderImportResult>('POST', '/api/space/import-folder', {
-      source,
-      name: opts.name ?? '',
-      mode: opts.mode ?? 'copy',
-      confirmExisting: opts.confirmExisting === true,
-      confirmLargeImport: opts.confirmLargeImport === true,
-    }),
+  closeFolder: () => send<{ ok: boolean }>('DELETE', '/api/folder'),
+  /** Absolute path of the default folder home. New Folder opens the native
+   *  picker here, but users can still open any folder on disk. */
+  getFolderHome: () => getJson<{ path: string }>('/api/folder-home'),
+  /** Remove a folder from the library ("Your Folders"): forgets it
+   *  (unbind + clear index + drop from membership) WITHOUT touching the
+   *  folder on disk. */
+  removeFolder: (path: string) =>
+    send<Record<string, never>>('POST', '/api/folders/remove', { path }),
   /** Manual sidebar ordering — full map of `parentPath → child basenames`. */
   getFileOrder: () => getJson<Record<string, string[]>>('/api/file-order'),
-  /** Update one folder's ordered list. `parentPath` `""` = space root. */
+  /** Update one folder's ordered list. `parentPath` `""` = folder root. */
   putFileOrder: (parentPath: string, names: string[]) =>
     send<Record<string, never>>('PUT', '/api/file-order', { parentPath, names }),
 
@@ -519,7 +405,7 @@ export const api = {
   upload: async (
     items: { file: File; relPath: string }[],
     dir = '',
-    space?: string,
+    folder?: string,
   ): Promise<UploadResult> => {
     const fd = new FormData();
     for (const it of items) {
@@ -527,29 +413,13 @@ export const api = {
       fd.append('paths', it.relPath);
     }
     if (dir) fd.append('dir', dir);
-    if (space) fd.append('space', space);
+    if (folder) fd.append('folder', folder);
     const r = await fetch('/api/upload', { method: 'POST', body: fd, headers: requestHeaders() });
     return parseJsonOrThrow<UploadResult>(r);
   },
 
-  /** Ingest a screen recording: the webm is saved into the note's
-   *  `<stem>_files/` bundle, then Gemini writes/updates a visible
-   *  `recording-<ts>.md` note in the background. */
-  recordVideo: async (
-    file: File,
-    dir = '',
-    space?: string,
-  ): Promise<{ ok?: boolean; file?: string; error?: string }> => {
-    const fd = new FormData();
-    fd.append('file', file);
-    if (dir) fd.append('dir', dir);
-    if (space) fd.append('space', space);
-    const r = await fetch('/api/recording', { method: 'POST', body: fd, headers: requestHeaders() });
-    return parseJsonOrThrow(r);
-  },
-
   /** Attach files as transient chat context — written to a throwaway OS
-   *  temp dir (NOT the space) and returned as absolute paths the agent
+   *  temp dir (NOT the folder) and returned as absolute paths the agent
    *  reads. Used by the composer `+` and panel drag-drop. */
   attachFiles: async (
     files: File[],
@@ -559,55 +429,45 @@ export const api = {
     const r = await fetch('/api/agent/attach', { method: 'POST', body: fd, headers: requestHeaders() });
     return parseJsonOrThrow(r);
   },
-  agentContextFile: (space: string, path: string) =>
+  agentContextFile: (folder: string, path: string) =>
     getJson<AgentContextFile>(
-      '/api/kb/agent-context-file?path=' + encodeURIComponent(`${space}/${path}`),
+      '/api/library/agent-context-file?path=' + encodeURIComponent(`${folder}/${path}`),
     ),
 
   // Sync / search / status --------------------------------------
-  sync: (space?: string) => send<SyncResult>(
+  sync: (folder?: string) => send<SyncResult>(
     'POST',
-    space ? `/api/sync?space=${encodeURIComponent(space)}` : '/api/sync',
+    folder ? `/api/sync?folder=${encodeURIComponent(folder)}` : '/api/sync',
   ),
-  search: (query: string, top_k = 8, opts?: { space?: string }) =>
-    send<{ hits: SearchHit[] }>('POST', '/api/search', { query, top_k, space: opts?.space }),
-  keywordSearch: (query: string, opts?: { caseStrict?: boolean; wholeWord?: boolean; space?: string }) => {
+  search: (query: string, top_k = 8, opts?: { folder?: string }) =>
+    send<{ hits: SearchHit[] }>('POST', '/api/search', { query, top_k, folder: opts?.folder }),
+  keywordSearch: (query: string, opts?: { caseStrict?: boolean; wholeWord?: boolean; folder?: string }) => {
     const qs = new URLSearchParams({ q: query });
     if (opts?.caseStrict) qs.set('case_strict', '1');
     if (opts?.wholeWord) qs.set('whole_word', '1');
-    // Pass the active window's space explicitly so multi-window
-    // sessions don't fall back to the server's single `currentSpace`
-    // singleton and search the wrong space's tree.
-    if (opts?.space) qs.set('space', opts.space);
+    // Pass the active window's folder explicitly so multi-window
+    // sessions don't fall back to the server's single `currentFolder`
+    // singleton and search the wrong folder's tree.
+    if (opts?.folder) qs.set('folder', opts.folder);
     return getJson<KeywordSearchResult>(`/api/keyword-search?${qs.toString()}`);
   },
-  indexStatus: (space?: string) =>
-    getJson<IndexStatus>(space ? `/api/index-status?space=${encodeURIComponent(space)}` : '/api/index-status'),
-  dismissSnapshotWarning: (space?: string) =>
-    send<{ ok: boolean }>('POST', '/api/snapshot-warning/dismiss', { space }),
-  dismissIndexWarning: (space?: string) =>
-    send<{ ok: boolean }>('POST', '/api/index-warning/dismiss', { space }),
-  /** Bake the current space's embeddings into a portable
-   *  `.stashbase/snapshot.parquet` (+ `snapshot.meta.json`) so copying /
-   *  git-cloning the space folder carries the vectors — the other end
-   *  reuses them by `text_hash` instead of re-embedding. */
-  exportSnapshot: (space?: string) =>
-    send<{ vectors: number; chunks: number; embedder: { provider: string; model: string | null; dim: number } }>(
-      'POST', '/api/space/export-snapshot', { space },
-    ),
+  indexStatus: (folder?: string) =>
+    getJson<IndexStatus>(folder ? `/api/index-status?folder=${encodeURIComponent(folder)}` : '/api/index-status'),
+  dismissIndexWarning: (folder?: string) =>
+    send<{ ok: boolean }>('POST', '/api/index-warning/dismiss', { folder }),
 
-  /** Full per-file PDF conversion status, KB-wide, keyed by KB-relative
-   *  path. PdfPreview calls this when the active file is a PDF to
+  /** Full per-file PDF/image conversion status, library-wide, keyed by
+   *  absolute source path. PdfPreview calls this when the active file is a PDF to
    *  decide whether to render the failure banner. */
   pdfStatus: () =>
     getJson<{ entries: Record<string, PdfStatusEntry> }>('/api/pdf/status'),
-  /** Retry conversion of a specific PDF or image (space-relative path).
+  /** Retry conversion of a specific PDF or image (folder-relative path).
    *  Clears the existing status record, removes the stale derived note
    *  (+ PDF bundle) if present, then re-fires the matching converter
    *  (pdf_extract / ocr_extract) in the background. Client observes the
    *  outcome via the next `/api/index-status` poll. */
-  retryConversion: (path: string, opts?: { space?: string }) =>
-    send<{ ok: boolean }>('POST', '/api/conversion/retry', { path, space: opts?.space }),
+  retryConversion: (path: string, opts?: { folder?: string }) =>
+    send<{ ok: boolean }>('POST', '/api/conversion/retry', { path, folder: opts?.folder }),
 
   // Embedder ----------------------------------------------------
   getEmbedder: () => getJson<EmbedderState>('/api/embedder'),
@@ -619,10 +479,6 @@ export const api = {
   listAgents: () => getJson<AgentsResponse>('/api/terminal/clis'),
   mcpStatus: () =>
     getJson<{ clients: Record<string, boolean>; command: string; config: unknown }>('/api/mcp/status'),
-  listMcpTools: () =>
-    getJson<{ tools: { server: string; name: string; fqName: string; description?: string; inputSchema: unknown }[] }>('/api/mcp/tools'),
-  callMcpTool: (name: string, args: Record<string, unknown> = {}) =>
-    send<{ result: unknown }>('POST', '/api/mcp/tools/call', { name, arguments: args }),
   // `send` throws ApiError on any non-2xx, so a resolved value is always
   // the success shape — no `error` field, `ok` is always true. (The
   // Electron bridge path in McpClientsPanel models `{ok:false,error}`
@@ -651,15 +507,8 @@ export const api = {
   removeApiKey: () =>
     send<{ hasKey: false }>('DELETE', '/api/embedder/key'),
 
-  // Gemini key (for video analysis in the recording pipeline) --------
-  getGeminiKey: () => getJson<{ hasKey: boolean }>('/api/gemini/key'),
-  setGeminiKey: (geminiKey: string) =>
-    send<{ hasKey: true }>('PUT', '/api/gemini/key', { geminiKey }),
-  removeGeminiKey: () =>
-    send<{ hasKey: false }>('DELETE', '/api/gemini/key'),
-
   // Agent sessions (chat-panel History dropdown) ----------------
-  /** All local agent sessions for the current space, newest first. */
+  /** All local agent sessions for the current folder, newest first. */
   listSessions: (agent: 'claude' | 'codex' = 'claude') =>
     getJson<SessionInfo[]>(agentSessionBase(agent)),
   /** A session's transcript as renderable blocks (for resume replay). */
@@ -675,42 +524,14 @@ function agentSessionBase(agent: 'claude' | 'codex'): string {
   return agent === 'codex' ? '/api/codex/sessions' : '/api/agent/sessions';
 }
 
-/** Set the KB root, transparently handling the "directory is not empty"
- *  guard: the server rejects a populated target with 409 unless
- *  `confirmNonEmpty` is set, so on 409 we ask the user and, if they
- *  agree, retry with the flag. Returns the server result, or `null` when
- *  the user declines the confirmation. Other errors propagate.
- *
- *  Shared by the first-run root picker (Welcome) and Settings → Storage,
- *  which otherwise hand-rolled the same 409 dance. Callers own their own
- *  busy / error UI and what to do with a successful result. */
-export async function setKbRootConfirming(
-  path: string,
-  confirm: (message: string) => Promise<boolean>,
-): Promise<{ path: string; warnings?: string[] } | null> {
-  try {
-    return await api.setKbRoot(path, { confirmNonEmpty: false });
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 409) {
-      const ok = await confirm(
-        'That directory is not empty. StashBase will treat each direct child folder as a space, ' +
-        'and supported files inside opened spaces may be indexed. Use a dedicated StashBase folder unless this is already a knowledge base root. Continue?',
-      );
-      if (!ok) return null;
-      return await api.setKbRoot(path, { confirmNonEmpty: true });
-    }
-    throw err;
-  }
-}
-
 /** Asset URL for HTML files (used by the preview iframe so relative
  *  references inside the page — `<img src="X_files/figure.png">` —
- *  resolve correctly). Caller passes a space-relative path.
+ *  resolve correctly). Caller passes a folder-relative path.
  *
  *  The reserved `__window/<id>/` path prefix mirrors the
  *  `x-stashbase-window-id` header that fetch-based calls carry — the
  *  browser can't add a custom header to `<img src>` or iframe loads.
- *  Without it, images would resolve against the default window's space
+ *  Without it, images would resolve against the default window's folder
  *  in a multi-window session. */
 export function assetUrl(name: string): string {
   return assetWindowPrefix() + encodePath(name);
@@ -724,12 +545,12 @@ export function versionedAssetUrl(name: string, version: string): string {
 
 /** Base URL for live HTML edit previews. The preview itself is a blob,
  *  but relative image/css/font URLs should still resolve next to the
- *  saved file in the current space.
+ *  saved file in the current folder.
  *
  *  The window id lives in the path instead of a query string because
  *  `<base href="?windowId=…">` does not propagate that query to relative
  *  `<img>`, CSS, or font URLs. The server strips the reserved prefix
- *  before resolving the actual space-relative asset path. */
+ *  before resolving the actual folder-relative asset path. */
 export function assetBaseUrl(name: string): string {
   const parts = name.split('/');
   parts.pop();

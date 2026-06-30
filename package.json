@@ -43,7 +43,6 @@
     "build:python-sidecar": "node scripts/build-python-sidecar.mjs",
     "build:python-extract-sidecar": "node scripts/build-python-sidecar.mjs --with-extract",
     "clean:python-build": "node scripts/clean-python-build.mjs",
-    "test:import-folder": "node --import tsx --test server/import-folder.test.ts",
     "build": "pnpm build:web && pnpm build:server && pnpm build:mcp",
     "build:desktop": "pnpm build && pnpm build:python-sidecar",
     "setup:python": "node scripts/setup-python.mjs",
@@ -99,8 +98,8 @@
         "to": "python/sidecar"
       },
       {
-        "from": "assets/builtin-space",
-        "to": "assets/builtin-space"
+        "from": "assets/builtin-library",
+        "to": "assets/builtin-library"
       }
     ],
     "asar": true,

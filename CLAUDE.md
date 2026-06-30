@@ -44,7 +44,12 @@ detail.
 What it covers: the module map, where each concern lives, how data flows
 between TS / Python / MCP / Electron, the load-bearing extension points, the
 indexing / store / embedder technical details (MFS behaviour, Milvus schema,
-chunker), and the design-decision log.
+chunker).
+
+**Describe only the current state.** No changelog / before-after / "we
+removed X" / "now fixed" / "V2 may add Y" framing — state what the system
+*is* today; if something no longer exists, simply don't mention it. (One
+machine = one environment = one library; there is no multi-library model.)
 
 Update it when: module boundaries change (new file under `server/` or
 `web-src/src/`), a data flow shifts (e.g. a route moves from sync to fire-and-
@@ -105,7 +110,6 @@ without hand-holding:
    ownership, credentials only in Settings — never env).
 3. **Verify — never report done without this**:
    - `npx tsc --noEmit` (always)
-   - `pnpm test:import-folder` (server changes)
    - `npx vite build --config web-src/vite.config.ts` (renderer changes)
 4. **Update the affected design docs in the same change** (local
    `design-docs/` only — there is no external mirror). Update README /
@@ -121,8 +125,8 @@ commits by theme** — feature / fix / refactor / docs separately, never
 unrelated work bundled. Match the existing style: `fix(scope): …`,
 `feat(scope): …`, `refactor(scope): …`, `docs(scope): …`, `chore: …`.
 Mixed files (one file carrying two themes) may be split by temporarily
-restoring + re-applying hunks so each commit compiles and tests green
-on its own. Do NOT push — push only when the user says push, or as
+restoring + re-applying hunks so each commit compiles on its own.
+Do NOT push — push only when the user says push, or as
 part of a release.
 
 ## Release procedure

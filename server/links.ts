@@ -1,12 +1,12 @@
 /**
  * Cross-reference link maintenance: when a file or folder is renamed
- * or moved, walk every other note in the space and rewrite any link
+ * or moved, walk every other note in the folder and rewrite any link
  * that resolves to the moved item so it still points at the right
  * place. Also handles re-relativising links inside the moved file
  * itself when its parent depth changed.
  *
  * Two entry points, used independently:
- *   - `planRenameLinks(renames)` — dry-run preview. Reads the space in
+ *   - `planRenameLinks(renames)` — dry-run preview. Reads the folder in
  *     its PRE-rename state and returns the prospective new content
  *     for every file that would have at least one link rewritten.
  *     Powers the VSCode-style "Update N references in M files?"
@@ -14,7 +14,7 @@
  *     is never written by this module — the route applies it directly
  *     so it can reuse the bodies without re-walking disk.
  *   - `cascadeRenameLinks(renames)` — post-rename execution. Reads the
- *     space in its POST-rename state, recovers each file's pre-rename
+ *     folder in its POST-rename state, recovers each file's pre-rename
  *     location via the reverse mapping, rewrites + saves in place.
  *     Run AFTER the on-disk rename so a rolled-back rename leaves no
  *     stale link rewrites behind. Caller re-indexes the returned files.
@@ -33,13 +33,13 @@
  *     resolve against the file's own `<stem>_files/` bundle, which
  *     moves with the note via `renameOnDisk`).
  *   - Reference-style markdown links (`[text][id]` + `[id]: url`).
- *     Possible follow-up; KB-style docs rarely use this form.
+ *     Possible follow-up; library-style docs rarely use this form.
  *   - External URLs, `mailto:`, fragment-only `#anchor`.
  *
  * Path semantics:
- *   - Hrefs starting with `/` are treated as space-root absolute
+ *   - Hrefs starting with `/` are treated as folder-root absolute
  *     (after stripping the leading slash). Anything that resolves
- *     outside the space root is skipped.
+ *     outside the folder root is skipped.
  *   - `?query` and `#anchor` suffixes are preserved verbatim.
  */
 import path from 'node:path';
@@ -53,9 +53,9 @@ const { posix } = path;
 export interface RenameEntry {
   /** `file`: exact path match only. `folder`: also matches paths under `old/`. */
   kind: 'file' | 'folder';
-  /** Pre-rename space-relative POSIX path. */
+  /** Pre-rename folder-relative POSIX path. */
   old: string;
-  /** Post-rename space-relative POSIX path. */
+  /** Post-rename folder-relative POSIX path. */
   new: string;
 }
 
@@ -126,9 +126,9 @@ function extractHtmlLinks(content: string): LinkMatch[] {
   return out;
 }
 
-/** Split a raw href into its space-relative path target and any
+/** Split a raw href into its folder-relative path target and any
  *  `?query` / `#anchor` tail. Returns null for external URLs,
- *  anchor-only links, or anything that escapes the space root. */
+ *  anchor-only links, or anything that escapes the folder root. */
 function resolveLink(href: string, fileDir: string): { path: string; suffix: string } | null {
   if (!href || href.startsWith('#')) return null;
   // Any explicit scheme — http(s), mailto, data, file, ...
@@ -242,7 +242,7 @@ function dirOf(name: string): string {
   return d === '.' ? '' : d;
 }
 
-/** Dry-run: walks the space in its PRE-rename state and returns the
+/** Dry-run: walks the folder in its PRE-rename state and returns the
  *  prospective new content for every file that would have at least
  *  one link rewritten. Used by `/api/rename-preview` to power the
  *  confirmation dialog AND by the apply step to avoid re-walking. */

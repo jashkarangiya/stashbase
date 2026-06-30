@@ -19,7 +19,6 @@ import type {
   ConversionProgress,
   IndexWarning,
   SearchHit,
-  SnapshotWarning,
   Agent,
 } from '../api';
 
@@ -58,9 +57,6 @@ export interface OpenFile {
   /** Opaque server-side file version used to reject stale autosaves
    *  when another window or external editor changed the same file. */
   version?: string;
-  /** `'kb'` for Knowledge base files (`<kbRoot>/STASHBASE.md`). Default
-   *  (omitted) means a regular per-space file. */
-  kind?: 'space' | 'kb';
 }
 
 export interface CtxMenu {
@@ -162,7 +158,13 @@ export interface State {
   welcomeVisible: boolean;
   welcomeError: string | null;
 
-  space: string;
+  /** Human-facing active folder label. Use `folderPath` for API scope /
+   *  identity; this value is for titles, sidebar headings, and empty-state
+   *  copy. */
+  folder: string;
+  /** Absolute POSIX path of the active folder. This is the stable identity
+   *  for search, sync, conversion retry, uploads, and agent context. */
+  folderPath: string;
   recent: { path: string; openedAt: string }[];
   /** OS home directory — used by the Welcome screen to render
    *  `~/foo` instead of the full `/Users/<name>/foo`. */
@@ -174,7 +176,7 @@ export interface State {
   /** Manual sidebar ordering — map of `parentPath` → ordered list of
    *  child basenames. Empty map = use default (folders-first +
    *  alphabetical) for every folder. Mutated by drag-to-reorder in the
-   *  tree; reset / refetched on space switch. */
+   *  tree; reset / refetched on folder switch. */
   fileOrder: Record<string, string[]>;
 
   /** Ordered open tabs. The tab strip renders this array left-to-right.
@@ -188,9 +190,9 @@ export interface State {
   /** The single "focused row" in the sidebar — at most one row (file or
    *  folder) is visually selected at a time. Tracks the open file by
    *  default; explicit clicks (tree row, breadcrumb segment, folder
-   *  toggle) override it. `''` = SPACE root is the focused row. */
+   *  toggle) override it. `''` = FOLDER root is the focused row. */
   selectedPath: string;
-  spaceCollapsed: boolean;
+  folderCollapsed: boolean;
   /** True hides the resizable side panel, leaving only the 44px activity
    *  rail visible (VSCode-style — the rail itself never collapses). */
   sidebarCollapsed: boolean;
@@ -213,16 +215,15 @@ export interface State {
   activeChatTabId: string | null;
 
   /** User-visible paths whose searchable content is still being embedded.
-   *  Usually structured notes (md/html). For derived PDF/image notes the
-   *  status layer remaps the hidden `.source.ext.md` path back to the
-   *  visible source file so the UI never exposes implementation files. */
+   *  Usually structured notes (md/html). For PDF/image, status reports the
+   *  visible source file even though the searchable text is AppData-derived. */
   pendingNames: Set<string>;
-  /** Space-relative paths of PDFs the server is converting right now.
+  /** Folder-relative paths of PDFs the server is converting right now.
    *  Sidebar shows a "Converting…" row per entry; transition to
    *  empty triggers a `loadFiles` so the produced `.html` shows up
    *  in the tree without waiting for the next user action. */
   pendingConversions: string[];
-  /** Current per-file conversion progress for the active space. Kept
+  /** Current per-file conversion progress for the active folder. Kept
    *  separate from `pendingConversions` so the sidebar stays simple
    *  while rich viewers can show local detail. */
   conversionProgress: Record<string, ConversionProgress>;
@@ -238,7 +239,7 @@ export interface State {
    *  run search in whichever mode `searchMode` selects. */
   filterQuery: string;
   /** `'semantic'` runs vector + BM25 hybrid via the daemon (`/api/search`).
-   *  `'keyword'` runs ripgrep against the active space dir
+   *  `'keyword'` runs ripgrep against the active folder dir
    *  (`/api/keyword-search`) — no daemon, no embeddings. The toggle
    *  switches without clearing the input so the user can compare. */
   searchMode: 'semantic' | 'keyword';
@@ -267,14 +268,10 @@ export interface State {
    *  search is disabled when this is explicitly false. */
   embedderHasKey: boolean | null;
 
-  /** Non-null while the active space's most recent snapshot import
-   *  surfaced a provider-mismatch warning. Cleared by user dismissal
-   *  (`SNAPSHOT_WARNING_DISMISS`) or by the server reporting null. */
-  snapshotWarning: SnapshotWarning | null;
-  /** Non-null when the active space's background indexing failed.
+  /** Non-null when the active folder's background indexing failed.
    *  Cleared by user dismissal or the server reporting a later success. */
   indexWarning: IndexWarning | null;
-  /** Space-relative paths of PDFs / images whose most recent conversion
+  /** Folder-relative paths of PDFs / images whose most recent conversion
    *  failed, carried in from `/api/index-status`. Drives the failure
    *  banner inside `PdfPreview` / `ImagePreview` and the context-menu
    *  "Retry conversion" entry. Empty when no failures. */
@@ -320,7 +317,8 @@ export interface State {
 export const initialState: State = {
   welcomeVisible: true,
   welcomeError: null,
-  space: '',
+  folder: '',
+  folderPath: '',
   recent: [],
   homeDir: '',
   files: [],
@@ -331,7 +329,7 @@ export const initialState: State = {
   expanded: new Set(),
   activeFolder: '',
   selectedPath: '',
-  spaceCollapsed: false,
+  folderCollapsed: false,
   sidebarCollapsed: false,
   sidebarWidth: 280,
   chatOpen: false,
@@ -353,7 +351,6 @@ export const initialState: State = {
   searching: false,
   searchError: null,
   embedderHasKey: null,
-  snapshotWarning: null,
   indexWarning: null,
   conversionFailures: [],
   ctxMenu: null,
@@ -370,8 +367,8 @@ export type Action =
   | { type: 'WELCOME_SHOW'; recent: State['recent']; homeDir?: string; error?: string | null }
   | { type: 'RECENT_LOADED'; recent: State['recent']; homeDir?: string }
   | { type: 'WELCOME_ERROR'; error: string }
-  | { type: 'SPACE_NAME'; space: string }
-  | { type: 'FILES_LOADED'; files: FileMeta[]; folders: FolderMeta[]; space: string }
+  | { type: 'FOLDER_CONTEXT'; folder: string; folderPath: string }
+  | { type: 'FILES_LOADED'; files: FileMeta[]; folders: FolderMeta[]; folder: string; folderPath?: string }
   | { type: 'FILE_ORDER_LOADED'; order: Record<string, string[]> }
   /** Replace one folder's ordered list (optimistic update before the
    *  PUT lands). Names list may include entries that no longer exist
@@ -394,15 +391,14 @@ export type Action =
   | { type: 'NEW_TAB' }
   | { type: 'CLOSE_TAB'; id: string }
   | { type: 'ACTIVATE_TAB'; id: string }
-  /** Close every open tab — used on space switch / "go home". */
+  /** Close every open tab — used on folder switch / "go home". */
   | { type: 'TABS_RESET' }
   | { type: 'EDIT_MODE'; on: boolean }
   | { type: 'TOGGLE_FOLDER'; path: string }
   | { type: 'EXPAND_FOLDER'; path: string }
   | { type: 'COLLAPSE_ALL_FOLDERS' }
   | { type: 'EXPAND_ALL_FOLDERS'; paths: string[] }
-  | { type: 'SPACE_FOLD_TOGGLE' }
-  | { type: 'SIDEBAR_FOLD_TOGGLE' }
+  | { type: 'FOLDER_FOLD_TOGGLE' }
   | { type: 'SIDEBAR_SET_COLLAPSED'; collapsed: boolean }
   | { type: 'SIDEBAR_WIDTH'; width: number }
   | { type: 'CHAT_TOGGLE' }
@@ -433,7 +429,6 @@ export type Action =
   | { type: 'SIDEBAR_VIEW'; view: 'files' | 'search' }
   | { type: 'SEARCH_CASE_STRICT'; strict: boolean }
   | { type: 'SEARCH_WHOLE_WORD'; on: boolean }
-  | { type: 'SNAPSHOT_WARNING'; warning: SnapshotWarning | null }
   | { type: 'INDEX_WARNING'; warning: IndexWarning | null }
   | { type: 'CONVERSION_FAILURES'; failures: ConversionFailure[] }
   | { type: 'CTX_MENU'; menu: CtxMenu | null }
@@ -505,7 +500,7 @@ export function isVisibleStashing(s: State, path: string): boolean {
     || isVisibleIndexPending(s, path);
 }
 
-/** Space-relative paths that count as "stashing" — the work the user is
+/** Folder-relative paths that count as "stashing" — the work the user is
  *  waiting on before a dropped/imported file is fully searchable. Two
  *  sources, unioned: `pendingConversions` (slow extraction/analysis of PDF /
  *  image / recording sources) and the not-yet-indexed subset of
@@ -626,10 +621,18 @@ export function reducer(s: State, a: Action): State {
       };
     case 'WELCOME_ERROR':
       return { ...s, welcomeError: a.error };
-    case 'SPACE_NAME':
-      return s.space === a.space ? s : { ...s, space: a.space };
+    case 'FOLDER_CONTEXT':
+      return s.folder === a.folder && s.folderPath === a.folderPath
+        ? s
+        : { ...s, folder: a.folder, folderPath: a.folderPath };
     case 'FILES_LOADED':
-      return { ...s, files: a.files, folders: a.folders, space: a.space };
+      return {
+        ...s,
+        files: a.files,
+        folders: a.folders,
+        folder: a.folder,
+        folderPath: a.folderPath ?? (a.folder ? s.folderPath : ''),
+      };
     case 'FILE_ORDER_LOADED':
       return { ...s, fileOrder: a.order };
     case 'FILE_ORDER_SET': {
@@ -644,9 +647,6 @@ export function reducer(s: State, a: Action): State {
         format: a.body.format,
         content: a.body.content,
         version: a.body.version,
-        // Carried through for kb-kind tabs (STASHBASE.md) so the save
-        // path routes to the rules endpoint.
-        ...((a.body as any).kind ? { kind: (a.body as any).kind } : {}),
       };
       // New-tab mode (double-click in tree, `+` then a click): create
       // a fresh tab and load into it. Otherwise replace the active
@@ -660,7 +660,7 @@ export function reducer(s: State, a: Action): State {
           ...s,
           tabs: [...s.tabs, tab],
           activeTabId: tab.id,
-          selectedPath: file.kind === 'kb' ? s.selectedPath : file.name,
+          selectedPath: file.name,
         };
       }
       return {
@@ -675,7 +675,7 @@ export function reducer(s: State, a: Action): State {
           // preview/pinned status.
           ...(a.preview != null ? { preview: a.preview } : {}),
         }),
-        selectedPath: file.kind === 'kb' ? s.selectedPath : file.name,
+        selectedPath: file.name,
       };
     }
     case 'FILE_PATCH': {
@@ -692,7 +692,7 @@ export function reducer(s: State, a: Action): State {
       const names = new Set(a.names);
       const stale = new Set(
         s.tabs
-          .filter((t) => t.file && (t.file.kind ?? 'space') === 'space' && !t.editMode && !names.has(t.file.name))
+          .filter((t) => t.file && !t.editMode && !names.has(t.file.name))
           .map((t) => t.id),
       );
       if (stale.size === 0) return s;
@@ -722,7 +722,7 @@ export function reducer(s: State, a: Action): State {
         return path === f.path ? f : { ...f, path };
       });
       const tabs = s.tabs.map((t) => {
-        if (!t.file || t.file.kind === 'kb') return t;
+        if (!t.file) return t;
         const nextName = remapOnePath(t.file.name, a.from, a.to, a.kind);
         return nextName === t.file.name ? t : { ...t, file: { ...t.file, name: nextName } };
       });
@@ -803,10 +803,8 @@ export function reducer(s: State, a: Action): State {
       return { ...s, expanded: new Set(), activeFolder: '' };
     case 'EXPAND_ALL_FOLDERS':
       return { ...s, expanded: new Set(a.paths) };
-    case 'SPACE_FOLD_TOGGLE':
-      return { ...s, spaceCollapsed: !s.spaceCollapsed };
-    case 'SIDEBAR_FOLD_TOGGLE':
-      return { ...s, sidebarCollapsed: !s.sidebarCollapsed };
+    case 'FOLDER_FOLD_TOGGLE':
+      return { ...s, folderCollapsed: !s.folderCollapsed };
     case 'SIDEBAR_SET_COLLAPSED':
       return { ...s, sidebarCollapsed: a.collapsed };
     case 'SIDEBAR_WIDTH':
@@ -843,7 +841,7 @@ export function reducer(s: State, a: Action): State {
         chatTabs: nextTabs,
         activeChatTabId: nextActive,
         // Closing the last chat window folds the panel — the launchers
-        // are the only way back in, and an empty panel is just dead space.
+        // are the only way back in, and an empty panel is just dead folder.
         chatOpen: nextTabs.length === 0 ? false : s.chatOpen,
       };
     }
@@ -856,10 +854,10 @@ export function reducer(s: State, a: Action): State {
         chatTabs: s.chatTabs.map((t) => (t.id === a.id ? { ...t, title: a.title } : t)),
       };
     case 'CHAT_TABS_RESET':
-      // Wipes ALL tabs — called on space switch (the server kills every
+      // Wipes ALL tabs — called on folder switch (the server kills every
       // agent session in that flow; the frontend drops its tab list too
-      // or we'd render panels bound to the old space). Fold the panel too,
-      // mirroring CHAT_TAB_CLOSE: an empty panel is dead space and the
+      // or we'd render panels bound to the old folder). Fold the panel too,
+      // mirroring CHAT_TAB_CLOSE: an empty panel is dead folder and the
       // launchers are the only way back in.
       return { ...s, chatTabs: [], activeChatTabId: null, chatOpen: false };
     case 'ACTIVE_FOLDER':
@@ -907,8 +905,6 @@ export function reducer(s: State, a: Action): State {
       return { ...s, caseStrict: a.strict, keywordResult: null };
     case 'SEARCH_WHOLE_WORD':
       return { ...s, wholeWord: a.on, keywordResult: null };
-    case 'SNAPSHOT_WARNING':
-      return { ...s, snapshotWarning: a.warning };
     case 'INDEX_WARNING':
       return { ...s, indexWarning: a.warning };
     case 'CONVERSION_FAILURES':

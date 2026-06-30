@@ -17,7 +17,7 @@ import readline from 'node:readline';
 import type { WebSocket } from 'ws';
 import { buildStashbasePreamble } from './agent-preamble.ts';
 import { logger, errorMessage } from './log.ts';
-import { getCurrentSpace, runWithWindowId } from './space.ts';
+import { getCurrentFolder, runWithWindowId } from './folder.ts';
 
 const log = logger('codex-agent');
 
@@ -139,9 +139,9 @@ class CodexSession {
 
   private async start(): Promise<void> {
     if (this.closed) return;
-    const cwd = getCurrentSpace();
+    const cwd = getCurrentFolder();
     if (!cwd) {
-      this.send({ t: 'error', message: 'No space open.' });
+      this.send({ t: 'error', message: 'No folder open.' });
       this.finish();
       return;
     }
@@ -152,7 +152,7 @@ class CodexSession {
 
   private async ensureAppServer(): Promise<void> {
     if (this.appServerReady) return;
-    if (!this.cwd) throw new Error('No space open.');
+    if (!this.cwd) throw new Error('No folder open.');
     this.spawnAppServer(this.cwd);
     try {
       await this.request('initialize', {
@@ -273,7 +273,7 @@ class CodexSession {
 
   private async ensureThread(): Promise<string> {
     if (this.threadId) return this.threadId;
-    if (!this.cwd) throw new Error('No space open.');
+    if (!this.cwd) throw new Error('No folder open.');
     await this.ensureAppServer();
     const common = {
       cwd: this.cwd,
@@ -851,44 +851,44 @@ export type CodexSessionBlock =
   | { kind: 'thinking'; id: string; text: string }
   | { kind: 'tool'; id: string; name: string; input: Record<string, unknown>; status: 'done' | 'error'; result?: string };
 
-export async function listCodexSessions(space: string | null): Promise<CodexSessionRow[]> {
-  const cwd = space ?? process.cwd();
+export async function listCodexSessions(folder: string | null): Promise<CodexSessionRow[]> {
+  const cwd = folder ?? process.cwd();
   const result = await withTemporaryCodexAppServer(cwd, (request) => request('thread/list', {
     limit: 100,
     sortKey: 'updated_at',
     sortDirection: 'desc',
     archived: false,
-    cwd: space ?? null,
+    cwd: folder ?? null,
     sourceKinds: ['appServer'],
   })) as JsonObject;
   const data = Array.isArray(result.data) ? result.data : [];
   return data.map(codexThreadToRow).filter((row): row is CodexSessionRow => !!row);
 }
 
-export async function getCodexSessionMessages(threadId: string, space: string | null): Promise<CodexSessionBlock[]> {
-  const cwd = space ?? process.cwd();
+export async function getCodexSessionMessages(threadId: string, folder: string | null): Promise<CodexSessionBlock[]> {
+  const cwd = folder ?? process.cwd();
   const result = await withTemporaryCodexAppServer(cwd, (request) => request('thread/read', {
     threadId,
     includeTurns: true,
   })) as JsonObject;
   const thread = objectValue(result.thread);
-  if (space && path.resolve(stringValue(thread.cwd)) !== path.resolve(space)) {
-    throw httpError(404, 'session not found for current space');
+  if (folder && path.resolve(stringValue(thread.cwd)) !== path.resolve(folder)) {
+    throw httpError(404, 'session not found for current folder');
   }
   return codexThreadToBlocks(thread);
 }
 
-export async function renameCodexSession(threadId: string, title: string, space: string | null): Promise<CodexSessionRow> {
-  const cwd = space ?? process.cwd();
+export async function renameCodexSession(threadId: string, title: string, folder: string | null): Promise<CodexSessionRow> {
+  const cwd = folder ?? process.cwd();
   await withTemporaryCodexAppServer(cwd, (request) => request('thread/name/set', { threadId, name: title }));
-  const rows = await listCodexSessions(space);
+  const rows = await listCodexSessions(folder);
   return rows.find((row) => row.id === threadId) ?? { id: threadId, title, lastModified: Date.now() };
 }
 
-export async function deleteCodexSession(threadId: string, space: string | null): Promise<void> {
-  const cwd = space ?? process.cwd();
-  if (space) {
-    await getCodexSessionMessages(threadId, space);
+export async function deleteCodexSession(threadId: string, folder: string | null): Promise<void> {
+  const cwd = folder ?? process.cwd();
+  if (folder) {
+    await getCodexSessionMessages(threadId, folder);
   }
   await withTemporaryCodexAppServer(cwd, (request) => request('thread/archive', { threadId }));
 }
@@ -1164,26 +1164,7 @@ export function killActiveCodex(windowId?: string): void {
   }
 }
 
-export function __activeCodexSessionCountForTest(): number {
-  return sessions.size;
-}
-
-export function __setCodexSessionForTest(session: { windowId: string; dispose: () => void }): () => void {
-  const testSession = session as unknown as CodexSession;
-  sessions.add(testSession);
-  return () => sessions.delete(testSession);
-}
-
 function normalizeWindowId(windowId: string | null | undefined): string {
   const raw = typeof windowId === 'string' ? windowId.trim() : '';
   return raw ? raw.slice(0, 128) : 'default';
 }
-
-export const __codexAppServerMappingForTest = {
-  codexEffortOption,
-  codexThreadToBlocks,
-  notificationMessage,
-  toolOutputDeltaFromParams,
-  toolStartFromItem,
-  toolResultFromItem,
-};

@@ -1,10 +1,10 @@
 /**
  * Indexer impl backed by the Python MFS sidecar. Each method translates
  * a logical op into one JSON request and reshapes the reply to match
- * the `Indexer` contract. All paths flowing through here are
- * **kbRoot-relative POSIX** — see `server/space.ts:toKbRel` /
- * `fromKbRel` for the conversion at call sites that still think in
- * space-relative terms.
+ * the `Indexer` contract. The `Indexer` API speaks absolute POSIX paths;
+ * this module is the daemon boundary and currently passes those identities
+ * through unchanged (`toAbs`/`fromAbs`). The daemon keys one global
+ * collection by absolute path and scopes by an absolute folder root.
  *
  * HTML special-case: we feed MFS a markdown-shaped plaintext (see
  * `server/html.ts:analyzeHtml`) so its markdown chunker keeps respecting
@@ -17,7 +17,7 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 import path from 'node:path';
 import { analyzeHtml } from './html.ts';
 import { detectFormat } from './format.ts';
-import { contentSizeError, shouldIndexKbRel } from './indexable.ts';
+import { contentSizeError, shouldIndexSourcePath } from './indexable.ts';
 import { logger } from './log.ts';
 import { getDaemon } from './mfs-daemon.ts';
 import type {
@@ -29,6 +29,14 @@ import type {
 } from './indexer.ts';
 
 const log = logger('index');
+
+// The daemon keys its single global collection by **absolute POSIX path**
+// and binds absolute folder roots. Under the Folder model every caller
+// already passes absolute paths/roots (`state.ts` binds absolute roots) and accepts absolute paths
+// back, so this module is a straight pass-through. `toAbs`/`fromAbs` are
+// kept as identity seams in case a future model needs translation again.
+const toAbs = (p: string): string => p;
+const fromAbs = (p: string): string => p;
 
 /** Convert (path, raw content) into the (text, ext, fileHash) tuple
  *  the daemon expects. HTML gets pre-flattened to markdown-shaped
@@ -80,105 +88,62 @@ interface DaemonHit {
 }
 
 export class MfsIndexer implements Indexer {
-  /** Per-space indexed-file cache, keyed by kbRoot-relative space name.
-   *  Lets `status(space)` answer in ms without a daemon round-trip —
-   *  critical because the daemon serialises ops, and a long-running
-   *  embed would otherwise block every UI poll. Primed lazily on first
-   *  `status()` for a given space; updated by upsert / delete / rename. */
-  private spaceIndex = new Map<string, Set<string>>();
   private loggedBindings = new Map<string, string>();
-  /** Spaces whose indexedNames cache has been primed via a daemon
-   *  `list` call. Status queries against unprimed spaces report all
-   *  pending until the prime completes — better than flashing
-   *  "everything's indexed" before we know. */
-  private spaceReady = new Set<string>();
+  /** Folders that have successfully received at least one daemon status
+   *  response in this process. */
+  private folderReady = new Set<string>();
 
-  async bindSpace(space: string, cfg: EmbedderRuntimeConfig): Promise<void> {
+  async bindFolder(folder: string, cfg: EmbedderRuntimeConfig): Promise<void> {
     const daemon = getDaemon();
-    await daemon.bindSpace(space, {
+    await daemon.bindFolder(toAbs(folder), {
       provider: cfg.provider,
       apiKey: cfg.apiKey,
       model: cfg.model,
       dimension: cfg.dimension,
     });
-    // Stale local cache for this space — could be from before the bind
-    // (e.g. a status() call against an unbound space populated nothing,
-    // then bind brings the collection into the world).
-    this.spaceIndex.delete(space);
-    this.spaceReady.delete(space);
+    this.folderReady.delete(folder);
     const bindingKey = `${cfg.provider}:${cfg.model ?? ''}:${cfg.dimension ?? ''}`;
-    if (this.loggedBindings.get(space) === bindingKey) {
-      log.debug(`bound ${space} → ${cfg.provider}`);
+    if (this.loggedBindings.get(folder) === bindingKey) {
+      log.debug(`bound ${folder} → ${cfg.provider}`);
     } else {
-      this.loggedBindings.set(space, bindingKey);
-      log.info(`bound ${space} → ${cfg.provider}`);
+      this.loggedBindings.set(folder, bindingKey);
+      log.info(`bound ${folder} → ${cfg.provider}`);
     }
   }
 
-  async unbindSpace(space: string): Promise<void> {
-    await getDaemon().unbindSpace(space);
-    this.spaceIndex.delete(space);
-    this.spaceReady.delete(space);
-    this.loggedBindings.delete(space);
-  }
-
-  /** Find the bound space owning `kbRel`. Spaces are flat under
-   *  kbRoot, so the owner is simply the first path segment. Returns
-   *  null if no primed space covers the path, in which case the cache
-   *  simply skips the update (the daemon is still the source of
-   *  truth). */
-  private spaceForKbRel(kbRel: string): string | null {
-    const slash = kbRel.indexOf('/');
-    const head = slash >= 0 ? kbRel.slice(0, slash) : kbRel;
-    return this.spaceIndex.has(head) ? head : null;
-  }
-
-  /** Mark a file as indexed in the local cache. */
-  private noteIndexed(kbRel: string): void {
-    const space = this.spaceForKbRel(kbRel);
-    if (!space) return;
-    this.spaceIndex.get(space)?.add(kbRel);
-  }
-
-  private noteUnindexed(kbRel: string): void {
-    const space = this.spaceForKbRel(kbRel);
-    if (!space) return;
-    this.spaceIndex.get(space)?.delete(kbRel);
+  async unbindFolder(folder: string): Promise<void> {
+    await getDaemon().unbindFolder(toAbs(folder));
+    this.folderReady.delete(folder);
+    this.loggedBindings.delete(folder);
   }
 
   async upsertFile(filePath: string, content: string): Promise<number> {
-    if (!shouldIndexKbRel(filePath)) {
-      this.noteUnindexed(filePath);
-      await getDaemon().call('delete', { path: filePath });
+    if (!shouldIndexSourcePath(filePath)) {
+      await getDaemon().call('delete', { path: toAbs(filePath) });
       log.info(`upsert ${filePath}: skipped by index rules`);
       return 0;
     }
     const tooLarge = contentSizeError(content);
     if (tooLarge) {
-      this.noteUnindexed(filePath);
-      await getDaemon().call('delete', { path: filePath });
+      await getDaemon().call('delete', { path: toAbs(filePath) });
       log.warn(`upsert ${filePath}: ${tooLarge}`);
       return 0;
     }
     const { text, ext, fileHash } = prepareForIndex(filePath, content);
-    // Mark not-indexed while we re-embed so an in-flight status() during
-    // a re-embed doesn't claim the file is up to date.
-    this.noteUnindexed(filePath);
     // Covers truly empty files AND files whose extractable text is empty
     // (bundler-format HTML that is one giant <script>, whitespace-only
     // notes) — embedding either would store 0 chunks, so skip the
     // round-trip. `/api/index-status` filters the same files out of
     // `pending` (see `hasNoExtractableText`) so they don't pulse forever.
     if (text.trim().length === 0) {
-      await getDaemon().call('delete', { path: filePath });
+      await getDaemon().call('delete', { path: toAbs(filePath) });
       log.info(`upsert ${filePath}: no extractable text, skipped embedding`);
       return 0;
     }
     const t0 = Date.now();
     const res = await getDaemon().call<{ chunks: number; embed_ms: number; total_ms: number }>(
-      'upsert', { path: filePath, content: text, ext, file_hash: fileHash, metadata: {} },
+      'upsert', { path: toAbs(filePath), content: text, ext, file_hash: fileHash, metadata: {} },
     );
-    if (res.chunks > 0) this.noteIndexed(filePath);
     log.info(
       `upsert ${filePath}: ${res.chunks} chunks ` +
         `(embed ${fmtMs(res.embed_ms)}, total ${fmtMs(res.total_ms)}, wall ${fmtMs(Date.now() - t0)})`,
@@ -186,25 +151,32 @@ export class MfsIndexer implements Indexer {
     return res.chunks;
   }
 
+  async upsertConvertedFile(sourceAbs: string, derivedMd: string, sourceHash: string): Promise<number> {
+    // PDF/image: the searchable text is the derived markdown (stored in app
+    // data), but we index it UNDER the source's own path so folder-scoped
+    // search finds it and the daemon's source-file hash diff matches. Force
+    // ext='.md' (the content is markdown regardless of the .pdf/.png path)
+    // and stamp the source's byte hash so reconcile sees "unchanged".
+    if (derivedMd.trim().length === 0) {
+      await getDaemon().call('delete', { path: toAbs(sourceAbs) });
+      return 0;
+    }
+    const res = await getDaemon().call<{ chunks: number; embed_ms: number; total_ms: number }>(
+      'upsert', { path: toAbs(sourceAbs), content: derivedMd, ext: '.md', file_hash: sourceHash, metadata: {} },
+    );
+    log.info(`upsert(converted) ${sourceAbs}: ${res.chunks} chunks (embed ${fmtMs(res.embed_ms)})`);
+    return res.chunks;
+  }
+
   async deleteFile(filePath: string): Promise<void> {
-    await getDaemon().call('delete', { path: filePath });
-    this.noteUnindexed(filePath);
+    await getDaemon().call('delete', { path: toAbs(filePath) });
   }
 
   async deletePathPrefix(prefix: string): Promise<void> {
     const norm = prefix.replace(/\/+$/, '');
-    const matchPrefix = norm + '/';
     const res = await getDaemon().call<{ removed: number }>(
-      'delete_prefix', { prefix: norm },
+      'delete_prefix', { prefix: toAbs(norm) },
     );
-    // Sweep local cache so subsequent status() polls don't keep
-    // showing the now-deleted files as indexed.
-    for (const [space, set] of this.spaceIndex) {
-      void space;
-      for (const name of [...set]) {
-        if (name === norm || name.startsWith(matchPrefix)) set.delete(name);
-      }
-    }
     log.info(`delete_prefix ${prefix}: removed ${res.removed} chunk(s) from index`);
   }
 
@@ -212,10 +184,8 @@ export class MfsIndexer implements Indexer {
     const { text, ext, fileHash } = prepareForIndex(newPath, content);
     const t0 = Date.now();
     const res = await getDaemon().call<{ chunks: number; embed_ms: number; fast_path?: boolean }>(
-      'rename', { old: oldPath, new: newPath, content: text, ext, file_hash: fileHash, metadata: {} },
+      'rename', { old: toAbs(oldPath), new: toAbs(newPath), content: text, ext, file_hash: fileHash, metadata: {} },
     );
-    this.noteUnindexed(oldPath);
-    if (res.chunks > 0) this.noteIndexed(newPath);
     // Fast path reuses the cached vectors (embed_ms == 0); only the
     // fallback actually re-embeds. Log which one ran so a slow rename
     // is distinguishable from a copied one.
@@ -233,25 +203,19 @@ export class MfsIndexer implements Indexer {
     files: Array<{ path: string; content: string }>,
   ): Promise<void> {
     if (files.length === 0) {
-      await getDaemon().call('rename_prefix', { old: oldPrefix, new: newPrefix, files: [] });
+      await getDaemon().call('rename_prefix', { old: toAbs(oldPrefix), new: toAbs(newPrefix), files: [] });
       return;
     }
     const payload = files.map((f) => {
       const rel = f.path.slice(oldPrefix.length + 1);
       const newP = `${newPrefix}/${rel}`;
       const { text, ext, fileHash } = prepareForIndex(newP, f.content);
-      return { path: newP, content: text, ext, file_hash: fileHash };
+      return { path: toAbs(newP), content: text, ext, file_hash: fileHash };
     });
     const t0 = Date.now();
     const res = await getDaemon().call<{ files: number; chunks: number; fast_path_files?: number }>(
-      'rename_prefix', { old: oldPrefix, new: newPrefix, files: payload },
+      'rename_prefix', { old: toAbs(oldPrefix), new: toAbs(newPrefix), files: payload },
     );
-    for (const f of files) {
-      this.noteUnindexed(f.path);
-      const rel = f.path.slice(oldPrefix.length + 1);
-      const next = `${newPrefix}/${rel}`;
-      this.noteIndexed(next);
-    }
     const fast = res.fast_path_files ?? 0;
     log.info(
       `rename_prefix ${oldPrefix} → ${newPrefix}: ` +
@@ -260,9 +224,9 @@ export class MfsIndexer implements Indexer {
     );
   }
 
-  async syncDiff(space?: string): Promise<SyncDiff> {
+  async syncDiff(folder?: string): Promise<SyncDiff> {
     const args: Record<string, unknown> = {};
-    if (space) args.space = space;
+    if (folder) args.folder = toAbs(folder);
     const res = await getDaemon().call<{
       added: string[];
       modified: string[];
@@ -270,17 +234,22 @@ export class MfsIndexer implements Indexer {
       renamed?: Array<{ old: string; new: string; file_hash: string }>;
       unchanged_count: number;
     }>('scan_diff', args);
-    const renamed = (res.renamed ?? []).map((r) => ({ old: r.old, new: r.new, fileHash: r.file_hash }));
-    return { added: res.added, modified: res.modified, deleted: res.deleted, renamed };
+    const renamed = (res.renamed ?? []).map((r) => ({ old: fromAbs(r.old), new: fromAbs(r.new), fileHash: r.file_hash }));
+    return {
+      added: res.added.map(fromAbs),
+      modified: res.modified.map(fromAbs),
+      deleted: res.deleted.map(fromAbs),
+      renamed,
+    };
   }
 
-  async search(query: string, topK: number, space?: string, pathPrefix?: string): Promise<SearchHit[]> {
+  async search(query: string, topK: number, folder?: string, pathPrefix?: string): Promise<SearchHit[]> {
     const args: Record<string, unknown> = { query, top_k: topK };
-    if (space) args.space = space;
-    if (pathPrefix) args.path_prefix = pathPrefix;
+    if (folder) args.folder = toAbs(folder);
+    if (pathPrefix) args.path_prefix = toAbs(pathPrefix);
     const res = await getDaemon().call<{ hits: DaemonHit[] }>('search', args);
     return res.hits.map((h) => ({
-      fileName: h.path,
+      fileName: fromAbs(h.path),
       chunkIndex: h.chunk_index,
       content: h.chunk_text,
       // MFS markdown chunker stuffs heading info into metadata; lift it
@@ -295,21 +264,12 @@ export class MfsIndexer implements Indexer {
     }));
   }
 
-  async status(space?: string): Promise<IndexStatus> {
-    // Per-space status: ask the daemon directly (it walks disk + reads
-    // indexed names from Milvus). Cached at the daemon level; on the
-    // Node side we prime the indexed-name cache opportunistically so
-    // future calls answer quicker via a local diff.
-    //
-    // We hand the whole computation to the daemon for simplicity in the
-    // multi-collection world — the old "Node-side disk walk + cache
-    // diff" path made sense when one space owned one DB, but with N
-    // collections any cache miss against any of them re-routes back to
-    // the daemon anyway. Trade-off: a busy daemon serialises status
-    // behind embeds; UI polls feel slower while a big embed is in
-    // flight. Acceptable for v1; revisit if it bites.
+  async status(folder?: string): Promise<IndexStatus> {
+    // Per-folder status: ask the daemon directly. It owns both disk scan
+    // and indexed-name truth, which keeps Node from maintaining a second
+    // partial cache that can drift from the vector store.
     const args: Record<string, unknown> = {};
-    if (space) args.space = space;
+    if (folder) args.folder = toAbs(folder);
     const res = await getDaemon().call<{
       total: number;
       indexed: number;
@@ -319,34 +279,28 @@ export class MfsIndexer implements Indexer {
       orphaned: string[];
       up_to_date: boolean;
     }>('status', args);
-    // Opportunistically prime the local cache from the response so
-    // upsert/delete have something to mutate.
-    if (space) {
-      const idx = new Set<string>();
-      // We don't get the indexed-list back from `status`; if we
-      // care later, switch to `list` + diff here. For now, just mark
-      // ready when daemon reports up-to-date so callers know the
-      // window of "everything pending" has closed.
-      void idx;
-      this.spaceReady.add(space);
+    if (folder) {
+      this.folderReady.add(folder);
     }
     return {
       total: res.total,
       indexed: res.indexed,
       pendingCount: res.pending_count,
-      pending: res.pending,
+      pending: res.pending.map(fromAbs),
       orphanedCount: res.orphaned_count,
-      orphaned: res.orphaned,
+      orphaned: res.orphaned.map(fromAbs),
       upToDate: res.up_to_date,
-      indexReady: !space ? true : this.spaceReady.has(space),
+      indexReady: !folder ? true : this.folderReady.has(folder),
     };
   }
 
-  async listFiles(space?: string): Promise<Record<string, string>> {
+  async listFiles(folder?: string): Promise<Record<string, string>> {
     const args: Record<string, unknown> = {};
-    if (space) args.space = space;
+    if (folder) args.folder = toAbs(folder);
     const res = await getDaemon().call<{ files: Record<string, string> }>('list', args);
-    return res.files;
+    const out: Record<string, string> = {};
+    for (const [abs, hash] of Object.entries(res.files)) out[fromAbs(abs)] = hash;
+    return out;
   }
 
   async closeStore(): Promise<void> {
@@ -357,8 +311,7 @@ export class MfsIndexer implements Indexer {
     } finally {
       await daemon.close();
     }
-    this.spaceIndex.clear();
-    this.spaceReady.clear();
+    this.folderReady.clear();
   }
 
   async close(): Promise<void> {

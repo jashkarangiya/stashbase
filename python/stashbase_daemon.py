@@ -1,12 +1,12 @@
 """StashBase sidecar daemon.
 
-Owns the **single** per-machine Milvus Lite DB for a KB root
-with **one** collection (``vectors_openai_1536``). V1 ships a single
-fixed embedder (OpenAI), so the whole KB lives in that one collection —
-there's no embedder switching, no per-provider collection pool, and no
-active/archive distinction. Each space (a folder directly under the KB
-root) is **bound** so the daemon knows it exists; all spaces share the
-collection.
+Owns the **single** per-machine, app-data Milvus Lite DB for the whole
+app with **one** collection (``vectors_openai_1536``). V1 ships a single
+fixed embedder (OpenAI), so the whole library lives in that one collection
+— there's no embedder switching, no per-provider collection pool, and no
+active/archive distinction. Each opened **folder** (an absolute path
+anywhere on disk) is **bound** so the daemon knows it exists; all folders
+share the collection and are distinguished by their absolute-path prefix.
 
 The Node side (server/mfs-daemon.ts) spawns this script once and talks
 to it over stdin/stdout in line-delimited JSON.
@@ -28,19 +28,23 @@ events as informational and matches results back to requests by ``id``.
 
 Supported ops
 -------------
-- ``bind_space {space, provider, api_key?, model?, dimension?}``
-                        — register that ``space`` exists. The first bind
-                          carrying an ``api_key`` builds the embedder +
-                          collection; later binds reuse them. Idempotent;
-                          safe to call after a daemon respawn.
-- ``unbind_space {space}``
-                        — forget ``space``. Existing rows stay; the
-                          space can be re-bound later.
+For wire-compatibility the bind/scope arg is still named ``folder``, but it
+now carries an **absolute folder root** (the value changed; the key kept its
+name to keep the protocol surface small).
+
+- ``bind_folder {folder, provider, api_key?, model?, dimension?}``
+                        — register that the folder root ``folder`` exists.
+                          The first bind carrying an ``api_key`` builds the
+                          embedder + collection; later binds reuse them.
+                          Idempotent; safe to call after a daemon respawn.
+- ``unbind_folder {folder}``
+                        — forget the folder root ``folder``. Existing rows
+                          stay; the root can be re-bound later.
 - ``upsert {path, content, ext, file_hash?}``
                         — chunk + embed + insert/replace one file.
-                          ``path`` is **kbRoot-relative** (e.g.
-                          ``cs183b/lecture-01.md``); the space is the
-                          first path segment.
+                          ``path`` is an **absolute POSIX path** (e.g.
+                          ``/Users/me/notes/lecture-01.md``); it must live
+                          under a bound root.
 - ``delete {path}``     — drop rows for one file.
 - ``delete_prefix {prefix}``
                         — drop rows for files under a folder.
@@ -49,16 +53,16 @@ Supported ops
                           when the hash matches; else re-embed).
 - ``rename_prefix {old, new, files}``
                         — folder rename: bulk version.
-- ``search {query, space?, top_k}``
+- ``search {query, folder?, top_k}``
                         — hybrid search (dense + BM25 + RRF) in the
-                          collection, optionally scoped to one space via
-                          a ``source like "<space>/%"`` filter.
-- ``status {space?}``   — name-only diff of disk vs index. ``space``
-                          omitted means the whole library.
-- ``scan_diff {space?}`` — content-hash diff. ``space`` omitted = whole
-                          library.
-- ``list {space?}``     — ``{path: file_hash}`` of every indexed file.
-                          Scoped by ``space`` prefix when given.
+                          collection, optionally scoped to one folder root
+                          via a ``source like "<root>/%"`` filter.
+- ``status {folder?}``   — name-only diff of disk vs index. ``folder``
+                          omitted means every bound root.
+- ``scan_diff {folder?}`` — content-hash diff. ``folder`` omitted = every
+                          bound root.
+- ``list {folder?}``     — ``{path: file_hash}`` of every indexed file.
+                          Scoped by root prefix when given.
 - ``close_store``       — release Milvus Lite's flock so the server can
                           delete or move the DB file.
 - ``set_rules {excluded_dirs?, max_indexable_bytes?, include_extensions?}``
@@ -68,11 +72,11 @@ Supported ops
 
 Paths
 -----
-``path`` / ``prefix`` / ``old`` / ``new`` in every op are
-**kbRoot-relative POSIX** (``cs183b/lecture-01.md``). The first path
-segment is the space name; the daemon uses it to look up the bound
-collection. The Node side translates between space-relative (its native
-representation) and kbRoot-relative at the indexer boundary.
+``path`` / ``prefix`` / ``old`` / ``new`` in every op are **absolute
+POSIX paths** (``/Users/me/notes/lecture-01.md``). The daemon matches each
+to the bound folder root that is its longest prefix. The Node side
+translates between folder-relative (its native representation) and absolute
+at the indexer boundary.
 """
 
 from __future__ import annotations
@@ -81,7 +85,6 @@ import argparse
 import datetime
 import json
 import os
-import shutil
 import sys
 import time
 import traceback
@@ -104,7 +107,7 @@ print(json.dumps({"event": "starting", "pid": os.getpid()}), flush=True)
 # ---------------------------------------------------------------- embedder
 #
 # V1 ships a single embedder: OpenAI `text-embedding-3-small` (1536d).
-# There is no embedder switching and no local fallback — the whole KB
+# There is no embedder switching and no local fallback — the whole library
 # uses one collection. Built lazily on the first bind that carries an
 # API key; the daemon may have zero embedders loaded at idle.
 
@@ -146,7 +149,7 @@ class _OpenAIEmbedder:
 
     # OpenAI's embedding endpoint enforces a request-level token ceiling
     # (300k for text-embedding-3* at time of writing). Keep a margin and
-    # batch locally so one big space cannot take the daemon down.
+    # batch locally so one big folder cannot take the daemon down.
     _MAX_REQUEST_TOKENS = 250_000
     _MAX_BATCH_ITEMS = 128
 
@@ -247,7 +250,7 @@ def _patch_inverted_index_skip() -> None:
     ``add_index`` calls without ``metric_type``; INVERTED is a scalar
     index with no meaningful metric, so we monkey-patch ``add_index`` to
     swallow them. Affected fields fall back to table-scan filtering,
-    which on a single-user KB is comfortably under 10ms. Idempotent —
+    which on a single-user library is comfortably under 10ms. Idempotent —
     flagged via a sentinel attribute on the patched function.
     """
     try:
@@ -302,21 +305,6 @@ def _patch_scanner_blake3() -> None:
     compute_file_hash.__stashbase_blake3__ = True  # type: ignore[attr-defined]
     Scanner.compute_file_hash = compute_file_hash
 
-
-## Snapshot file format version. Bumped when the on-disk layout or
-## column schema changes incompatibly — the importer hard-rejects any
-## version it doesn't recognise to avoid silent miscoercion.
-##
-## v3: snapshot is now a pure **embedding cache** — the Parquet holds
-## only `{text_hash, dense_vector}` (the one artifact that's expensive
-## to recompute), and the human-readable descriptor (embedder identity,
-## counts, timestamp) lives in a sibling `snapshot.meta.json` written by
-## the Node side. Import no longer bulk-inserts chunk rows; instead the
-## normal ingestion pipeline re-chunks the (co-located) source files and
-## reuses a cached vector whenever a chunk's `BLAKE3(chunk_text)` hits
-## the cache, only embedding the misses. v2 (self-contained chunk rows)
-## snapshots are rejected — re-export with this build.
-SNAPSHOT_VERSION = 3
 
 INDEX_EXCLUDED_DIRS = {
     ".cache",
@@ -387,99 +375,52 @@ def _collection_name(dim: int) -> str:
     return f"vectors_openai_{dim}"
 
 
-def _move_legacy_store_dir(legacy: Path, target: Path) -> None:
-    """Move a legacy Milvus store dir into ``target``.
-
-    ``target`` may already exist because the daemon lock lives there and
-    is acquired before ``StashbaseStore`` initialises. Move children in
-    that case, leaving any existing lock file alone.
-    """
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if not target.exists():
-        shutil.move(str(legacy), str(target))
-        return
-    for child in legacy.iterdir():
-        dest = target / child.name
-        if dest.exists():
-            continue
-        shutil.move(str(child), str(dest))
-    try:
-        legacy.rmdir()
-    except OSError:
-        pass
-
-
-def _warn_legacy_store_conflict(legacy: Path, active_db: Path) -> None:
-    print(
-        f"[stashbase] legacy Milvus store remains at {legacy}, "
-        f"but active store already exists at {active_db}; leaving legacy store untouched",
-        file=sys.stderr,
-    )
+def _norm_root(root: str) -> str:
+    """Normalise an absolute folder root: drop trailing slashes (keep a
+    bare ``/`` as ``/``). Folder roots and file sources are resolved
+    absolute POSIX paths on the Node side, so this is all the daemon
+    needs to make prefix matching consistent."""
+    r = root.rstrip("/")
+    return r or "/"
 
 
 class StashbaseStore:
-    """Holds the kb-root-anchored DB and the **single** ``MilvusStore``
-    every space shares. V1 has one fixed embedder (OpenAI), so the whole
-    KB lives in one collection — no per-provider pool, no active/archive
+    """Holds the global app-data DB and the **single** ``MilvusStore``
+    every folder shares. V1 has one fixed embedder (OpenAI), so the whole
+    library lives in one collection — no per-provider pool, no active/archive
     distinction.
 
     Lifecycle:
-        1. ``__init__`` records the kb-root and the resolved
-           ``milvus.db`` path. No daemon-side I/O yet.
-        2. ``bind_space(space, ...)`` — first bind carrying an API key
+        1. ``__init__`` records the resolved global ``milvus.db`` path.
+           No daemon-side I/O yet.
+        2. ``bind_root(root, ...)`` — first bind carrying an API key
            creates the embedder + collection; later binds reuse them and
-           just register the space. Spaces still get bound so the
+           just register the folder root. Roots still get bound so the
            "must bind before writing" contract holds and ``scan_diff`` /
-           ``status`` know which spaces exist.
+           ``status`` know which folders exist.
         3. ``store_for_path(path)`` / ``stores()`` — return the one
            ``(embedder, store)``; raise if nothing's bound yet.
 
     A daemon respawn loses the bindings; the Node side re-issues
-    ``bind_space`` for every known space on reconnect.
+    ``bind_folder`` for every known folder root on reconnect.
     """
 
-    def __init__(self, kb_root: str, store_root: str | None = None) -> None:
-        self._kb_root: Path = Path(kb_root).resolve()
-        # The vector store is pure per-machine derived data. Keep it out
-        # of `<kb_root>` because the default root often lives under
-        # ~/Documents, and iCloud evicting / reverting Milvus Lite's WAL
-        # `.arrow` files corrupts the collection.
-        store_parent = Path(store_root).expanduser().resolve() if store_root else (
-            self._kb_root / ".stashbase" / "store.nosync"
-        )
+    def __init__(self, store_root: str) -> None:
+        # ONE global Milvus DB for the whole app, in per-machine app-data
+        # (`--store-root`). Folders register absolute roots; every folder
+        # shares this single collection, scoped by absolute-path prefix.
+        # `store_root` uses a `.nosync` suffix upstream so iCloud skips the
+        # WAL `.arrow` files (corrupting them would break the collection).
+        store_parent = Path(store_root).expanduser().resolve()
         self._db_path: Path = store_parent / "milvus.db"
-        # Migrate older in-KB store locations into the local app-data dir,
-        # newest first: `.stashbase/store.nosync`, then `.stashbase/store`,
-        # then `.stashbase/mfs`.
-        for legacy in (
-            self._kb_root / ".stashbase" / "store.nosync",
-            self._kb_root / ".stashbase" / "store",
-            self._kb_root / ".stashbase" / "mfs",
-        ):
-            if not legacy.exists():
-                continue
-            if self._db_path.exists():
-                _warn_legacy_store_conflict(legacy, self._db_path)
-                continue
-            _move_legacy_store_dir(legacy, self._db_path.parent)
-            break
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         # The one embedder + store, created on the first bind with a key.
         self._embedder: Any = None
         self._store: Any = None
         self._dim: int = 0
-        # Spaces Node has bound (kb-root-relative first path segment).
-        # Membership only — they all share the single collection.
+        # Absolute folder roots Node has bound (normalised, no trailing
+        # slash). Membership only — they all share the single collection.
         self._bound: set[str] = set()
-        # space -> {BLAKE3(chunk_text): dense_vector}. Transient embedding
-        # cache loaded from a snapshot just before a space is (re)indexed;
-        # `op_upsert` consults it to skip embedding chunks whose text is
-        # unchanged. Cleared by Node once the import-time sync finishes.
-        self._vector_cache: dict[str, dict[str, list[float]]] = {}
-
-    @property
-    def kb_root(self) -> Path:
-        return self._kb_root
 
     def _ensure_store(self, embedder):
         """Open the single Milvus collection. Idempotent: reuses the
@@ -533,50 +474,47 @@ class StashbaseStore:
         self._dim = dim
         return store
 
-    def bind_space(self, space: str, provider: str, *, api_key=None, model=None, dimension=None) -> dict:
+    def bind_root(self, root: str, provider: str, *, api_key=None, model=None, dimension=None) -> dict:
         # First bind with a key builds the embedder + collection; later
-        # binds reuse them. Without a key the space is still registered
+        # binds reuse them. Without a key the root is still registered
         # but the collection isn't created — indexing stays disabled until
         # the user supplies an OpenAI key (graceful no-key degrade).
         if self._store is None and api_key:
             embedder = make_embedder(provider, model=model, api_key=api_key, dimension=dimension)
             self._ensure_store(embedder)
-        self._bound.add(space)
+        root = _norm_root(root)
+        self._bound.add(root)
         return {
-            "space": space,
+            "root": root,
             "provider": "openai",
             "model": getattr(self._embedder, "model_name", None),
             "dim": self._dim,
             "collection": _collection_name(self._dim) if self._dim else None,
         }
 
-    def unbind_space(self, space: str) -> dict:
-        had = space in self._bound
-        self._bound.discard(space)
-        self._vector_cache.pop(space, None)
-        return {"space": space, "was_bound": had}
+    def unbind_root(self, root: str) -> dict:
+        root = _norm_root(root)
+        had = root in self._bound
+        self._bound.discard(root)
+        return {"root": root, "was_bound": had}
 
-    def set_vector_cache(self, space: str, cache: dict[str, list[float]]) -> None:
-        self._vector_cache[space] = cache
-
-    def vector_cache_for(self, space: str) -> dict[str, list[float]] | None:
-        return self._vector_cache.get(space)
-
-    def clear_vector_cache(self, space: str) -> bool:
-        return self._vector_cache.pop(space, None) is not None
+    def root_for_path(self, path: str) -> str | None:
+        """Return the bound absolute root that contains ``path`` (the
+        longest matching prefix, so a nested bound root wins), or None."""
+        best = None
+        for r in self._bound:
+            if path == r or path.startswith(r.rstrip("/") + "/"):
+                if best is None or len(r) > len(best):
+                    best = r
+        return best
 
     def store_for_path(self, path: str):
-        """Return ``(embedder, store)`` for ``path`` (kb-root-relative).
-        Every space shares the one collection; the first path segment
-        still has to be a bound space."""
-        if "/" not in path:
-            # Top-level file directly under kbRoot — not allowed; every
-            # file must live inside a space.
-            raise RuntimeError(f"path '{path}' is not inside a space (must be '<space>/...')")
-        space = path.split("/", 1)[0]
-        if space not in self._bound or self._store is None:
+        """Return ``(embedder, store)`` for ``path`` (absolute POSIX).
+        Every folder shares the one collection; the path still has to
+        live under a bound root."""
+        if self.root_for_path(path) is None or self._store is None:
             raise RuntimeError(
-                f"no bound space matches path '{path}'; call bind_space first "
+                f"no bound root matches path '{path}'; call bind_root first "
                 "(or set an OpenAI API key)",
             )
         return (self._embedder, self._store)
@@ -589,9 +527,9 @@ class StashbaseStore:
             return []
         return [(f"openai_{self._dim}", self._embedder, self._store)]
 
-    def bound_spaces(self) -> list[str]:
-        """Spaces Node has registered, sorted. Used by whole-library
-        disk walks."""
+    def bound_roots(self) -> list[str]:
+        """Absolute folder roots Node has registered, sorted. Used by
+        whole-library disk walks."""
         return sorted(self._bound)
 
     def require_current(self):
@@ -599,12 +537,12 @@ class StashbaseStore:
         bound yet (e.g. no OpenAI key set)."""
         if self._store is None:
             raise RuntimeError(
-                "no embedder bound; call bind_space with an OpenAI API key first",
+                "no embedder bound; call bind_folder with an OpenAI API key first",
             )
         return self._embedder, self._store, self._dim
 
     def close_all(self, *, clear_bindings: bool = True) -> None:
-        """Release Milvus Lite's flock. The next ``bind_space`` reopens."""
+        """Release Milvus Lite's flock. The next ``bind_folder`` reopens."""
         if self._store is not None:
             try:
                 self._store.close()
@@ -649,31 +587,7 @@ def _flush_store(store) -> None:
 
 
 def _embed_with_cache(svc: "StashbaseStore", path: str, embedder, texts: list[str]) -> list:
-    """Embed ``texts``, reusing vectors from the space's snapshot cache
-    (keyed by ``BLAKE3(chunk_text)``) where present. A snapshot is a pure
-    embedding cache (see ``SNAPSHOT_VERSION`` v3): on import the normal
-    pipeline re-chunks the source files and lands here, and only the
-    chunks the cache doesn't cover get embedded. No cache → embed all.
-    The dim guard drops a cached vector that doesn't match the current
-    embedder so a stale / mismatched snapshot can't poison the store."""
-    space = path.split("/", 1)[0]
-    cache = svc.vector_cache_for(space)
-    if not cache:
-        return embedder.embed(texts)
-    dim = embedder.dimension
-    out: list = [None] * len(texts)
-    misses: list[int] = []
-    for i, t in enumerate(texts):
-        v = cache.get(_hash_text(t))
-        if v is not None and len(v) == dim:
-            out[i] = list(v)
-        else:
-            misses.append(i)
-    if misses:
-        embedded = embedder.embed([texts[i] for i in misses])
-        for j, i in enumerate(misses):
-            out[i] = embedded[j]
-    return out
+    return embedder.embed(texts)
 
 
 def _require(args: dict, *keys: str) -> None:
@@ -682,12 +596,12 @@ def _require(args: dict, *keys: str) -> None:
         raise ValueError(f"missing field(s): {', '.join(missing)}")
 
 
-def op_bind_space(svc: StashbaseStore, args: dict) -> dict:
-    """Register ``space`` → ``provider`` mapping. Creates the
-    collection if first use; idempotent."""
-    _require(args, "space", "provider")
-    return svc.bind_space(
-        args["space"],
+def op_bind_folder(svc: StashbaseStore, args: dict) -> dict:
+    """Register a folder root (``folder`` carries its absolute path) →
+    ``provider`` mapping. Creates the collection if first use; idempotent."""
+    _require(args, "folder", "provider")
+    return svc.bind_root(
+        args["folder"],
         args["provider"],
         api_key=args.get("api_key"),
         model=args.get("model"),
@@ -695,17 +609,17 @@ def op_bind_space(svc: StashbaseStore, args: dict) -> dict:
     )
 
 
-def op_unbind_space(svc: StashbaseStore, args: dict) -> dict:
-    _require(args, "space")
-    return svc.unbind_space(args["space"])
+def op_unbind_folder(svc: StashbaseStore, args: dict) -> dict:
+    _require(args, "folder")
+    return svc.unbind_root(args["folder"])
 
 
 def op_upsert(svc: StashbaseStore, args: dict) -> dict:
     """Replace all rows for ``path`` with freshly-embedded chunks.
 
-    Args: ``path`` (kb-root-relative POSIX), ``content`` (raw text /
+    Args: ``path`` (absolute POSIX), ``content`` (raw text /
     pre-flattened HTML-as-markdown), ``ext``, optional ``file_hash``.
-    Routes to the bound provider for the space implied by ``path``.
+    Routes to the bound provider for the folder root containing ``path``.
     """
     from mfs.store import ChunkRecord
 
@@ -1014,12 +928,12 @@ def op_delete_prefix(svc: StashbaseStore, args: dict) -> dict:
 
 def op_search(svc: StashbaseStore, args: dict) -> dict:
     """Hybrid search in the single collection, optionally scoped to one
-    ``space``. MFS's ``hybrid_search`` already does dense + BM25 + RRF
+    ``folder``. MFS's ``hybrid_search`` already does dense + BM25 + RRF
     inside the collection, so its order is the final order — no
     second-pass fusion. ``top_k`` bounded to [1, 200]."""
     _require(args, "query")
     query = args["query"].strip()
-    space = args.get("space")
+    folder = args.get("folder")
     explicit_prefix = args.get("path_prefix")
     top_k_raw = int(args.get("top_k", 8))
     top_k = max(1, min(200, top_k_raw))
@@ -1032,13 +946,13 @@ def op_search(svc: StashbaseStore, args: dict) -> dict:
 
     # Path filter: MFS's _make_filter applies `source like "<prefix>%"`.
     # `path_prefix` wins when provided — it's more specific than the
-    # space-derived prefix (e.g. "cs183b/transcripts/" vs "cs183b/").
-    # Otherwise fall back to space-only scoping; both omitted = whole
+    # folder-derived prefix (e.g. "cs183b/transcripts/" vs "cs183b/").
+    # Otherwise fall back to folder-only scoping; both omitted = whole
     # library.
     if explicit_prefix:
         path_filter = explicit_prefix if explicit_prefix.endswith("/") else explicit_prefix.rstrip("/") + "/"
-    elif space:
-        path_filter = space.rstrip("/") + "/"
+    elif folder:
+        path_filter = folder.rstrip("/") + "/"
     else:
         path_filter = None
 
@@ -1070,7 +984,7 @@ def op_search(svc: StashbaseStore, args: dict) -> dict:
 
 def op_list(svc: StashbaseStore, args: dict) -> dict:
     """Return ``{path: file_hash}`` for every file with rows across the
-    **active** collections, optionally scoped to one ``space``. A file
+    **active** collections, optionally scoped to one ``folder``. A file
     in multiple active collections collapses to one entry (last write
     wins — shouldn't matter in practice, files live in exactly one
     collection in the steady state).
@@ -1079,8 +993,8 @@ def op_list(svc: StashbaseStore, args: dict) -> dict:
     rows for a file the reconcile path would see ``hash matches`` and
     skip re-embedding under the current embedder, leaving the file
     unsearchable. See build-map 04-indexing #03."""
-    space = args.get("space")
-    prefix = (space.rstrip("/") + "/") if space else ""
+    folder = args.get("folder")
+    prefix = (folder.rstrip("/") + "/") if folder else ""
     out: dict[str, str] = {}
     for _pk, _emb, store in svc.stores():
         try:
@@ -1093,7 +1007,7 @@ def op_list(svc: StashbaseStore, args: dict) -> dict:
 
 
 def _is_reserved_metadata_path(rel_local: str) -> bool:
-    """True for hidden sidecar metadata plus the legacy space-root file.
+    """True for hidden sidecar metadata plus the legacy folder-root file.
 
     Do not match by basename alone: a user note at
     ``research/file-metadata.md`` is normal content and should be indexed.
@@ -1105,7 +1019,7 @@ def _is_reserved_metadata_path(rel_local: str) -> bool:
 
 
 def _make_scanner():
-    """Configure an MFS Scanner for our space layout.
+    """Configure an MFS Scanner for our folder layout.
 
     Two tweaks over MFS defaults:
       - `.html` / `.htm` aren't in `INDEXED_EXTENSIONS`, inject via
@@ -1127,9 +1041,8 @@ def _make_scanner():
 
 def _walk_disk(root: Path, rel_prefix: str = "") -> dict:
     """Walk ``root`` returning ``{rel_path: FileInfo}`` for indexable
-    files. ``rel_path`` is prefixed with ``rel_prefix`` so callers can
-    return kb-root-relative paths even when scanning a single space's
-    subdir.
+    files. ``rel_path`` is prefixed with ``rel_prefix`` for callers that
+    need a stable display path while scanning a subdir.
 
     Filters out anything inside a ``<stem>_files/`` bundle dir and any
     0-byte note — same rules as the sidebar's tree walk.
@@ -1196,28 +1109,26 @@ def _under_bundle(rel: str, note_stems: set) -> bool:
     return False
 
 
-def _walk_for_scope(svc: StashbaseStore, space: str | None) -> dict:
+def _walk_for_scope(svc: StashbaseStore, root: str | None) -> dict:
     """Pick the right disk walk for ``status`` / ``scan_diff``:
-    - ``space`` given → walk just ``<kb_root>/<space>`` with the space
-      name as rel-prefix so returned paths are kb-root-relative.
-    - ``space`` omitted → walk every bound space; skip unbound
-      directories so we don't count files no collection is responsible
-      for.
+    - ``root`` given (an absolute folder root) → walk just that folder,
+      with the root as rel-prefix so returned paths are absolute.
+    - ``root`` omitted → walk every bound root; skip unbound directories
+      so we don't count files no collection is responsible for.
     """
-    if space is not None:
-        root = svc.kb_root / space
-        return _walk_disk(root, rel_prefix=space)
+    if root is not None:
+        root = _norm_root(root)
+        return _walk_disk(Path(root), rel_prefix=root)
     out: dict = {}
-    for sp in svc.bound_spaces():
-        root = svc.kb_root / sp
-        out.update(_walk_disk(root, rel_prefix=sp))
+    for r in svc.bound_roots():
+        out.update(_walk_disk(Path(r), rel_prefix=r))
     return out
 
 
 def op_scan_diff(svc: StashbaseStore, args: dict) -> dict:
     """Content-hash diff: catches external edits the name-set diff misses.
 
-    ``args.space`` optional; whole library if omitted.
+    ``args.folder`` optional; whole library if omitted.
 
     Pairs deleted+added entries with matching content hash and reports
     them as ``renamed`` instead so the Node syncIndex can route them
@@ -1228,15 +1139,15 @@ def op_scan_diff(svc: StashbaseStore, args: dict) -> dict:
     moves.
     """
     scanner = _make_scanner()
-    space = args.get("space")
-    on_disk = _walk_for_scope(svc, space)
+    folder = args.get("folder")
+    on_disk = _walk_for_scope(svc, folder)
     # Aggregate indexed files across **active** collections, scoped if
     # needed. Archive collections are excluded so a stale row from the
     # previous embedder doesn't mark a file as "indexed" — the
     # reconcile loop would then skip re-embedding it under the current
     # embedder and the file would stay unsearchable.
     indexed: dict[str, str] = {}
-    prefix = (space.rstrip("/") + "/") if space else ""
+    prefix = (folder.rstrip("/") + "/") if folder else ""
     for _pk, _emb, store in svc.stores():
         try:
             for src, fh in store.get_indexed_files(prefix).items():
@@ -1305,14 +1216,14 @@ def op_scan_diff(svc: StashbaseStore, args: dict) -> dict:
 
 
 def op_status(svc: StashbaseStore, args: dict) -> dict:
-    """Name-only diff. ``args.space`` optional; whole library if omitted.
+    """Name-only diff. ``args.folder`` optional; whole library if omitted.
 
     Active-store-only (mirrors ``op_scan_diff``): archive rows must not
     inflate the "indexed" set or the UI would report green when files
     actually still need to be re-embedded under the current embedder."""
-    space = args.get("space")
-    on_disk = set(_walk_for_scope(svc, space).keys())
-    prefix = (space.rstrip("/") + "/") if space else ""
+    folder = args.get("folder")
+    on_disk = set(_walk_for_scope(svc, folder).keys())
+    prefix = (folder.rstrip("/") + "/") if folder else ""
     indexed: set[str] = set()
     for _pk, _emb, store in svc.stores():
         try:
@@ -1335,147 +1246,16 @@ def op_status(svc: StashbaseStore, args: dict) -> dict:
     }
 
 
-def op_export_space(svc: StashbaseStore, args: dict) -> dict:
-    """Dump the space's embeddings to a pure vector cache at ``out_path``.
-
-    A snapshot (v3) is just ``{text_hash, dense_vector}`` — the only
-    artifact that's expensive to recompute. Chunk text, line ranges and
-    metadata are deliberately NOT stored: they're re-derivable from the
-    source files the snapshot travels with (it lives at
-    ``<space>/.stashbase/snapshot.parquet``). The human-readable
-    descriptor (embedder identity, counts, timestamp) is written
-    separately by the Node side as a sibling ``snapshot.meta.json``.
-
-    Only the space's currently-bound (active) collection is exported —
-    one embedder, so the content-addressed ``text_hash`` key is
-    unambiguous. ``text_hash = BLAKE3(chunk_text)`` is exactly what
-    ``op_upsert`` recomputes on import, so identical text reuses its
-    vector regardless of which file / line it now lives at, and
-    identical chunks collapse to a single row (natural dedup).
-    """
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    _require(args, "space", "out_path")
-    space = args["space"].strip().strip("/")
-    out_path = Path(args["out_path"]).expanduser().resolve()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if space not in svc.bound_spaces():
-        raise RuntimeError(f"space '{space}' is not bound; call bind_space first")
-    embedder, store, dim = svc.require_current()
-    provider = "openai"
-
-    rows = store._query_all(
-        f'source like "{space}/%"',
-        output_fields=["chunk_text", "dense_vector"],
-    )
-
-    # Content-address by BLAKE3(chunk_text); identical chunks dedup to one.
-    by_hash: dict[str, list[float]] = {}
-    for row in rows:
-        vec = row.get("dense_vector")
-        if vec is None:
-            continue
-        h = _hash_text(row["chunk_text"])
-        if h not in by_hash:
-            by_hash[h] = list(vec)
-
-    columns = {
-        "text_hash": list(by_hash.keys()),
-        "dense_vector": list(by_hash.values()),
-    }
-    schema = pa.schema([
-        pa.field("text_hash", pa.string()),
-        pa.field("dense_vector", pa.list_(pa.float32())),
-    ])
-    table = pa.table(columns, schema=schema)
-    pq.write_table(table, out_path, compression="zstd")
-
-    return {
-        "path": str(out_path),
-        "vectors": len(by_hash),
-        "chunks": len(rows),
-        "version": SNAPSHOT_VERSION,
-        "embedder": {
-            "provider": provider,
-            "model": getattr(embedder, "model_name", None),
-            "dim": dim,
-        },
-    }
-
-
-def op_load_vector_cache(svc: StashbaseStore, args: dict) -> dict:
-    """Load a v3 snapshot's ``{text_hash, dense_vector}`` into the space's
-    transient embedding cache. The subsequent (Node-driven) re-index
-    re-chunks the source files and lands in ``op_upsert``, which reuses a
-    cached vector for any chunk whose ``BLAKE3(chunk_text)`` hits — only
-    the misses get embedded.
-
-    Validates the snapshot's declared embedder (passed by Node from
-    ``snapshot.meta.json``) against the space's bound embedder. A
-    mismatch (different provider / model / dim → different vectors) means
-    the cache is unusable: nothing is loaded and ``mismatch`` is returned
-    so the caller surfaces a "switch embedder / re-export" warning and
-    falls back to a full embed. The per-vector dim guard is a final
-    backstop against a corrupt / wrong-dim file.
-    """
-    import pyarrow.parquet as pq
-
-    _require(args, "space", "in_path")
-    space = args["space"].strip().strip("/")
-    in_path = Path(args["in_path"]).expanduser().resolve()
-    if not in_path.exists():
-        raise RuntimeError(f"snapshot not found: {in_path}")
-
-    if space not in svc.bound_spaces():
-        raise RuntimeError(f"space '{space}' is not bound; call bind_space first")
-    embedder, _store, bound_dim = svc.require_current()
-    provider = "openai"
-    bound_model = getattr(embedder, "model_name", None)
-
-    declared = args.get("embedder") or {}
-    if declared and (
-        declared.get("provider") != provider
-        or int(declared.get("dim") or 0) != bound_dim
-        or (declared.get("model") and declared.get("model") != bound_model)
-    ):
-        return {
-            "loaded": 0,
-            "mismatch": True,
-            "expected": {"provider": provider, "model": bound_model, "dim": bound_dim},
-            "got": declared,
-        }
-
-    table = pq.read_table(in_path, columns=["text_hash", "dense_vector"])
-    hashes = table.column("text_hash").to_pylist()
-    vecs = table.column("dense_vector").to_pylist()
-    cache: dict[str, list[float]] = {}
-    for h, v in zip(hashes, vecs):
-        if h and v is not None and len(v) == bound_dim:
-            cache[h] = list(v)
-    svc.set_vector_cache(space, cache)
-    return {"loaded": len(cache), "mismatch": False}
-
-
-def op_clear_vector_cache(svc: StashbaseStore, args: dict) -> dict:
-    """Drop the space's transient embedding cache once the import-time
-    re-index has drained. Always safe to call (no-op if none loaded)."""
-    _require(args, "space")
-    space = args["space"].strip().strip("/")
-    return {"cleared": svc.clear_vector_cache(space)}
-
-
 def op_close_store(svc: StashbaseStore, _args: dict) -> dict:
     """Release the Milvus Lite flock so the server can move / wipe the
-    DB. Next ``bind_space`` reopens lazily."""
+    DB. Next ``bind_folder`` reopens lazily."""
     svc.close_all(clear_bindings=False)
     return {}
 
 
 OPS = {
-    "bind_space": op_bind_space,
-    "unbind_space": op_unbind_space,
+    "bind_folder": op_bind_folder,
+    "unbind_folder": op_unbind_folder,
     "upsert": op_upsert,
     "delete": op_delete,
     "delete_prefix": op_delete_prefix,
@@ -1485,9 +1265,6 @@ OPS = {
     "scan_diff": op_scan_diff,
     "status": op_status,
     "list": op_list,
-    "export_space": op_export_space,
-    "load_vector_cache": op_load_vector_cache,
-    "clear_vector_cache": op_clear_vector_cache,
     "close_store": op_close_store,
     "set_rules": op_set_rules,
 }
@@ -1503,28 +1280,23 @@ def main() -> int:
     import signal
 
     parser = argparse.ArgumentParser(description="StashBase MFS sidecar daemon")
-    parser.add_argument("--kb-root", required=True,
-                        help="Absolute path of the StashBase library root; the daemon "
-                             "owns one Milvus DB for that root")
-    parser.add_argument("--store-root",
-                        help="Per-machine directory that holds milvus.db. "
-                             "Defaults to <kb_root>/.stashbase/store.nosync for old callers.")
+    parser.add_argument("--store-root", required=True,
+                        help="Per-machine app-data directory that holds the single "
+                             "global milvus.db; folders register absolute roots into it")
     parsed, _unknown = parser.parse_known_args()
 
     # Single-instance guard (data-layer §8.6 I3): hold an exclusive flock
     # on a sidecar lock file for the whole process lifetime. Milvus Lite
     # has its own LOCK, but the loser of that race doesn't fail — it
     # half-opens (reads fine, writes silently lost). Failing fast here
-    # turns "second daemon on the same kbRoot" into an explicit startup
+    # turns "second daemon on the same folderHome" into an explicit startup
     # error the Node side can surface. The flock dies with the process,
     # so a dirty exit can never strand it. Best-effort: fcntl missing
     # (Windows) or fs oddities skip the guard rather than block startup.
     daemon_lock = None  # noqa: F841 — held open for the process lifetime
     try:
         import fcntl
-        lock_root = Path(parsed.store_root).expanduser().resolve() if parsed.store_root else (
-            Path(parsed.kb_root) / ".stashbase" / "store.nosync"
-        )
+        lock_root = Path(parsed.store_root).expanduser().resolve()
         lock_path = lock_root / "daemon.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         daemon_lock = open(lock_path, "w")
@@ -1537,14 +1309,14 @@ def main() -> int:
                 "event": "error",
                 "phase": "daemon_lock",
                 "error": f"another stashbase daemon already holds {lock_path} — "
-                         "refusing to run a second instance against the same KB",
+                         "refusing to run a second instance against the same store",
             })
             return 1
     except Exception:
         daemon_lock = None  # unguarded platforms: proceed as before
 
     try:
-        svc = StashbaseStore(parsed.kb_root, parsed.store_root)
+        svc = StashbaseStore(parsed.store_root)
     except Exception as exc:
         _emit({"event": "error", "phase": "store_init", "error": str(exc)})
         return 1
@@ -1565,7 +1337,7 @@ def main() -> int:
         except (ValueError, OSError):
             pass
 
-    _emit({"event": "ready", "kb_root": str(svc.kb_root), "db": str(svc._db_path)})
+    _emit({"event": "ready", "db": str(svc._db_path)})
 
     for line in sys.stdin:
         line = line.strip()

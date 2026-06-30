@@ -1,27 +1,27 @@
 /**
- * Process-wide indexer state + space-switch orchestration.
+ * Process-wide indexer state + folder-switch orchestration.
  *
  * One `MfsIndexer` instance lives for the lifetime of the server
- * process. The daemon underneath owns one Milvus DB at kbRoot with a
+ * process. The daemon underneath owns one Milvus DB in app data with a
  * single collection (V1 fixes the embedder to OpenAI — no switching).
- * Every space is `bind_space`-ed into that one collection. Boot binds
- * every known space under kbRoot so MCP cross-space search has them all
- * available; opening a space re-binds (idempotent) and runs a name-only
- * sync to pick up any new files.
+ * Every folder is bound into that one collection. Boot binds
+ * every known folder so MCP cross-folder search has them all
+ * available; opening a folder re-binds (idempotent) and runs reconcile
+ * to pick up disk changes.
  *
  * Extracted from `server/index.ts` so route modules can import the
  * indexer without picking up the whole route registration kitchen sink.
  */
 import { MfsIndexer } from './indexer.mfs.ts';
 import type { Indexer, EmbedderRuntimeConfig } from './indexer.ts';
-import { getCurrentSpace, getCurrentSpaceName, getKbRoot, listKnownSpaces, onClose, onSwitch, runWithWindowId } from './space.ts';
+import { getCurrentFolder, getRecentFolders, onClose, onSwitch, runWithWindowId, toPosixAbs } from './folder.ts';
 import { getApiKey } from './app-config.ts';
 import { syncIndex, type SyncResult } from './sync.ts';
 import { getDaemon } from './mfs-daemon.ts';
 import { clearStaleMilvusLock } from './stale-lock.ts';
 import { noteTreeChanged } from './watcher.ts';
 import { logger, errorMessage } from './log.ts';
-import fs from 'node:fs';
+import { globalVectorStoreDir } from './local-data.ts';
 import path from 'node:path';
 
 const log = logger('state');
@@ -29,170 +29,49 @@ const log = logger('state');
 /** Single indexer instance shared across every route. */
 export const indexer: Indexer = new MfsIndexer();
 
-/** Most recent snapshot-import result per space, keyed by kbRoot-
- *  relative space name. Populated by `maybeImportSnapshot`, consumed by
- *  `/api/index-status` so the UI can show a banner the first time the
- *  user opens a space whose snapshot's embedder doesn't match the
- *  library's current provider. Cleared on successful re-import or
- *  manual dismissal. */
-export interface SnapshotImportWarning {
-  /** Total chunks the daemon skipped because their provider key
-   *  didn't match anything bound for this space. */
-  skipped: number;
-  /** Per-provider chunk counts as reported by the daemon. */
-  details: { provider: string; chunks: number }[];
-  /** ISO timestamp so the UI can tell whether the warning is fresh. */
-  at: string;
-}
-const snapshotWarnings = new Map<string, SnapshotImportWarning>();
-export function getSnapshotWarning(space: string): SnapshotImportWarning | null {
-  return snapshotWarnings.get(space) ?? null;
-}
-export function clearSnapshotWarning(space: string): void {
-  snapshotWarnings.delete(space);
-}
-function recordSnapshotWarning(space: string, warning: SnapshotImportWarning): void {
-  snapshotWarnings.set(space, warning);
-}
-
 export interface IndexSyncWarning {
   message: string;
   at: string;
 }
 const indexWarnings = new Map<string, IndexSyncWarning>();
-export function getIndexWarning(space: string): IndexSyncWarning | null {
-  return indexWarnings.get(space) ?? null;
+export function getIndexWarning(folder: string): IndexSyncWarning | null {
+  return indexWarnings.get(folder) ?? null;
 }
-export function clearIndexWarning(space: string): void {
-  indexWarnings.delete(space);
+export function clearIndexWarning(folder: string): void {
+  indexWarnings.delete(folder);
 }
-function recordIndexWarning(space: string, message: string): void {
-  indexWarnings.set(space, { message, at: new Date().toISOString() });
-}
-
-const spaceSyncGeneration = new Map<string, number>();
-
-export function invalidateSpaceSync(spaceName: string): void {
-  const name = spaceName.trim();
-  if (!name) return;
-  spaceSyncGeneration.set(name, (spaceSyncGeneration.get(name) ?? 0) + 1);
+function recordIndexWarning(folder: string, message: string): void {
+  indexWarnings.set(folder, { message, at: new Date().toISOString() });
 }
 
-function currentSpaceSyncGeneration(spaceName: string): number {
-  return spaceSyncGeneration.get(spaceName) ?? 0;
+const folderSyncGeneration = new Map<string, number>();
+
+export function invalidateFolderSync(folderRoot: string): void {
+  const root = toPosixAbs(folderRoot);
+  if (!root) return;
+  folderSyncGeneration.set(root, (folderSyncGeneration.get(root) ?? 0) + 1);
 }
 
-function shouldContinueSpaceSync(
-  spaceName: string,
+function currentFolderSyncGeneration(folderRoot: string): number {
+  return folderSyncGeneration.get(folderRoot) ?? 0;
+}
+
+function shouldContinueFolderSync(
+  folderRoot: string,
   startedAt: number,
   callerShouldContinue?: () => boolean,
 ): boolean {
-  return currentSpaceSyncGeneration(spaceName) === startedAt && (!callerShouldContinue || callerShouldContinue());
+  return currentFolderSyncGeneration(folderRoot) === startedAt && (!callerShouldContinue || callerShouldContinue());
 }
 
-export async function renameSpaceRuntimeState(oldName: string, newName: string): Promise<void> {
-  const snapshotWarning = snapshotWarnings.get(oldName);
-  if (snapshotWarning) {
-    snapshotWarnings.set(newName, snapshotWarning);
-    snapshotWarnings.delete(oldName);
-  }
-  const indexWarning = indexWarnings.get(oldName);
-  if (indexWarning) {
-    indexWarnings.set(newName, indexWarning);
-    indexWarnings.delete(oldName);
-  }
-  await clearSnapshotCacheForSpaceName(oldName);
-}
-
-export async function deleteSpaceRuntimeState(spaceName: string): Promise<void> {
-  snapshotWarnings.delete(spaceName);
-  indexWarnings.delete(spaceName);
-  await clearSnapshotCacheForSpaceName(spaceName);
-}
-
-export function __setSpaceWarningsForTest(
-  space: string,
-  warnings: { snapshot?: SnapshotImportWarning | null; index?: IndexSyncWarning | null },
-): void {
-  if ('snapshot' in warnings) {
-    if (warnings.snapshot) snapshotWarnings.set(space, warnings.snapshot);
-    else snapshotWarnings.delete(space);
-  }
-  if ('index' in warnings) {
-    if (warnings.index) indexWarnings.set(space, warnings.index);
-    else indexWarnings.delete(space);
-  }
-}
-
-export function __spaceSyncGenerationForTest(space: string): number {
-  return currentSpaceSyncGeneration(space);
-}
-
-export function __spaceSyncShouldContinueForTest(
-  space: string,
-  startedAt: number,
-  callerShouldContinue?: () => boolean,
-): boolean {
-  return shouldContinueSpaceSync(space, startedAt, callerShouldContinue);
-}
-
-/** Spaces whose snapshot vector-cache is currently loaded in the daemon
- *  (keyed by kbRoot-relative name). Loaded just before an import-time
- *  reindex and cleared once that reindex drains, so the daemon doesn't
- *  hold every snapshot's vectors in memory forever. */
-const loadedSnapshotCaches = new Set<string>();
-const snapshotCacheClearTimers = new Map<string, NodeJS.Timeout>();
-const SNAPSHOT_CACHE_RETAIN_ON_FAILURE_MS = 30 * 60_000;
-
-function spaceNameFromAbs(spaceAbs: string): string {
-  const rel = path.relative(getKbRoot(), spaceAbs).split(path.sep).join('/');
-  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
-    throw new Error(`space path is not under kbRoot: ${spaceAbs}`);
-  }
-  return rel;
-}
-
-function cancelSnapshotCacheClearTimer(spaceName: string): void {
-  const timer = snapshotCacheClearTimers.get(spaceName);
-  if (!timer) return;
-  clearTimeout(timer);
-  snapshotCacheClearTimers.delete(spaceName);
-}
-
-async function clearSnapshotCacheForSpaceName(spaceName: string): Promise<void> {
-  cancelSnapshotCacheClearTimer(spaceName);
-  if (!loadedSnapshotCaches.has(spaceName)) return;
-  loadedSnapshotCaches.delete(spaceName);
-  try {
-    await getDaemon().call('clear_vector_cache', { space: spaceName });
-  } catch (err) {
-    log.warn(`snapshot cache clear ${spaceName} failed: ${errorMessage(err)}`);
-  }
-}
-
-/** Drop the daemon-side snapshot vector cache for `spaceAbs`'s space if
- *  one was loaded. Called only after a successful import-time sync; failed
- *  or cancelled syncs retain the cache briefly for retry. */
-async function clearSnapshotCacheIfLoaded(spaceAbs: string): Promise<void> {
-  await clearSnapshotCacheForSpaceName(spaceNameFromAbs(spaceAbs));
-}
-
-function retainSnapshotCacheForRetry(spaceAbs: string, reason: string): void {
-  const spaceName = spaceNameFromAbs(spaceAbs);
-  if (!loadedSnapshotCaches.has(spaceName) || snapshotCacheClearTimers.has(spaceName)) return;
-  const timer = setTimeout(() => {
-    void clearSnapshotCacheForSpaceName(spaceName);
-  }, SNAPSHOT_CACHE_RETAIN_ON_FAILURE_MS);
-  timer.unref();
-  snapshotCacheClearTimers.set(spaceName, timer);
-  log.warn(
-    `snapshot ${spaceName}: retaining vector cache for retry after ${reason}; ` +
-      `will clear in ${SNAPSHOT_CACHE_RETAIN_ON_FAILURE_MS / 60_000}min if no successful sync happens first`,
-  );
+export async function deleteFolderRuntimeState(folderRoot: string): Promise<void> {
+  const root = toPosixAbs(folderRoot);
+  indexWarnings.delete(root);
+  folderSyncGeneration.delete(root);
 }
 
 /** Resolve the runtime embedder config (V1 = OpenAI only). Returns null
- *  when no API key is set — the caller still binds the space (so it's
+ *  when no API key is set — the caller still binds the folder (so it's
  *  registered) but indexing stays disabled until the user adds a key
  *  (graceful no-key degrade). */
 function resolveEmbedder(): EmbedderRuntimeConfig | null {
@@ -201,26 +80,28 @@ function resolveEmbedder(): EmbedderRuntimeConfig | null {
   return { provider: 'openai', apiKey };
 }
 
-/** Configure + spawn the daemon, then bind every known space under
- *  kbRoot. Idempotent on the bind side; safe to call once at server
- *  startup. With no API key, spaces are still bound (registered) but the
+/** Configure + spawn the daemon, then bind every folder in Your Folders.
+ *  Idempotent on the bind side; safe to call once at server
+ *  startup. With no API key, folders are still bound (registered) but the
  *  collection isn't created until a key is supplied — search just
  *  returns nothing until then. */
-export async function bootBindAllSpaces(): Promise<void> {
-  const daemon = getDaemon();
-  daemon.configure({ kbRoot: getKbRoot() });
-  const known = listKnownSpaces();
-  if (known.length === 0) {
-    log.info('boot bind: no spaces found under kbRoot');
+export async function bootBindAllFolders(): Promise<void> {
+  // Membership = "Your Folders" (the recents list), which can live anywhere
+  // on disk. Bind every member's absolute root so MCP/Claude can search the
+  // whole library without the user first opening each folder.
+  const members = getRecentFolders().map((r) => toPosixAbs(r.path));
+  const roots = Array.from(new Set(members));
+  if (roots.length === 0) {
+    log.info('boot bind: no member folders');
     return;
   }
-  log.info(`boot bind: ${known.length} space(s): ${known.join(', ')}`);
+  log.info(`boot bind: ${roots.length} folder(s)`);
   const cfg = resolveEmbedder() ?? { provider: 'openai' as const };
-  for (const space of known) {
+  for (const root of roots) {
     try {
-      await indexer.bindSpace(space, cfg);
+      await indexer.bindFolder(root, cfg);
     } catch (err: unknown) {
-      log.warn(`boot bind ${space} failed: ${errorMessage(err)}`);
+      log.warn(`boot bind ${root} failed: ${errorMessage(err)}`);
     }
   }
 }
@@ -232,143 +113,46 @@ export async function bootBindAllSpaces(): Promise<void> {
 export async function resetIndexerRuntime(opts: { forgetBindings?: boolean } = {}): Promise<void> {
   await indexer.close();
   if (opts.forgetBindings) getDaemon().forgetBindings();
-  loadedSnapshotCaches.clear();
-  for (const timer of snapshotCacheClearTimers.values()) clearTimeout(timer);
-  snapshotCacheClearTimers.clear();
 }
 
-/** Per-KB-root latch for the stale-flock sweep below. */
-const staleLockSweptRoots = new Set<string>();
+/** Per-vector-store latch for the stale-flock sweep below. */
+const staleLockSweptStores = new Set<string>();
 
-function claimStaleLockSweep(root: string): boolean {
-  const key = path.resolve(root);
-  if (staleLockSweptRoots.has(key)) return false;
-  staleLockSweptRoots.add(key);
+function claimStaleLockSweep(storeRoot: string): boolean {
+  const key = path.resolve(storeRoot);
+  if (staleLockSweptStores.has(key)) return false;
+  staleLockSweptStores.add(key);
   return true;
 }
 
-export function __claimStaleLockSweepForTest(root: string): boolean {
-  return claimStaleLockSweep(root);
-}
-
-/** Bind the indexer to a space using the OpenAI embedder. Called on
- *  every space switch (idempotent). Doesn't trigger sync — caller's
- *  responsibility via `scheduleIndexerSync`. With no key the space is
+/** Bind the indexer to a folder using the OpenAI embedder. Called on
+ *  every folder switch (idempotent). Doesn't trigger sync — caller's
+ *  responsibility via `scheduleIndexerSync`. With no key the folder is
  *  still bound but indexing is disabled. */
-export async function bindIndexerForSpace(spaceAbs: string): Promise<void> {
-  const daemon = getDaemon();
-  const kbRoot = getKbRoot();
-  daemon.configure({ kbRoot });
-
+export async function bindIndexerForFolder(folderAbs: string): Promise<void> {
   // Before the first bind of this process, sweep any stashbase daemon
-  // still holding the Milvus flock: a dirty previous exit (kill -9, OS
-  // shutdown) or another session's leftover embedded daemon would
-  // otherwise wedge our bind, and the loser of a lock fight keeps
-  // "succeeding" while its writes go nowhere (data-layer §8.1). This
-  // call site is deliberately the WEB SERVER's bind path only — the MCP
-  // host must never run the sweep, since the GUI's daemon is the
-  // rightful lock owner it would be killing.
-  if (claimStaleLockSweep(kbRoot)) {
-    try { clearStaleMilvusLock(kbRoot); } catch (err: unknown) {
+  // still holding the global Milvus flock: a dirty previous exit (kill -9,
+  // OS shutdown) or another session's leftover daemon would otherwise
+  // wedge our bind, and the loser of a lock fight keeps "succeeding" while
+  // its writes go nowhere (data-layer §8.1). This call site is
+  // deliberately the WEB SERVER's bind path only — the MCP host must never
+  // run the sweep, since the GUI's daemon is the rightful lock owner it
+  // would be killing.
+  if (claimStaleLockSweep(globalVectorStoreDir())) {
+    try { clearStaleMilvusLock(); } catch (err: unknown) {
       log.warn(`stale-lock sweep failed: ${errorMessage(err)}`);
     }
   }
   const cfg = resolveEmbedder();
   const runtime = cfg ?? { provider: 'openai' as const };
   if (!cfg) {
-    log.warn(`embedder: no OpenAI key set — ${spaceAbs} bound but indexing/search disabled until a key is added`);
+    log.warn(`embedder: no OpenAI key set — ${folderAbs} bound but indexing/search disabled until a key is added`);
   }
-  // The kbRoot-relative name is the space identifier on the indexer side.
-  // We can't use getCurrentSpaceName() here — the switch listener fires
-  // BEFORE the renderer sees the new currentSpace, and bootBindAllSpaces
-  // calls this without changing currentSpace at all.
-  const rel = spaceNameFromAbs(spaceAbs);
-  await indexer.bindSpace(rel, runtime);
-  await maybeImportSnapshot(spaceAbs, rel);
-}
-
-/** If the space ships a `.stashbase/snapshot.parquet` (v3 = a pure
- *  embedding cache) and the collection has no rows for it yet, load the
- *  cache into the daemon so the import-time reindex reuses vectors
- *  instead of re-embedding — lets a freshly-cloned starter (e.g. cs183b)
- *  come pre-indexed cheaply. The actual chunk rows are produced by the
- *  normal reindex (`syncIndex`) that follows; this only primes the
- *  cache. The cache is cleared by `clearSnapshotCacheIfLoaded` once that
- *  reindex drains.
- *
- *  Skips silently when the snapshot is absent or the space already has
- *  data. Requires the sibling `snapshot.meta.json` descriptor and a
- *  matching embedder; a mismatch records a UI warning and falls back to
- *  a full re-embed. */
-async function maybeImportSnapshot(spaceAbs: string, spaceName: string): Promise<void> {
-  // No OpenAI key → no embedder/store, so there's nothing to prime the
-  // snapshot's vectors into. `load_vector_cache` would call
-  // `require_current()` on the daemon and throw "no embedder bound",
-  // spilling a Python traceback into the log on every keyless import of a
-  // snapshot-carrying space (e.g. the CS183B starter). Skip; once a key
-  // is set, reindex reuses the snapshot then. Mirrors syncIndex's guard.
-  if (!getApiKey()) return;
-  const snapshot = path.join(spaceAbs, '.stashbase', 'snapshot.parquet');
-  const metaPath = path.join(spaceAbs, '.stashbase', 'snapshot.meta.json');
-  try {
-    if (!fs.statSync(snapshot).isFile()) return;
-  } catch {
-    return;
-  }
-  try {
-    const status = await indexer.status(spaceName);
-    if (status.indexed > 0) return;
-  } catch (err) {
-    log.warn(`snapshot: status check failed for ${spaceName}: ${errorMessage(err)}`);
-    return;
-  }
-  // v3 carries its descriptor (embedder identity + counts) in a JSON
-  // sidecar, not in the Parquet. No JSON ⇒ legacy / unknown snapshot:
-  // skip the cache and let the reindex embed from scratch.
-  let meta: {
-    embedder?: { provider?: string; model?: string; dim?: number };
-    vectors?: number;
-    chunks?: number;
-  };
-  try {
-    meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-  } catch {
-    log.warn(`snapshot ${spaceName}: missing/invalid snapshot.meta.json (re-export with this build) — embedding from scratch`);
-    return;
-  }
-  try {
-    const res = await getDaemon().call<{
-      loaded: number;
-      mismatch: boolean;
-      expected?: { provider: string; model: string | null; dim: number };
-      got?: { provider?: string; model?: string; dim?: number };
-    }>('load_vector_cache', { space: spaceName, in_path: snapshot, embedder: meta.embedder ?? {} });
-    if (res.mismatch) {
-      log.warn(
-        `snapshot ${spaceName}: embedder mismatch (snapshot ${JSON.stringify(res.got)} ` +
-          `vs current ${JSON.stringify(res.expected)}) — re-embedding. ` +
-          `Switch the knowledge base's embedder to match, or re-export.`,
-      );
-      const got = res.got ?? meta.embedder ?? {};
-      recordSnapshotWarning(spaceName, {
-        skipped: meta.vectors ?? meta.chunks ?? 0,
-        details: [{ provider: `${got.provider ?? '?'}_${got.dim ?? '?'}`, chunks: meta.vectors ?? meta.chunks ?? 0 }],
-        at: new Date().toISOString(),
-      });
-      return;
-    }
-    if (res.loaded > 0) {
-      loadedSnapshotCaches.add(spaceName);
-      clearSnapshotWarning(spaceName);
-      log.info(`snapshot ${spaceName}: vector cache primed (${res.loaded} vectors) — reindex will reuse`);
-    }
-  } catch (err) {
-    log.warn(`snapshot cache load ${spaceName} failed: ${errorMessage(err)}`);
-  }
+  await indexer.bindFolder(toPosixAbs(folderAbs), runtime);
 }
 
 
-// Serialise indexer bind + sync so rapid space switches don't race. The
+// Serialise indexer bind + sync so rapid folder switches don't race. The
 // seq guard short-circuits a stale tail when the user has already moved
 // on; the queue chains each switch after the previous one finishes.
 const indexerSwitchSeq = new Map<string, number>();
@@ -376,10 +160,10 @@ const indexerSwitchQueues = new Map<string, Promise<void>>();
 
 /** Live bookkeeping behind the gate + watchdog: one record per scheduled
  *  bind+sync segment, self-removing when the segment settles. Lets the
- *  gate filter by space and the watchdog name what's stuck. */
+ *  gate filter by folder and the watchdog name what's stuck. */
 interface PendingSwitch {
   promise: Promise<void>;
-  spaceRoot: string;
+  folderRoot: string;
   reason: string;
   windowId: string;
   scheduledAt: number;
@@ -389,7 +173,7 @@ const pendingSwitches = new Set<PendingSwitch>();
 
 // Watchdog for invariant I4 (data-layer §8.6): every queue entry must
 // settle in bounded time. A hard timeout can't work here — first-index
-// of a large space legitimately runs bind+sync for tens of minutes — so
+// of a large folder legitimately runs bind+sync for tens of minutes — so
 // we supervise instead of intervene: any entry older than 15min gets one
 // loud warning with enough context to find the wedge. Lazily started,
 // unref'd so it never keeps the process alive.
@@ -403,8 +187,8 @@ function ensureSwitchWatchdog(): void {
       if (p.warned || now - p.scheduledAt < SWITCH_WATCHDOG_AFTER_MS) continue;
       p.warned = true;
       log.warn(
-        `space-open queue entry unsettled after ${Math.round((now - p.scheduledAt) / 60_000)}min ` +
-          `(${p.reason}, space=${p.spaceRoot}, window=${p.windowId}) — bind/import/sync may be wedged ` +
+        `folder-open queue entry unsettled after ${Math.round((now - p.scheduledAt) / 60_000)}min ` +
+          `(${p.reason}, folder=${p.folderRoot}, window=${p.windowId}) — bind/import/sync may be wedged ` +
           '(data-layer §8.6 I4)',
       );
     }
@@ -426,61 +210,55 @@ function syncTouchedVisibleTree(result: SyncResult): boolean {
     || result.failed.length > 0;
 }
 
-const spaceSyncQueues = new Map<string, Promise<unknown>>();
+const folderSyncQueues = new Map<string, Promise<unknown>>();
 
-export async function syncSpaceNow(
-  spaceRoot: string,
+export async function syncFolderNow(
+  folderRoot: string,
   opts: { reason?: string; shouldContinue?: () => boolean } = {},
 ): Promise<SyncResult> {
-  const syncSpaceName = spaceNameFromAbs(spaceRoot);
-  const prev = spaceSyncQueues.get(syncSpaceName) ?? Promise.resolve();
+  const syncFolderRoot = toPosixAbs(folderRoot);
+  const prev = folderSyncQueues.get(syncFolderRoot) ?? Promise.resolve();
   const next = prev
     .catch(() => undefined)
-    .then(() => syncSpaceNowInner(spaceRoot, syncSpaceName, opts));
+    .then(() => syncFolderNowInner(syncFolderRoot, opts));
   const settled = next.finally(() => {
-    if (spaceSyncQueues.get(syncSpaceName) === settled) {
-      spaceSyncQueues.delete(syncSpaceName);
+    if (folderSyncQueues.get(syncFolderRoot) === settled) {
+      folderSyncQueues.delete(syncFolderRoot);
     }
   });
-  spaceSyncQueues.set(syncSpaceName, settled);
+  folderSyncQueues.set(syncFolderRoot, settled);
   return next;
 }
 
-async function syncSpaceNowInner(
-  spaceRoot: string,
-  syncSpaceName: string,
+async function syncFolderNowInner(
+  folderRoot: string,
   opts: { reason?: string; shouldContinue?: () => boolean },
 ): Promise<SyncResult> {
-  const syncGeneration = currentSpaceSyncGeneration(syncSpaceName);
-  const shouldContinue = () => shouldContinueSpaceSync(syncSpaceName, syncGeneration, opts.shouldContinue);
+  const syncGeneration = currentFolderSyncGeneration(folderRoot);
+  const shouldContinue = () => shouldContinueFolderSync(folderRoot, syncGeneration, opts.shouldContinue);
   try {
-    await bindIndexerForSpace(spaceRoot);
+    await bindIndexerForFolder(folderRoot);
     if (!shouldContinue()) {
-      retainSnapshotCacheForRetry(spaceRoot, `${opts.reason ?? 'sync'} cancellation`);
       return { added: [], modified: [], removed: [], renamed: [], failed: [], cancelled: true };
     }
-    const result = await syncIndex(indexer, syncSpaceName, { shouldContinue });
+    const result = await syncIndex(indexer, folderRoot, { shouldContinue });
     if (result.cancelled) {
-      retainSnapshotCacheForRetry(spaceRoot, `${opts.reason ?? 'sync'} cancellation`);
       return result;
     }
     if (syncTouchedVisibleTree(result)) noteTreeChanged();
     if (result.failed.length) {
-      recordIndexWarning(syncSpaceName, syncFailureMessage(result));
-      retainSnapshotCacheForRetry(spaceRoot, `${opts.reason ?? 'sync'} failures`);
+      recordIndexWarning(folderRoot, syncFailureMessage(result));
     } else {
-      clearIndexWarning(syncSpaceName);
-      await clearSnapshotCacheIfLoaded(spaceRoot);
+      clearIndexWarning(folderRoot);
     }
     return result;
   } catch (err: unknown) {
-    recordIndexWarning(syncSpaceName, errorMessage(err));
-    retainSnapshotCacheForRetry(spaceRoot, `${opts.reason ?? 'sync'} error`);
+    recordIndexWarning(folderRoot, errorMessage(err));
     throw err;
   }
 }
 
-export function scheduleIndexerSync(spaceRoot: string, reason: string, windowId = 'default'): void {
+export function scheduleIndexerSync(folderRoot: string, reason: string, windowId = 'default'): void {
   const seq = (indexerSwitchSeq.get(windowId) ?? 0) + 1;
   indexerSwitchSeq.set(windowId, seq);
   const prev = indexerSwitchQueues.get(windowId) ?? Promise.resolve();
@@ -488,38 +266,36 @@ export function scheduleIndexerSync(spaceRoot: string, reason: string, windowId 
     .catch(() => undefined)
     .then(async () => {
       await runWithWindowId(windowId, async () => {
-        if (getCurrentSpace() !== spaceRoot) return;
-        const syncSpaceName = path.relative(getKbRoot(), spaceRoot).split(path.sep).join('/');
-        if (!syncSpaceName || syncSpaceName.startsWith('..') || path.isAbsolute(syncSpaceName)) return;
+        if (getCurrentFolder() !== folderRoot) return;
         try {
           // Full content-hash diff — the only reconcile tier. Hashing
-          // is milliseconds for a personal KB; embedding still only
+          // is milliseconds for a personal library; embedding still only
           // happens for changed hashes, so reopening a fully-indexed
-          // space costs zero tokens, AND external edits made while the
+          // folder costs zero tokens, AND external edits made while the
           // app was closed are caught right here instead of waiting for
           // a manual sync.
-          await syncSpaceNow(spaceRoot, {
+          await syncFolderNow(folderRoot, {
             reason,
-            shouldContinue: () => getCurrentSpace() === spaceRoot && seq === indexerSwitchSeq.get(windowId),
+            shouldContinue: () => getCurrentFolder() === folderRoot && seq === indexerSwitchSeq.get(windowId),
           });
         } catch (err: unknown) {
-          log.warn(`${reason}: index sync failed for ${spaceRoot}: ${errorMessage(err)}`);
+          log.warn(`${reason}: index sync failed for ${folderRoot}: ${errorMessage(err)}`);
         }
       });
     });
   indexerSwitchQueues.set(windowId, next);
   const entry: PendingSwitch = {
-    promise: next, spaceRoot, reason, windowId, scheduledAt: Date.now(), warned: false,
+    promise: next, folderRoot, reason, windowId, scheduledAt: Date.now(), warned: false,
   };
   pendingSwitches.add(entry);
   ensureSwitchWatchdog();
   void next.catch(() => undefined).finally(() => pendingSwitches.delete(entry));
 }
 
-// Fire a queued bind + sync on every space switch. Registered at module
+// Fire a queued bind + sync on every folder switch. Registered at module
 // load time so any importer (index.ts, tests) gets the wiring for free.
 onSwitch((newRoot, windowId) => {
-  scheduleIndexerSync(newRoot, 'space switch', windowId);
+  scheduleIndexerSync(newRoot, 'folder switch', windowId);
 });
 
 onClose((_oldRoot, windowId) => {

@@ -3,12 +3,12 @@
  *
  * These wrap the Agent SDK's on-disk session store (`~/.claude/projects/`,
  * the same transcripts the `claude` CLI writes). They sit OUTSIDE the
- * `requireSpace` gate (no 412 when spaceless), but the LIST is filtered to
- * the current space by session `cwd` — the panel belongs to one space, so
- * its History shows only that space's conversations (falls back to all
- * when no space is open). `:id` reads/rename/delete stay global by id.
+ * `requireFolder` gate (no 412 before a folder is open), but the LIST is filtered to
+ * the current folder by session `cwd` — the panel belongs to one folder, so
+ * its History shows only that folder's conversations (falls back to all
+ * when no folder is open). `:id` reads/rename/delete stay global by id.
  *
- *   GET    /api/agent/sessions             → list this space's sessions
+ *   GET    /api/agent/sessions             → list this folder's sessions
  *   GET    /api/agent/sessions/:id/messages→ a session's transcript as
  *                                            renderable panel blocks
  *   PATCH  /api/agent/sessions/:id { title }→ rename
@@ -28,7 +28,7 @@ import {
   deleteSession,
   type SDKSessionInfo,
 } from '@anthropic-ai/claude-agent-sdk';
-import { getCurrentSpace } from '../space.ts';
+import { getCurrentFolder } from '../folder.ts';
 import { sendError } from '../http.ts';
 
 /** Trimmed session row sent to the client. */
@@ -51,17 +51,17 @@ function toRow(s: SDKSessionInfo): SessionRow {
 }
 
 export function mount(app: express.Express): void {
-  // Sessions for the CURRENT space, newest first. The agent always runs
-  // with cwd = the open space dir, and the SDK records `cwd` per session,
-  // so filter on it — the History dropdown then shows only this space's
+  // Sessions for the CURRENT folder, newest first. The agent always runs
+  // with cwd = the open folder dir, and the SDK records `cwd` per session,
+  // so filter on it — the History dropdown then shows only this folder's
   // conversations (incl. terminal Claude Code runs in the same dir),
-  // matching "this panel belongs to this space". No space open (rare —
+  // matching "this panel belongs to this folder". No folder open (rare —
   // the panel needs one) → fall back to listing all so it's never blank.
   app.get('/api/agent/sessions', async (_req, res) => {
     try {
       const sessions = await listSessions();
-      const space = getCurrentSpace();
-      const cur = space ? path.resolve(space) : null;
+      const folder = getCurrentFolder();
+      const cur = folder ? path.resolve(folder) : null;
       const rows = sessions
         .map(toRow)
         .filter((r) => !cur || (r.cwd != null && path.resolve(r.cwd) === cur))
@@ -76,8 +76,8 @@ export function mount(app: express.Express): void {
   // so the client renders it with its existing BlockView untouched.
   app.get('/api/agent/sessions/:id/messages', async (req, res) => {
     try {
-      if (!(await sessionBelongsToCurrentSpace(req.params.id))) {
-        res.status(404).json({ error: 'session not found for current space' });
+      if (!(await sessionBelongsToCurrentFolder(req.params.id))) {
+        res.status(404).json({ error: 'session not found for current folder' });
         return;
       }
       const msgs = await getSessionMessages(req.params.id);
@@ -95,8 +95,8 @@ export function mount(app: express.Express): void {
       return;
     }
     try {
-      if (!(await sessionBelongsToCurrentSpace(req.params.id))) {
-        res.status(404).json({ error: 'session not found for current space' });
+      if (!(await sessionBelongsToCurrentFolder(req.params.id))) {
+        res.status(404).json({ error: 'session not found for current folder' });
         return;
       }
       await renameSession(req.params.id, title);
@@ -110,8 +110,8 @@ export function mount(app: express.Express): void {
   // Delete (the trash) — removes the `{id}.jsonl` transcript.
   app.delete('/api/agent/sessions/:id', async (req, res) => {
     try {
-      if (!(await sessionBelongsToCurrentSpace(req.params.id))) {
-        res.status(404).json({ error: 'session not found for current space' });
+      if (!(await sessionBelongsToCurrentFolder(req.params.id))) {
+        res.status(404).json({ error: 'session not found for current folder' });
         return;
       }
       await deleteSession(req.params.id);
@@ -122,17 +122,17 @@ export function mount(app: express.Express): void {
   });
 }
 
-async function sessionBelongsToCurrentSpace(id: string): Promise<boolean> {
-  const space = getCurrentSpace();
-  // When no space is open, the list route intentionally falls back to
-  // all sessions; keep direct actions global in that spaceless state.
-  if (!space) return true;
+async function sessionBelongsToCurrentFolder(id: string): Promise<boolean> {
+  const folder = getCurrentFolder();
+  // When no folder is open, the list route intentionally falls back to
+  // all sessions; keep direct actions global before a folder is open.
+  if (!folder) return true;
   const info = await getSessionInfo(id);
-  return sessionInfoMatchesSpace(info, space);
+  return sessionInfoMatchesFolder(info, folder);
 }
 
-export function sessionInfoMatchesSpace(info: { cwd?: unknown } | null | undefined, space: string): boolean {
-  return !!(info && typeof info.cwd === 'string' && path.resolve(info.cwd) === path.resolve(space));
+export function sessionInfoMatchesFolder(info: { cwd?: unknown } | null | undefined, folder: string): boolean {
+  return !!(info && typeof info.cwd === 'string' && path.resolve(info.cwd) === path.resolve(folder));
 }
 
 // ----- transcript → panel blocks ----------------------------------------

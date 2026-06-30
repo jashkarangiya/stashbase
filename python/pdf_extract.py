@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """PDF → markdown + image bundle.
 
-Invoked by `server/pdf.ts` after the user drags a PDF into a space.
+Invoked by `server/pdf.ts` after the user drags a PDF into a folder.
 Writes a derived note (`.<stem>.md`, dot-prefixed because it's an
 app-maintained artifact rather than user content) alongside the PDF
 and an image bundle dir named `.<stem>_files/` containing every
@@ -595,7 +595,7 @@ def convert_with_pymupdf(
     each figure / chart region as a PNG into `image_path`. We point
     it at the dot-prefixed bundle dir and then rewrite the absolute
     image URLs it emits into bundle-relative refs so the resulting
-    markdown stays portable when the space moves."""
+    markdown stays portable when the folder moves."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     bundle_dir.parent.mkdir(parents=True, exist_ok=True)
     tmp_fd, tmp_note_name = tempfile.mkstemp(

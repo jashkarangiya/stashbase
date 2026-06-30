@@ -5,15 +5,13 @@
  * upstream ships one) means writing a new class behind this interface
  * and changing one import line in `index.ts`.
  *
- * Paths on every method are **kbRoot-relative POSIX**
- * (e.g. `cs183b/lecture-01.md`). The first path segment is the space
- * name. Server modules that operate in space-relative terms translate
- * at the indexer boundary — see `server/space.ts:toKbRel` /
- * `fromKbRel`.
+ * Paths on every method are absolute POSIX paths. Server modules that
+ * operate in folder-relative terms translate at the route/files boundary;
+ * the indexer and daemon key one global collection by absolute source path.
  */
 
 export interface SearchHit {
-  /** kbRoot-relative POSIX path (e.g. `cs183b/lecture-01.md`). */
+  /** Absolute POSIX source path. */
   fileName: string;
   chunkIndex: number;
   /** Indexed chunk body — already heading-prefixed for markdown / html. */
@@ -34,7 +32,7 @@ export interface SearchHit {
 export interface EmbedderRuntimeConfig {
   /** V1 is OpenAI-only — no embedder switching. */
   provider: 'openai';
-  /** OpenAI API key. Absent ⇒ the space is registered but indexing
+  /** OpenAI API key. Absent ⇒ the folder is registered but indexing
    *  stays disabled until the user adds a key (graceful no-key degrade). */
   apiKey?: string;
   /** Optional model override (default `text-embedding-3-small`). */
@@ -44,20 +42,29 @@ export interface EmbedderRuntimeConfig {
 }
 
 export interface Indexer {
-  /** Register a space with the indexer. V1 has one fixed collection, so
-   *  this just makes the space known (and builds the collection on the
+  /** Register a folder with the indexer. V1 has one fixed collection, so
+   *  this just makes the folder known (and builds the collection on the
    *  first bind carrying a key). Idempotent — safe to call on every
-   *  server start for every known space, and after a daemon respawn. */
-  bindSpace(space: string, cfg: EmbedderRuntimeConfig): Promise<void>;
+   *  server start for every known folder, and after a daemon respawn. */
+  bindFolder(folder: string, cfg: EmbedderRuntimeConfig): Promise<void>;
 
-  /** Stop routing new files for the space. Existing rows stay
+  /** Stop routing new files for the folder. Existing rows stay
    *  searchable until explicit delete. */
-  unbindSpace(space: string): Promise<void>;
+  unbindFolder(folder: string): Promise<void>;
 
   /** Insert / replace all chunks for one file. Returns the number of
    *  chunks actually stored. Empty / unchunkable content is valid: the
    *  file disappears from the index, returns 0, and no error is raised. */
   upsertFile(path: string, content: string): Promise<number>;
+
+  /** Insert/replace chunks for a **converted source** (PDF/image) whose
+   *  searchable text comes from a separately-stored derived markdown note
+   *  (app data, never in the user's folder). Indexes `derivedMd` UNDER the
+   *  source's own path so folder-scoped search + the daemon's source-file
+   *  hash diff line up; forces markdown chunking and stamps the explicit
+   *  `sourceHash` (= hash of the source file's bytes) so reconcile sees the
+   *  source as unchanged. */
+  upsertConvertedFile(sourceAbs: string, derivedMd: string, sourceHash: string): Promise<number>;
 
   /** Drop all chunks for one file. Safe to call on a never-indexed file. */
   deleteFile(path: string): Promise<void>;
@@ -84,32 +91,32 @@ export interface Indexer {
     files: Array<{ path: string; content: string }>,
   ): Promise<void>;
 
-  /** Hybrid search. `space?` scopes to one space (its kbRoot-relative
-   *  dirname); omitted = whole knowledge base. `pathPrefix?` further narrows
+  /** Hybrid search. `folder?` scopes to one absolute folder root; omitted
+   *  = whole library. `pathPrefix?` further narrows
    *  to chunks whose `source` starts with that prefix — useful when an
    *  agent wants to ask "only inside cs183b/transcripts/". When both
    *  are passed, `pathPrefix` takes precedence (it's more specific).
    *  Returns at most `topK` hits ordered by descending score, with
-   *  `fileName` kbRoot-relative. */
-  search(query: string, topK: number, space?: string, pathPrefix?: string): Promise<SearchHit[]>;
+   *  `fileName` absolute. */
+  search(query: string, topK: number, folder?: string, pathPrefix?: string): Promise<SearchHit[]>;
 
-  /** Walk the knowledge base and compute the content-hash diff against the
-   *  index. `space?` scopes the walk; omitted = whole knowledge base. Paths
-   *  in the returned lists are kbRoot-relative. */
-  syncDiff(space?: string): Promise<SyncDiff>;
+  /** Walk the library and compute the content-hash diff against the
+   *  index. `folder?` scopes the walk; omitted = whole library. Paths
+   *  in the returned lists are absolute. */
+  syncDiff(folder?: string): Promise<SyncDiff>;
 
   /** Lightweight progress check — name-set diff only, no hashing.
-   *  `space?` scopes; omitted = whole knowledge base. */
-  status(space?: string): Promise<IndexStatus>;
+   *  `folder?` scopes; omitted = whole library. */
+  status(folder?: string): Promise<IndexStatus>;
 
-  /** Every file present in the index, keyed by kbRoot-relative path with
-   *  its stored content hash as value. `space?` scopes to one space;
-   *  omitted = whole knowledge base. Used by reconcile and the
-   *  `/api/kb/index-status` recently-indexed slice. */
-  listFiles(space?: string): Promise<Record<string, string>>;
+  /** Every file present in the index, keyed by absolute path with
+   *  its stored content hash as value. `folder?` scopes to one folder;
+   *  omitted = whole library. Used by reconcile and the
+   *  `/api/library/index-status` recently-indexed slice. */
+  listFiles(folder?: string): Promise<Record<string, string>>;
 
   /** Release the Milvus Lite locks so the server can move / wipe the
-   *  underlying DB file. Next op reopens lazily via `bindSpace`. */
+   *  underlying DB file. Next op reopens lazily via `bindFolder`. */
   closeStore(): Promise<void>;
 
   /** Shut down underlying resources. Currently called only on process exit. */
@@ -117,7 +124,7 @@ export interface Indexer {
 }
 
 export interface SyncDiff {
-  /** On disk, not yet in the index. kbRoot-relative paths. */
+  /** On disk, not yet in the index. Absolute paths. */
   added: string[];
   /** In both, but content hash differs — likely an external edit. */
   modified: string[];
@@ -138,15 +145,15 @@ export interface IndexStatus {
   indexed: number;
   /** How many files are still waiting to be indexed. */
   pendingCount: number;
-  /** Full list of kbRoot-relative paths waiting to be indexed. */
+  /** Full list of absolute paths waiting to be indexed. */
   pending: string[];
   /** Files in the index that no longer exist on disk. Usually 0. */
   orphanedCount: number;
-  /** Full list of orphaned kbRoot-relative paths. */
+  /** Full list of orphaned absolute paths. */
   orphaned: string[];
   /** True iff pending = 0 and orphaned = 0. */
   upToDate: boolean;
-  /** False while the indexer is still loading its indexed-file cache. */
+  /** False until the folder has received at least one daemon status response. */
   indexReady?: boolean;
   /** PDFs currently being converted to a readable note + bundle. */
   pendingConversions?: string[];

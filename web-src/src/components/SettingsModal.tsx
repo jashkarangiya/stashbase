@@ -13,14 +13,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { EmbeddingPanel } from './settings/EmbeddingPanel';
 import { McpClientsPanel } from './settings/McpClientsPanel';
-import { StoragePanel } from './settings/StoragePanel';
-import { CapturePanel } from './settings/CapturePanel';
 
-export type SettingsSection = 'storage' | 'embedding' | 'mcp' | 'capture';
+export type SettingsSection = 'embedding' | 'mcp';
 
 const SECTIONS: { id: SettingsSection; label: string; render: () => ReactNode }[] = [
-  { id: 'storage', label: 'Storage', render: () => <StoragePanel /> },
-  { id: 'capture', label: 'Capture', render: () => <CapturePanel /> },
   { id: 'embedding', label: 'Embedding', render: () => <EmbeddingPanel /> },
   { id: 'mcp', label: 'MCP', render: () => <McpClientsPanel /> },
 ];
@@ -34,7 +30,7 @@ interface LockDetail {
 }
 
 /** Fire from anywhere to open the Settings modal. Optional `section`
- *  picks the initial pane (default: storage). */
+ *  picks the initial pane (default: embedding). */
 export function openSettings(section?: SettingsSection): void {
   window.dispatchEvent(
     new CustomEvent<OpenDetail>('stashbase-open-settings', { detail: { section } }),
@@ -45,7 +41,7 @@ export function openSettings(section?: SettingsSection): void {
  *  renders the modal when triggered. */
 export function SettingsPortal() {
   const [open, setOpen] = useState(false);
-  const [section, setSection] = useState<SettingsSection>('storage');
+  const [section, setSection] = useState<SettingsSection>('embedding');
   const [interactionLocked, setInteractionLocked] = useState(false);
 
   useEffect(() => {
@@ -102,9 +98,8 @@ function SettingsModal({
 
   return (
     // Backdrop click deliberately does NOT close — Settings holds
-    // in-progress config (the Storage kbRoot path, an API key being
-    // typed) that a stray click outside shouldn't discard. Close via the
-    // × button or Esc only, matching the Welcome config modals.
+    // in-progress config (for example, an API key being typed) that a
+    // stray click outside shouldn't discard. Close via the × button or Esc.
     <div className="modal-veil">
       <div
         className="modal-card settings-card"

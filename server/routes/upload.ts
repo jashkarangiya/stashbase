@@ -2,7 +2,7 @@
  * Drop-zone / sidebar import route. Accepts multipart `files[]` with a
  * parallel `paths[]` array preserving the dropped folder layout, plus
  * an optional `dir` form field that scopes the import to a subfolder
- * of the active space.
+ * of the active folder.
  *
  * Two non-obvious behaviours worth knowing about:
  *   1. A note `<stem>.{md,html}` and its iframe bundle `<stem>_files/`
@@ -26,14 +26,13 @@ import { getApiKey } from '../app-config.ts';
 import { isCloudPlaceholderName, isIndexExcludedDirName } from '../indexable.ts';
 import { errorMessage, logger } from '../log.ts';
 import {
-  getCurrentSpace,
-  getCurrentSpaceName,
-  requireSpaceExistsByName,
+  getCurrentFolder,
+  memberFolderRoots,
+  resolveFolderRoot,
   runWithWindowId,
-  validateSpaceRef,
+  toPosixAbs,
   WINDOW_ID_HEADER,
-} from '../space.ts';
-import { extractEmbeddedResources } from '../resources.ts';
+} from '../folder.ts';
 import { maybeConvertImage } from '../image.ts';
 import { maybeConvertPdf } from '../pdf.ts';
 import { indexer } from '../state.ts';
@@ -51,6 +50,25 @@ const uploadParser = multer({
   limits: { fileSize: MAX_UPLOAD_FILE_BYTES, files: 500 },
 });
 
+function resolveUploadFolder(explicitFolder: string): string {
+  if (explicitFolder) {
+    const root = resolveFolderRoot(explicitFolder);
+    if (!memberFolderRoots().includes(root)) {
+      const err = new Error('folder is not in your folders');
+      (err as any).code = 'FOLDER_NOT_FOUND';
+      throw err;
+    }
+    return root;
+  }
+  const current = getCurrentFolder();
+  if (!current) {
+    const err = new Error('no folder open');
+    (err as any).code = 'NO_FOLDER';
+    throw err;
+  }
+  return current;
+}
+
 export function mount(app: express.Express): void {
   app.post('/api/upload', (req, res, next) => {
     uploadParser.array('files', 500)(req, res, (err: unknown) => {
@@ -62,9 +80,9 @@ export function mount(app: express.Express): void {
         // Multer consumes the request body stream, and its callbacks run in the
         // connection-time async context — which drops the windowId that
         // `withWindowContext` stashed in AsyncLocalStorage. Without re-binding
-        // it here, every space-scoped lookup inside the handler
-        // (getCurrentSpace, saveBytes → resolveSafe) falls back to
-        // DEFAULT_WINDOW_ID and the upload fails with "no space open" even
+        // it here, every folder-scoped lookup inside the handler
+        // (getCurrentFolder, saveBytes → resolveSafe) falls back to
+        // DEFAULT_WINDOW_ID and the upload fails with "no folder open" even
         // though the client sent the right window header. Re-establish the
         // context from the header before doing any per-window work.
         await runWithWindowId(req.header(WINDOW_ID_HEADER), () => handleUpload(req, res));
@@ -87,11 +105,11 @@ function sendUploadError(res: express.Response, err: unknown): void {
   res.status(400).json({ error: errorMessage(err) });
 }
 
-function resolveInSpace(spaceRoot: string, relPath: string): string {
+function resolveInFolder(folderRoot: string, relPath: string): string {
   validateUploadPath(relPath);
-  const full = path.join(spaceRoot, relPath);
-  const back = path.relative(spaceRoot, full);
-  if (back.startsWith('..') || path.isAbsolute(back)) throw new Error('path escapes space');
+  const full = path.join(folderRoot, relPath);
+  const back = path.relative(folderRoot, full);
+  if (back.startsWith('..') || path.isAbsolute(back)) throw new Error('path escapes folder');
   return full;
 }
 
@@ -100,49 +118,49 @@ function isPathInsideOrSame(parent: string, child: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-function realSpaceRoot(spaceRoot: string): string {
-  return fs.realpathSync.native(spaceRoot);
+function realFolderRoot(folderRoot: string): string {
+  return fs.realpathSync.native(folderRoot);
 }
 
-function assertRealPathInsideSpace(spaceRoot: string, absPath: string, label = 'path'): void {
+function assertRealPathInsideFolder(folderRoot: string, absPath: string, label = 'path'): void {
   const real = fs.realpathSync.native(absPath);
-  if (!isPathInsideOrSame(realSpaceRoot(spaceRoot), real)) {
-    throw new Error(`${label} escapes space through symlink`);
+  if (!isPathInsideOrSame(realFolderRoot(folderRoot), real)) {
+    throw new Error(`${label} escapes folder through symlink`);
   }
 }
 
-function assertCreatablePathInsideSpace(spaceRoot: string, absPath: string, label = 'path'): void {
-  const rootReal = realSpaceRoot(spaceRoot);
+function assertCreatablePathInsideFolder(folderRoot: string, absPath: string, label = 'path'): void {
+  const rootReal = realFolderRoot(folderRoot);
   let probe = path.resolve(path.dirname(absPath));
   while (!fs.existsSync(probe)) {
     const parent = path.dirname(probe);
     if (parent === probe) break;
     probe = parent;
   }
-  const probeRel = path.relative(spaceRoot, probe);
-  if (probeRel.startsWith('..') || path.isAbsolute(probeRel)) throw new Error(`${label} escapes space`);
+  const probeRel = path.relative(folderRoot, probe);
+  if (probeRel.startsWith('..') || path.isAbsolute(probeRel)) throw new Error(`${label} escapes folder`);
   const probeReal = fs.realpathSync.native(probe);
   if (!isPathInsideOrSame(rootReal, probeReal)) {
-    throw new Error(`${label} escapes space through symlink`);
+    throw new Error(`${label} escapes folder through symlink`);
   }
 }
 
-function pathExistsInSpace(spaceRoot: string, relPath: string): boolean {
+function pathExistsInFolder(folderRoot: string, relPath: string): boolean {
   try {
-    const target = resolveInSpace(spaceRoot, relPath);
+    const target = resolveInFolder(folderRoot, relPath);
     if (!fs.existsSync(target)) return false;
-    assertRealPathInsideSpace(spaceRoot, target);
+    assertRealPathInsideFolder(folderRoot, target);
     return true;
   } catch {
     return false;
   }
 }
 
-function saveBytesInSpace(spaceRoot: string, relPath: string, bytes: Buffer): void {
-  const target = resolveInSpace(spaceRoot, relPath);
-  assertCreatablePathInsideSpace(spaceRoot, target);
+function saveBytesInFolder(folderRoot: string, relPath: string, bytes: Buffer): void {
+  const target = resolveInFolder(folderRoot, relPath);
+  assertCreatablePathInsideFolder(folderRoot, target);
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  assertCreatablePathInsideSpace(spaceRoot, target);
+  assertCreatablePathInsideFolder(folderRoot, target);
   const tmp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${Date.now()}.tmp`);
   try {
     fs.writeFileSync(tmp, bytes);
@@ -153,46 +171,32 @@ function saveBytesInSpace(spaceRoot: string, relPath: string, bytes: Buffer): vo
   }
 }
 
-function saveTextInSpace(spaceRoot: string, relPath: string, text: string): void {
-  saveBytesInSpace(spaceRoot, relPath, Buffer.from(text, 'utf8'));
-}
-
-export function __pathExistsInSpaceForTest(spaceRoot: string, relPath: string): boolean {
-  return pathExistsInSpace(spaceRoot, relPath);
-}
-
-export function __saveBytesInSpaceForTest(spaceRoot: string, relPath: string, bytes: Buffer): void {
-  saveBytesInSpace(spaceRoot, relPath, bytes);
-}
-
 async function handleUpload(req: express.Request, res: express.Response): Promise<void> {
   const files = (req.files as Express.Multer.File[]) ?? [];
   if (files.length === 0) { res.status(400).json({ error: 'no files' }); return; }
-  const explicitSpace = typeof req.body?.space === 'string' && req.body.space.trim()
-    ? req.body.space.trim()
+  const explicitFolder = typeof req.body?.folder === 'string' && req.body.folder.trim()
+    ? req.body.folder.trim()
     : '';
-  let spaceName = explicitSpace || getCurrentSpaceName() || '';
-  if (explicitSpace) {
-    const bad = validateSpaceRef(explicitSpace);
-    if (bad) { res.status(400).json({ error: bad }); return; }
-  }
-  if (!spaceName) { res.status(412).json({ error: 'no space open', code: 'NO_SPACE' }); return; }
-
-  let spaceAbs: string;
+  let folderAbs: string;
   try {
-    spaceAbs = explicitSpace ? requireSpaceExistsByName(explicitSpace) : getCurrentSpace()!;
+    folderAbs = resolveUploadFolder(explicitFolder);
   } catch (err) {
     const code = (err as { code?: unknown })?.code;
-    if (code === 'SPACE_NOT_FOUND') {
-      res.status(404).json({ error: 'space not found', code: 'SPACE_NOT_FOUND' });
+    if (code === 'FOLDER_NOT_FOUND') {
+      res.status(404).json({ error: 'folder not found', code: 'FOLDER_NOT_FOUND' });
+      return;
+    }
+    if (code === 'NO_FOLDER') {
+      res.status(412).json({ error: 'no folder open', code: 'NO_FOLDER' });
       return;
     }
     res.status(400).json({ error: errorMessage(err) });
     return;
   }
-  // Optional `dir` form field: space-relative path of the folder to
+  const folderRoot = toPosixAbs(folderAbs);
+  // Optional `dir` form field: folder-relative path of the folder to
   // drop the files into. Sanitised the same way we treat any other
-  // write path so a stray `..` or absolute path can't escape the space.
+  // write path so a stray `..` or absolute path can't escape the folder.
   let dir = typeof req.body?.dir === 'string' ? req.body.dir.trim() : '';
   if (dir) dir = sanitizeFilename(dir).replace(/\/+$/, '');
   const prefix = dir ? dir + '/' : '';
@@ -205,10 +209,10 @@ async function handleUpload(req: express.Request, res: express.Response): Promis
     ? rawPaths.map(String)
     : typeof rawPaths === 'string' ? [rawPaths] : [];
 
-  const finalNames = computeFinalNames(files, paths, prefix, (rel) => pathExistsInSpace(spaceAbs, rel));
+  const finalNames = computeFinalNames(files, paths, prefix, (rel) => pathExistsInFolder(folderAbs, rel));
 
   const out: { file: string; error?: string }[] = [];
-  const toIndex: { name: string; kbRel: string; text: string }[] = [];
+  const toIndex: { name: string; sourcePath: string; text: string }[] = [];
   const toConvertPdf: { abs: string; rel: string }[] = [];
   const toOcrImage: { abs: string; rel: string }[] = [];
   for (let i = 0; i < files.length; i++) {
@@ -221,36 +225,26 @@ async function handleUpload(req: express.Request, res: express.Response): Promis
       // shipped alongside an arxiv HTML) are needed by the iframe even
       // though they're not indexable. Only indexable formats go to
       // the indexer.
-      saveBytesInSpace(spaceAbs, name, f.buffer);
+      saveBytesInFolder(folderAbs, name, f.buffer);
       out.push({ file: name });
       if (detectFormat(name)) {
-        let text = f.buffer.toString('utf8');
-        // Pipeline §4.2 steps 2-3: pull inline `data:` images out into
-        // the note's `<stem>_files/` bundle and rewrite the refs, so a
-        // standalone HTML/Markdown drop doesn't carry megabytes of
-        // base64 (and the images become real, previewable assets).
-        try {
-          const { content, assets } = extractEmbeddedResources(name, text);
-          if (assets.length > 0) {
-            for (const a of assets) saveBytesInSpace(spaceAbs, a.path, a.bytes);
-            text = content;
-            saveTextInSpace(spaceAbs, name, text);
-            log.info(`upload: extracted ${assets.length} embedded resource(s) from ${name}`);
-          }
-        } catch (err: unknown) {
-          log.warn(`upload: resource extraction failed for ${name}: ${errorMessage(err)}`);
-        }
-        toIndex.push({ name, kbRel: `${spaceName}/${name}`, text });
-      } else if (spaceAbs && /\.pdf$/i.test(name)) {
+        // Structured notes (Markdown / HTML) are saved and indexed
+        // **exactly as dropped** — we never rewrite the user's file. Inline
+        // `data:` resources stay inline (the preview renders them directly;
+        // HTML's `analyzeHtml` flattens them out of the *indexed* text in
+        // memory). This honours the "don't modify the opened folder" rule
+        // now that any folder on disk can be opened in place.
+        const text = f.buffer.toString('utf8');
+        toIndex.push({ name, sourcePath: `${folderRoot}/${name}`, text });
+      } else if (folderAbs && /\.pdf$/i.test(name)) {
         // PDFs run through the PyMuPDF pipeline so the
-        // user gets a readable note + image bundle they can preview
-        // and that the converter pushes into the index on completion.
-        toConvertPdf.push({ abs: path.join(spaceAbs, name), rel: name });
-      } else if (spaceAbs && isImageFile(name)) {
+        // app gets AppData-derived Markdown + extracted assets, then pushes
+        // the derived text into the index when semantic indexing is available.
+        toConvertPdf.push({ abs: path.join(folderAbs, name), rel: name });
+      } else if (folderAbs && isImageFile(name)) {
         // Images run through RapidOCR so any text in a screenshot /
-        // photo becomes a hidden `.<sourceBasename>.md` note the converter indexes
-        // up and indexes — mirrors the PDF path, minus the bundle.
-        toOcrImage.push({ abs: path.join(spaceAbs, name), rel: name });
+        // photo becomes AppData-derived OCR Markdown for search.
+        toOcrImage.push({ abs: path.join(folderAbs, name), rel: name });
       }
     } catch (err: unknown) {
       log.warn(`upload: save failed for ${name}: ${errorMessage(err)}`);
@@ -262,9 +256,9 @@ async function handleUpload(req: express.Request, res: express.Response): Promis
   // Background indexing — don't await; the response has already been sent.
   if (getApiKey()) {
     (async () => {
-      for (const { name, kbRel, text } of toIndex) {
+      for (const { name, sourcePath, text } of toIndex) {
         try {
-          await indexer.upsertFile(kbRel, text);
+          await indexer.upsertFile(sourcePath, text);
         } catch (err: unknown) {
           log.warn(`upload: index failed for ${name}: ${errorMessage(err)}`);
         }

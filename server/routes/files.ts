@@ -2,8 +2,8 @@
  * File-level routes: list, CRUD, asset streaming, rename (with link
  * cascade + rollback), reveal-in-OS, and per-folder manual ordering.
  *
- * `/asset/*` lives here too because it's the same address space as
- * `/api/files/*` (both serve from the active space root) and they
+ * `/asset/*` lives here too because it's the same address folder as
+ * `/api/files/*` (both serve from the active folder root) and they
  * share the MIME table + HTML scroll-bootstrap behaviour.
  */
 import express from 'express';
@@ -17,7 +17,7 @@ import {
   deleteFile,
   detectFormat,
   fileVersion,
-  getSpaceName,
+  getCurrentFolderBasename,
   listFiles,
   listFolders,
   pathExists,
@@ -31,7 +31,7 @@ import {
 import { detectViewerFormat, isDerivedNoteName, isImageFile, isNoteName } from '../format.ts';
 import { readFileOrder, remapFileOrderPath, removeFileOrderPath, setFolderOrder } from '../file-order.ts';
 import { applyRenamePlan, planRenameLinks, type RenameEntry } from '../links.ts';
-import { getCurrentSpace, getCurrentSpaceName, toKbRel } from '../space.ts';
+import { getCurrentFolder, getCurrentFolderLabel, toSourcePath } from '../folder.ts';
 import { getApiKey } from '../app-config.ts';
 import { errorMessage, logger } from '../log.ts';
 import { indexer } from '../state.ts';
@@ -42,6 +42,7 @@ import { maybeConvertPdf } from '../pdf.ts';
 import { cancelConversion } from '../conversion.ts';
 import { noteTreeChanged } from '../watcher.ts';
 import { clearRecord, isInFlight } from '../conversion-status.ts';
+import { deleteDerivedForSource } from '../derived-store.ts';
 
 const log = logger('routes/files');
 
@@ -57,7 +58,7 @@ export interface InFlightRouteError {
 
 export function inFlightFileOperationError(name: string, action: InFlightFileAction): InFlightRouteError | null {
   if (action === 'delete') return null;
-  if (!isInFlight(toKbRel(name))) return null;
+  if (!isInFlight(toSourcePath(name))) return null;
   const verb = action === 'rename' ? 'Rename' : 'Delete';
   return {
     status: 409,
@@ -111,21 +112,21 @@ async function upsertSavedFile(name: string, content: string): Promise<string | 
     return undefined;
   }
   if (!content.trim()) {
-    await indexer.deleteFile(toKbRel(name)).catch((err) => {
+    await indexer.deleteFile(toSourcePath(name)).catch((err) => {
       log.warn(`save: failed to remove empty file from index ${name}: ${errorMessage(err)}`);
     });
     return undefined;
   }
   const tooLarge = contentSizeError(content);
   if (tooLarge) {
-    await indexer.deleteFile(toKbRel(name)).catch((err) => {
+    await indexer.deleteFile(toSourcePath(name)).catch((err) => {
       log.warn(`save: failed to remove oversized file from index ${name}: ${errorMessage(err)}`);
     });
     log.warn(`save: skipped index update for ${name}: ${tooLarge}`);
     return `${tooLarge}. Semantic search will skip it until you split or reduce it and run sync.`;
   }
   try {
-    await indexer.upsertFile(toKbRel(name), content);
+    await indexer.upsertFile(toSourcePath(name), content);
     return undefined;
   } catch (err: unknown) {
     const msg = errorMessage(err);
@@ -203,7 +204,7 @@ export function mount(app: express.Express): void {
   app.get('/api/files', (_req, res) => {
     try {
       res.json({
-        space: getCurrentSpaceName() ?? getSpaceName(),
+        folder: getCurrentFolderLabel() ?? getCurrentFolderBasename(),
         files: listFiles(),
         folders: listFolders(),
       });
@@ -215,7 +216,7 @@ export function mount(app: express.Express): void {
   // ----- create -----
   // Body: { name?, content?, dir? }.
   //  - `name` omitted → auto-pick first free `untitled-N.md` (race-safe via O_EXCL).
-  //  - `dir`  optional → place the file inside that space-relative folder
+  //  - `dir`  optional → place the file inside that folder-relative folder
   //    (must already exist; create with POST /api/folders first).
   // New notes are always Markdown — it's the only editable format (HTML
   // files are viewable but no longer authored here).
@@ -346,7 +347,6 @@ export function mount(app: express.Express): void {
     if (viewerOnly && !pathExists(oldName)) return res.status(404).json({ error: 'not found' });
     if (pathExists(newName)) return res.status(409).json({ error: 'target exists' });
     const oldDerivedArtifacts = derivedArtifactsForSource(oldName);
-    const newDerivedArtifacts = derivedArtifactsForSource(newName);
 
     // Cascade is opt-out per call — the client confirms via a dialog
     // backed by `/api/rename-preview`. Default to true so callers
@@ -374,38 +374,37 @@ export function mount(app: express.Express): void {
             if (u.name === newName) continue;
             const body = readText(u.name);
             if (body == null) continue;
-            await indexer.upsertFile(toKbRel(u.name), body);
+            await indexer.upsertFile(toSourcePath(u.name), body);
           }
         };
         if (viewerOnly) {
-          const sourceAbs = resolveExisting(newName);
-          const currentDerivedNote = newDerivedArtifacts.notes[0];
-          const derivedBody = currentDerivedNote ? readText(currentDerivedNote) : null;
-          if (!derivedBody && sourceAbs) {
-            try {
-              if (oldFormat === 'pdf') maybeConvertPdf(sourceAbs);
-              else if (isImageFile(newName)) maybeConvertImage(sourceAbs);
-            } catch (err: unknown) {
-              log.warn(`rename: conversion kickoff failed for ${newName}: ${errorMessage(err)}`);
-            }
+          const oldSourceAbs = toSourcePath(oldName);
+          const newSourceAbs = toSourcePath(newName);
+          cancelConversion(oldSourceAbs);
+          clearRecord(oldSourceAbs);
+          clearRecord(newSourceAbs);
+          try { deleteDerivedForSource(oldSourceAbs); } catch (err: unknown) {
+            log.warn(`rename: old derived cleanup failed for ${oldName}: ${errorMessage(err)}`);
           }
-          if (!getApiKey()) {
-            log.info(`rename: skipped index update for ${oldName} -> ${newName} because no OpenAI key is configured`);
-            return 'Semantic index was not updated because no OpenAI API key is configured.';
+          try { deleteDerivedForSource(newSourceAbs); } catch (err: unknown) {
+            log.warn(`rename: stale target derived cleanup failed for ${newName}: ${errorMessage(err)}`);
           }
-          await reindexUpdatedLinks();
-          if (derivedBody && currentDerivedNote) {
-            await indexer.upsertFile(toKbRel(currentDerivedNote), derivedBody);
-          }
+          await indexer.deleteFile(oldSourceAbs).catch((err) => {
+            log.warn(`rename: failed to remove old source index row ${oldName}: ${errorMessage(err)}`);
+          });
           for (const rel of oldDerivedArtifacts.notes) {
-            if (rel === currentDerivedNote) continue;
-            await indexer.deleteFile(toKbRel(rel)).catch((err) => {
-              log.warn(`rename: failed to remove old derived index row ${rel}: ${errorMessage(err)}`);
+            await indexer.deleteFile(toSourcePath(rel)).catch((err) => {
+              log.warn(`rename: failed to remove legacy derived index row ${rel}: ${errorMessage(err)}`);
             });
           }
-          return derivedBody
-            ? undefined
-            : 'Searchable text is being regenerated in the background.';
+          if (getApiKey()) await reindexUpdatedLinks();
+          try {
+            if (oldFormat === 'pdf') maybeConvertPdf(newSourceAbs);
+            else if (isImageFile(newName)) maybeConvertImage(newSourceAbs);
+          } catch (err: unknown) {
+            log.warn(`rename: conversion kickoff failed for ${newName}: ${errorMessage(err)}`);
+          }
+          return 'Searchable text is being regenerated in the background.';
         }
         if (!getApiKey()) {
           log.info(`rename: skipped index update for ${oldName} -> ${newName} because no OpenAI key is configured`);
@@ -413,14 +412,14 @@ export function mount(app: express.Express): void {
         }
         const tooLarge = contentSizeError(content ?? '');
         if (tooLarge) {
-          await indexer.deleteFile(toKbRel(oldName)).catch((err) => {
+          await indexer.deleteFile(toSourcePath(oldName)).catch((err) => {
             log.warn(`rename: failed to remove old index row for oversized file ${oldName}: ${errorMessage(err)}`);
           });
           log.warn(`rename: skipped index update for ${newName}: ${tooLarge}`);
           return `${tooLarge}. The file moved, but semantic search will skip it until you split or reduce it and run sync.`;
         }
         if (applied?.updated.length) await reindexUpdatedLinks();
-        await indexer.renameFile(toKbRel(oldName), toKbRel(newName), content ?? '');
+        await indexer.renameFile(toSourcePath(oldName), toSourcePath(newName), content ?? '');
         return undefined;
       } catch (err) {
         if (opts.rollbackLinksOnFailure) applied?.rollback();
@@ -490,15 +489,17 @@ export function mount(app: express.Express): void {
       // sync sweeps orphans.
       if (removed) {
         noteTreeChanged();
-        cancelConversion(toKbRel(name));
+        cancelConversion(toSourcePath(name));
+        try { deleteDerivedForSource(toSourcePath(name)); }
+        catch (err: unknown) { log.warn(`delete: derived cleanup failed for ${name}: ${errorMessage(err)}`); }
         try { removeFileOrderPath(name, 'file'); }
         catch (err: unknown) { log.warn(`file-order cleanup failed for ${name}: ${errorMessage(err)}`); }
       }
-      try { clearRecord(toKbRel(name)); }
+      try { clearRecord(toSourcePath(name)); }
       catch (err: unknown) { log.warn(`delete: conversion status cleanup failed for ${name}: ${errorMessage(err)}`); }
       res.json({ alreadyGone: !removed });
       for (const rel of [name, ...derivedArtifacts.notes]) {
-        indexer.deleteFile(toKbRel(rel)).catch((err) => {
+        indexer.deleteFile(toSourcePath(rel)).catch((err) => {
           log.warn(`delete: index cleanup failed for ${rel}: ${errorMessage(err)}`);
         });
       }
@@ -538,7 +539,7 @@ export function mount(app: express.Express): void {
   });
 
   // ----- reveal in OS -----
-  // The renderer sends the space-relative name and we resolve + shell
+  // The renderer sends the folder-relative name and we resolve + shell
   // out here. Fire-and-forget spawn; we just confirm the file exists
   // before launching.
   app.post('/api/reveal/*', (req, res) => {
@@ -555,11 +556,11 @@ export function mount(app: express.Express): void {
 
   // ----- per-folder manual ordering -----
   // `GET` returns the whole map so the renderer can hand it to
-  // `buildTree` once on space load. `PUT` updates one folder atomically
+  // `buildTree` once on folder load. `PUT` updates one folder atomically
   // (renderer fires this after each successful drag-to-reorder).
   app.get('/api/file-order', (_req, res) => {
-    if (!getCurrentSpace()) {
-      return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
+    if (!getCurrentFolder()) {
+      return res.status(412).json({ error: 'no folder open', code: 'NO_FOLDER' });
     }
     try {
       res.json(readFileOrder());
@@ -569,8 +570,8 @@ export function mount(app: express.Express): void {
   });
 
   app.put('/api/file-order', (req, res) => {
-    if (!getCurrentSpace()) {
-      return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
+    if (!getCurrentFolder()) {
+      return res.status(412).json({ error: 'no folder open', code: 'NO_FOLDER' });
     }
     const parentPath = typeof req.body?.parentPath === 'string' ? req.body.parentPath : null;
     const names = req.body?.names;
@@ -589,7 +590,7 @@ export function mount(app: express.Express): void {
   });
 
   // ----- asset streaming -----
-  // Serves files in the space directly (HTML, images, CSS, fonts, …).
+  // Serves files in the folder directly (HTML, images, CSS, fonts, …).
   // Used as the `src` of the HTML preview iframe so relative URLs like
   // `<img src="X_files/figure.png">` resolve to other files in the
   // same `_files/` bundle (arxiv "Save Page As Complete" layout). HTML

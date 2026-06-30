@@ -1,39 +1,39 @@
 /**
- * Space sync: reconcile the index with whatever note files are
- * currently on disk in the space.
+ * Folder sync: reconcile the index with whatever note files are
+ * currently on disk in the folder.
  *
  * ONE flavour (2026-06 simplification): `syncIndex` — full content-hash
- * diff via the daemon's `scan_diff` op. Hashing a personal-KB-sized tree
+ * diff via the daemon's `scan_diff` op. Hashing a personal-library-sized tree
  * is milliseconds; embedding only happens for changed hashes, so a
  * cheaper name-only tier bought nothing but a second semantics. Called
- * on space open/switch, window focus, agent turn end, the manual
- * `POST /api/sync` button, and MCP `update_index`.
+ * on folder open/switch, window focus, agent turn end, the manual
+ * `POST /api/sync` button, and MCP `reindex`.
  *
- * Scoped to ONE space at a time and fully context-free: the target
- * space arrives as an explicit argument and every path (including the
- * PDF/image conversion discovery below) is resolved against kbRoot —
- * never against the ambient window context. Sync runs in contexts that
- * have no space open at all (headless server, `POST /api/sync?space=X`
- * from a window that has a different space open).
+ * Scoped to ONE folder at a time and fully context-free: the target
+ * folder arrives as an explicit **absolute root** argument and every path
+ * (including the PDF/image conversion discovery below) is resolved against
+ * that root — never against the ambient window context. Sync runs in
+ * contexts that have no folder open at all (headless server,
+ * `POST /api/sync?folder=X` from a window that has a different folder open).
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { discoverNewImages } from './image.ts';
-import { discoverNewPdfs } from './pdf.ts';
-import { getKbRoot } from './space.ts';
+import { discoverNewImages, indexFreshImage } from './image.ts';
+import { discoverNewPdfs, indexFreshPdf } from './pdf.ts';
 import { getApiKey } from './app-config.ts';
 import type { Indexer } from './indexer.ts';
 import { logger, errorMessage } from './log.ts';
 import { hasNoExtractableText, indexableFileSizeError, shouldIndexFilePath } from './indexable.ts';
+import { isConvertibleSource } from './format.ts';
 
 const log = logger('sync');
 
-/** Strip the explicit space prefix from a kbRoot-relative path, or null
- *  when the path lives outside that space (a daemon cross-space
- *  surprise). Deliberately NOT `fromKbRel()` — that resolves the space
+/** Strip the absolute folder root prefix from an absolute path, or null
+ *  when the path lives outside that folder (a daemon cross-folder
+ *  surprise). Deliberately NOT `fromSourcePath()` — that resolves the folder
  *  from the ambient window context, which the sync caller may not have. */
-function spaceRelOf(space: string, kbRel: string): string | null {
-  return kbRel.startsWith(`${space}/`) ? kbRel.slice(space.length + 1) : null;
+function folderRelOf(root: string, abs: string): string | null {
+  return abs.startsWith(`${root}/`) ? abs.slice(root.length + 1) : null;
 }
 
 /** Runtime assertion for invariant I2 "sync 不说谎" (data-layer §8.6):
@@ -47,40 +47,36 @@ function spaceRelOf(space: string, kbRel: string): string | null {
  *  sync itself already succeeded from the caller's perspective). */
 async function assertSyncConverged(
   indexer: Indexer,
-  space: string,
+  root: string,
   claimed: string[],
 ): Promise<void> {
   if (claimed.length === 0) return;
   let pending: Set<string>;
   try {
-    pending = new Set((await indexer.status(space)).pending);
+    pending = new Set((await indexer.status(root)).pending);
   } catch {
     return;
   }
-  for (const kbRel of claimed) {
-    if (!pending.has(kbRel)) continue;
+  for (const abs of claimed) {
+    if (!pending.has(abs)) continue;
     // Files that can never produce chunks (over-size, no extractable
     // text) are legitimately skipped by upsert yet keep showing in the
     // daemon's raw pending — not a lie, not a black hole.
-    const abs = path.join(getKbRoot(), kbRel);
     if (indexableFileSizeError(abs) !== null || hasNoExtractableText(abs)) continue;
     log.error(
-      `sync claimed "${kbRel}" indexed but the daemon still reports it pending — ` +
+      `sync claimed "${abs}" indexed but the daemon still reports it pending — ` +
         'write-black-hole fingerprint (data-layer §8.6 I2). Check for a second ' +
         'stashbase daemon fighting over the Milvus lock (ps aux | grep stashbase-daemon).',
     );
   }
 }
 
-/** Read a file by its kbRoot-relative path, independent of any window
- *  context. Null on traversal escape or read failure — same contract as
- *  `files.ts:readText`, minus the current-space resolution. */
-function readTextAtKbRel(kbRel: string): string | null {
-  const root = getKbRoot();
-  const full = path.join(root, kbRel);
-  const back = path.relative(root, full);
-  if (back.startsWith('..') || path.isAbsolute(back)) return null;
-  try { return fs.readFileSync(full, 'utf8'); } catch { return null; }
+/** Read a file by its absolute path, validated to live under `root`.
+ *  Null on escape or read failure — same contract as `files.ts:readText`,
+ *  minus the current-folder resolution. */
+function readTextAt(root: string, abs: string): string | null {
+  if (abs !== root && !abs.startsWith(`${root}/`)) return null;
+  try { return fs.readFileSync(abs, 'utf8'); } catch { return null; }
 }
 
 export interface SyncResult {
@@ -89,13 +85,13 @@ export interface SyncResult {
   removed: string[];
   /** Files the daemon's scan_diff matched by content hash to a
    *  previously-indexed (now-deleted) path. Each entry is the NEW
-   *  space-relative path. Routed through `indexer.renameFile`, which the
+   *  folder-relative path. Routed through `indexer.renameFile`, which the
    *  daemon fast-paths to reuse cached embeddings — no embedding tokens
    *  spent for these. */
   renamed: string[];
   failed: { name: string; error: string }[];
   /** True when the caller deliberately abandoned the sync because the
-   *  target space/window is no longer current. Any arrays are partial work
+   *  target folder/window is no longer current. Any arrays are partial work
    *  completed before cancellation was observed. */
   cancelled?: boolean;
 }
@@ -103,7 +99,7 @@ export interface SyncResult {
 export interface SyncOptions {
   /** Cooperative cancellation hook. The Python daemon cannot abort an
    *  in-flight upsert, but checking between files stops stale imports from
-   *  continuing through the rest of a large folder after a space switch. */
+   *  continuing through the rest of a large folder after a folder switch. */
   shouldContinue?: () => boolean;
 }
 
@@ -115,21 +111,21 @@ function shouldStop(opts: SyncOptions | undefined): boolean {
   return opts?.shouldContinue ? !opts.shouldContinue() : false;
 }
 
-function toSpaceRelList(space: string, paths: string[]): string[] {
-  return paths.map((p) => spaceRelOf(space, p) ?? p);
+function toFolderRelList(root: string, paths: string[]): string[] {
+  return paths.map((p) => folderRelOf(root, p) ?? p);
 }
 
-function toSpaceRelFailures(
-  space: string,
+function toFolderRelFailures(
+  root: string,
   failed: { name: string; error: string }[],
 ): { name: string; error: string }[] {
-  return failed.map((f) => ({ ...f, name: spaceRelOf(space, f.name) ?? f.name }));
+  return failed.map((f) => ({ ...f, name: folderRelOf(root, f.name) ?? f.name }));
 }
 
-function syncIndexCandidates(space: string, paths: string[]): string[] {
-  return paths.filter((kbRel) => {
-    const spaceRel = spaceRelOf(space, kbRel);
-    return spaceRel != null && shouldIndexFilePath(spaceRel);
+function syncIndexCandidates(root: string, paths: string[]): string[] {
+  return paths.filter((abs) => {
+    const folderRel = folderRelOf(root, abs);
+    return folderRel != null && shouldIndexFilePath(folderRel);
   });
 }
 
@@ -145,24 +141,11 @@ async function deleteStaleRenameSource(
   }
 }
 
-/** Full content-hash diff. `space` is the kbRoot-relative space name
- *  (e.g. `cs183b`) — any known space, not necessarily one open in a
- *  window. Returns space-relative paths so the manual sync UI can show
+/** Full content-hash diff. `root` is the **absolute folder root**
+ *  (e.g. `/Users/me/notes`) — any folder, not necessarily one open in a
+ *  window. Returns folder-relative paths so the manual sync UI can show
  *  them straight. */
-export async function syncIndex(indexer: Indexer, space: string, opts: SyncOptions = {}): Promise<SyncResult> {
-  // No OpenAI key → semantic indexing is disabled by design (§5.3): the
-  // daemon has no embedder/store, so every upsert would throw "no bound
-  // space … set an OpenAI API key" and a whole-folder import would flood
-  // the log with one failure per file. There's nothing in the index to
-  // maintain without a store, so skip the entire reconcile (including
-  // PDF/image conversion, whose derived-note upsert would fail the same
-  // way). Keyword search (ripgrep, no index) is unaffected, and the UI
-  // prompts the user to add a key on space open. Re-running sync after a
-  // key is set picks everything up.
-  if (!getApiKey()) {
-    log.info(`no OpenAI key — skipping semantic index for "${space}" (keyword search unaffected)`);
-    return emptyResult();
-  }
+export async function syncIndex(indexer: Indexer, root: string, opts: SyncOptions = {}): Promise<SyncResult> {
   if (shouldStop(opts)) return emptyResult(true);
   // Surface untracked PDFs / images before running the index diff. We
   // don't await individual conversions — each converter indexes its
@@ -170,14 +153,24 @@ export async function syncIndex(indexer: Indexer, space: string, opts: SyncOptio
   // so the user sees pendingConversions populate. Discovery is decided
   // from disk + memory truth alone (note exists / failure recorded /
   // running now), so it is safe and idempotent on every sync.
-  const spaceAbs = path.join(getKbRoot(), space);
-  discoverNewPdfs(spaceAbs);
-  discoverNewImages(spaceAbs);
+  discoverNewPdfs(root);
+  discoverNewImages(root);
+
+  // No OpenAI key → semantic indexing is disabled by design (§5.3): the
+  // daemon has no embedder/store, so every upsert would throw "no bound
+  // root … set an OpenAI API key" and a whole-folder import would flood
+  // the log with one failure per file. Conversion discovery above still
+  // runs so PDFs/images can produce AppData derived text for keyword search
+  // and future reindex.
+  if (!getApiKey()) {
+    log.info(`no OpenAI key — skipping semantic index for "${root}" (conversion + keyword search unaffected)`);
+    return emptyResult();
+  }
 
   if (shouldStop(opts)) return emptyResult(true);
-  const diff = await indexer.syncDiff(space);
+  const diff = await indexer.syncDiff(root);
   const failed: { name: string; error: string }[] = [];
-  const excludedRemoved = await removeExcludedIndexedFiles(indexer, space, failed);
+  const excludedRemoved = await removeExcludedIndexedFiles(indexer, root, failed);
 
   if (
     diff.added.length === 0 && diff.modified.length === 0 &&
@@ -200,23 +193,23 @@ export async function syncIndex(indexer: Indexer, space: string, opts: SyncOptio
           added: [],
           modified: [],
           removed: [],
-          renamed: toSpaceRelList(space, renamedDone),
-          failed: toSpaceRelFailures(space, failed),
+          renamed: toFolderRelList(root, renamedDone),
+          failed: toFolderRelFailures(root, failed),
           cancelled: true,
         };
       }
-      const spaceRel = spaceRelOf(space, r.new);
-      if (spaceRel == null) {
-        failed.push({ name: r.new, error: `path not under synced space "${space}"` });
+      const folderRel = folderRelOf(root, r.new);
+      if (folderRel == null) {
+        failed.push({ name: r.new, error: `path not under synced folder ""` });
         continue;
       }
-      const tooLarge = indexableFileSizeError(path.join(getKbRoot(), r.new));
+      const tooLarge = indexableFileSizeError(r.new);
       if (tooLarge) {
         failed.push({ name: r.new, error: tooLarge });
         await deleteStaleRenameSource(indexer, r.old, failed);
         continue;
       }
-      const content = readTextAtKbRel(r.new);
+      const content = readTextAt(root, r.new);
       if (content == null) {
         failed.push({ name: r.new, error: 'read returned null on rename target' });
         await deleteStaleRenameSource(indexer, r.old, failed);
@@ -235,27 +228,50 @@ export async function syncIndex(indexer: Indexer, space: string, opts: SyncOptio
   const removedDone: string[] = [...excludedRemoved];
   if (diff.deleted.length) {
     log.info(`removing ${diff.deleted.length} stale file(s) from index`);
-    for (const kbRel of diff.deleted) {
+    for (const sourcePath of diff.deleted) {
       if (shouldStop(opts)) {
         return {
           added: [],
           modified: [],
-          removed: toSpaceRelList(space, removedDone),
-          renamed: toSpaceRelList(space, renamedDone),
-          failed: toSpaceRelFailures(space, failed),
+          removed: toFolderRelList(root, removedDone),
+          renamed: toFolderRelList(root, renamedDone),
+          failed: toFolderRelFailures(root, failed),
           cancelled: true,
         };
       }
       try {
-        await indexer.deleteFile(kbRel);
-        removedDone.push(kbRel);
+        await indexer.deleteFile(sourcePath);
+        removedDone.push(sourcePath);
       }
-      catch (err: any) { failed.push({ name: kbRel, error: errorMessage(err) }); }
+      catch (err: any) { failed.push({ name: sourcePath, error: errorMessage(err) }); }
     }
   }
 
-  const addedCandidates = syncIndexCandidates(space, diff.added);
-  const modifiedCandidates = syncIndexCandidates(space, diff.modified);
+  const convertedAddedDone = await indexFreshConvertedSources(indexer, root, diff.added, failed, opts);
+  if (convertedAddedDone.cancelled) {
+    return {
+      added: toFolderRelList(root, convertedAddedDone.done),
+      modified: [],
+      removed: toFolderRelList(root, removedDone),
+      renamed: toFolderRelList(root, renamedDone),
+      failed: toFolderRelFailures(root, failed),
+      cancelled: true,
+    };
+  }
+  const convertedModifiedDone = await indexFreshConvertedSources(indexer, root, diff.modified, failed, opts);
+  if (convertedModifiedDone.cancelled) {
+    return {
+      added: toFolderRelList(root, convertedAddedDone.done),
+      modified: toFolderRelList(root, convertedModifiedDone.done),
+      removed: toFolderRelList(root, removedDone),
+      renamed: toFolderRelList(root, renamedDone),
+      failed: toFolderRelFailures(root, failed),
+      cancelled: true,
+    };
+  }
+
+  const addedCandidates = syncIndexCandidates(root, diff.added);
+  const modifiedCandidates = syncIndexCandidates(root, diff.modified);
   const toIndex = [...addedCandidates, ...modifiedCandidates];
   if (toIndex.length) {
     log.info(
@@ -263,35 +279,35 @@ export async function syncIndex(indexer: Indexer, space: string, opts: SyncOptio
         `(${addedCandidates.length} new, ${modifiedCandidates.length} drift-detected)`,
     );
   }
-  const addedDone: string[] = [];
-  const modifiedDone: string[] = [];
-  for (const kbRel of addedCandidates) {
+  const addedDone: string[] = [...convertedAddedDone.done];
+  const modifiedDone: string[] = [...convertedModifiedDone.done];
+  for (const sourcePath of addedCandidates) {
     if (shouldStop(opts)) {
       return {
-        added: toSpaceRelList(space, addedDone),
+        added: toFolderRelList(root, addedDone),
         modified: [],
-        removed: toSpaceRelList(space, removedDone),
-        renamed: toSpaceRelList(space, renamedDone),
-        failed: toSpaceRelFailures(space, failed),
+        removed: toFolderRelList(root, removedDone),
+        renamed: toFolderRelList(root, renamedDone),
+        failed: toFolderRelFailures(root, failed),
         cancelled: true,
       };
     }
-    const chunks = await indexOne(indexer, space, kbRel, failed);
-    if (chunks > 0) addedDone.push(kbRel);
+    const chunks = await indexOne(indexer, root, sourcePath, failed);
+    if (chunks > 0) addedDone.push(sourcePath);
   }
-  for (const kbRel of modifiedCandidates) {
+  for (const sourcePath of modifiedCandidates) {
     if (shouldStop(opts)) {
       return {
-        added: toSpaceRelList(space, addedDone),
-        modified: toSpaceRelList(space, modifiedDone),
-        removed: toSpaceRelList(space, removedDone),
-        renamed: toSpaceRelList(space, renamedDone),
-        failed: toSpaceRelFailures(space, failed),
+        added: toFolderRelList(root, addedDone),
+        modified: toFolderRelList(root, modifiedDone),
+        removed: toFolderRelList(root, removedDone),
+        renamed: toFolderRelList(root, renamedDone),
+        failed: toFolderRelFailures(root, failed),
         cancelled: true,
       };
     }
-    const chunks = await indexOne(indexer, space, kbRel, failed);
-    if (chunks > 0) modifiedDone.push(kbRel);
+    const chunks = await indexOne(indexer, root, sourcePath, failed);
+    if (chunks > 0) modifiedDone.push(sourcePath);
   }
 
   log.info(
@@ -300,79 +316,108 @@ export async function syncIndex(indexer: Indexer, space: string, opts: SyncOptio
       `renamed=${renamedDone.length}/${diff.renamed.length} ` +
       `removed=${removedDone.length}/${diff.deleted.length + excludedRemoved.length} failed=${failed.length}`,
   );
-  await assertSyncConverged(indexer, space, [...addedDone, ...modifiedDone, ...renamedDone]);
+  await assertSyncConverged(indexer, root, [...addedDone, ...modifiedDone, ...renamedDone]);
   return {
-    added: toSpaceRelList(space, addedDone),
-    modified: toSpaceRelList(space, modifiedDone),
-    removed: toSpaceRelList(space, removedDone),
-    renamed: toSpaceRelList(space, renamedDone),
-    failed: toSpaceRelFailures(space, failed),
+    added: toFolderRelList(root, addedDone),
+    modified: toFolderRelList(root, modifiedDone),
+    removed: toFolderRelList(root, removedDone),
+    renamed: toFolderRelList(root, renamedDone),
+    failed: toFolderRelFailures(root, failed),
   };
 }
 
-/** Read the file at `kbRel` and upsert it under its kbRoot-relative
- *  path. Returns the stored chunk count on success, 0 when skipped or
+async function indexFreshConvertedSources(
+  _indexer: Indexer,
+  root: string,
+  paths: string[],
+  failed: { name: string; error: string }[],
+  opts: SyncOptions,
+): Promise<{ done: string[]; cancelled: boolean }> {
+  const done: string[] = [];
+  for (const sourcePath of paths) {
+    if (shouldStop(opts)) return { done, cancelled: true };
+    const folderRel = folderRelOf(root, sourcePath);
+    if (folderRel == null || !isConvertibleSource(folderRel)) continue;
+    try {
+      const indexed = /\.pdf$/i.test(folderRel)
+        ? await indexFreshPdf(sourcePath)
+        : await indexFreshImage(sourcePath);
+      if (indexed) done.push(sourcePath);
+    } catch (err: unknown) {
+      failed.push({ name: sourcePath, error: errorMessage(err) });
+    }
+  }
+  return { done, cancelled: false };
+}
+
+/** Read the file at `sourcePath` (currently an absolute source path) and upsert
+ *  it under that same path. Returns the stored chunk count on success, 0 when skipped or
  *  unchunkable, and pushes a failure record on real failure. */
 async function indexOne(
   indexer: Indexer,
-  space: string,
-  kbRel: string,
+  root: string,
+  sourcePath: string,
   failed: { name: string; error: string }[],
 ): Promise<number> {
-  const spaceRel = spaceRelOf(space, kbRel);
-  if (spaceRel == null) {
-    // Daemon reported a path outside the space this sync is scoped to —
-    // shouldn't happen, but guard so a cross-space surprise can't wedge
+  const folderRel = folderRelOf(root, sourcePath);
+  if (folderRel == null) {
+    // Daemon reported a path outside the folder this sync is scoped to —
+    // shouldn't happen, but guard so a cross-folder surprise can't wedge
     // the loop.
-    failed.push({ name: kbRel, error: `path not under synced space "${space}"` });
+    failed.push({ name: sourcePath, error: `path not under synced folder ""` });
     return 0;
   }
-  if (!shouldIndexFilePath(spaceRel)) {
-    try { await indexer.deleteFile(kbRel); } catch { /* best-effort stale cleanup */ }
+  if (!shouldIndexFilePath(folderRel)) {
+    try { await indexer.deleteFile(sourcePath); } catch { /* best-effort stale cleanup */ }
     return 0;
   }
-  const tooLarge = indexableFileSizeError(path.join(getKbRoot(), kbRel));
+  const tooLarge = indexableFileSizeError(sourcePath);
   if (tooLarge) {
-    try { await indexer.deleteFile(kbRel); } catch { /* best-effort stale cleanup */ }
-    failed.push({ name: kbRel, error: tooLarge });
-    log.warn(`skipped ${kbRel}: ${tooLarge}`);
+    try { await indexer.deleteFile(sourcePath); } catch { /* best-effort stale cleanup */ }
+    failed.push({ name: sourcePath, error: tooLarge });
+    log.warn(`skipped ${sourcePath}: ${tooLarge}`);
     return 0;
   }
-  const content = readTextAtKbRel(kbRel);
+  const content = readTextAt(root, sourcePath);
   if (content == null) {
-    failed.push({ name: kbRel, error: 'read returned null' });
+    failed.push({ name: sourcePath, error: 'read returned null' });
     return 0;
   }
   try {
-    return await indexer.upsertFile(kbRel, content);
+    return await indexer.upsertFile(sourcePath, content);
   } catch (err: any) {
     const msg = errorMessage(err);
-    failed.push({ name: kbRel, error: msg });
-    log.warn(`failed ${kbRel}: ${msg}`);
+    failed.push({ name: sourcePath, error: msg });
+    log.warn(`failed ${sourcePath}: ${msg}`);
     return 0;
   }
 }
 
 async function removeExcludedIndexedFiles(
   indexer: Indexer,
-  space: string,
+  root: string,
   failed: { name: string; error: string }[],
 ): Promise<string[]> {
   let indexed: Record<string, string>;
   try {
-    indexed = await indexer.listFiles(space);
+    indexed = await indexer.listFiles(root);
   } catch {
     return [];
   }
   const removed: string[] = [];
-  for (const kbRel of Object.keys(indexed)) {
-    const spaceRel = spaceRelOf(space, kbRel);
-    if (spaceRel == null || shouldIndexFilePath(spaceRel)) continue;
+  for (const sourcePath of Object.keys(indexed)) {
+    const folderRel = folderRelOf(root, sourcePath);
+    if (folderRel == null || shouldIndexFilePath(folderRel)) continue;
+    // A convertible source (PDF/image) is indexed under its own path with
+    // the derived markdown as content; `shouldIndexFilePath` is false for it
+    // (its raw bytes aren't index-readable), but as long as the source file
+    // still exists the entry is legitimate — the conversion path owns it.
+    if (isConvertibleSource(folderRel) && fs.existsSync(sourcePath)) continue;
     try {
-      await indexer.deleteFile(kbRel);
-      removed.push(kbRel);
+      await indexer.deleteFile(sourcePath);
+      removed.push(sourcePath);
     } catch (err: unknown) {
-      failed.push({ name: kbRel, error: `excluded index cleanup failed: ${errorMessage(err)}` });
+      failed.push({ name: sourcePath, error: `excluded index cleanup failed: ${errorMessage(err)}` });
     }
   }
   if (removed.length) log.info(`removed ${removed.length} excluded file(s) from index`);

@@ -44,7 +44,7 @@ export function errorMessage(err: unknown): string {
   return String(err);
 }
 
-/** Best-effort `.code` reader. Node ErrnoException, our `NO_SPACE`
+/** Best-effort `.code` reader. Node ErrnoException, our `NO_FOLDER`
  *  wrapper, and Express decorate errors with a string `code` field;
  *  returns undefined for anything else. */
 export function errorCode(err: unknown): string | undefined {

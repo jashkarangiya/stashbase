@@ -1,21 +1,21 @@
 /**
- * Space filesystem layer. The "space" is the currently open folder of
+ * Folder filesystem layer. The "folder" is the currently open folder of
  * note files (`.md`, `.html`) with arbitrary nested subfolders. All
- * public functions accept a space-relative POSIX path like
+ * public functions accept a folder-relative POSIX path like
  * `topic/note.md` and the layer is responsible for keeping operations
- * inside the space root.
+ * inside the folder root.
  *
  * Format-aware bits (HTML viewer prep) live in html.ts; chunking +
  * embedding live in the Python MFS sidecar — this module only deals
  * with on-disk presence and identifies a file's format by suffix.
  *
- * The indexer (server/indexer.ts) keys on the same space-relative POSIX
+ * The indexer (server/indexer.ts) keys on the same folder-relative POSIX
  * path produced here, so the two layers reconcile by string equality.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { onSwitch, requireCurrentSpace } from './space.ts';
+import { onSwitch, requireCurrentFolder } from './folder.ts';
 import { decodeEntities } from './html.ts';
 import { errorCode, errorMessage, logger } from './log.ts';
 
@@ -25,20 +25,20 @@ import { isCloudPlaceholderName, isIndexExcludedDirName, shouldIndexFilePath } f
 
 export { detectFormat, type FileFormat } from './format.ts';
 
-/** Resolve the current space root every time we touch the FS — the user
- *  can switch spaces at runtime from the welcome screen, so caching the
+/** Resolve the current folder root every time we touch the FS — the user
+ *  can switch folders at runtime from the welcome screen, so caching the
  *  path at module load would silently keep writing to the old folder. */
-function spaceRoot(): string {
-  return requireCurrentSpace();
+function folderRoot(): string {
+  return requireCurrentFolder();
 }
 
-/** Basename of the currently-open space. The web UI shows this as
+/** Basename of the currently-open folder. The web UI shows this as
  *  the folder label at the top of the sidebar. */
-export function getSpaceName(): string {
-  return path.basename(spaceRoot());
+export function getCurrentFolderBasename(): string {
+  return path.basename(folderRoot());
 }
 
-/** Validate + normalize a space-relative path. Allows `/`-separated
+/** Validate + normalize a folder-relative path. Allows `/`-separated
  *  subfolders but rejects:
  *    - absolute paths (`/foo`, `C:\…`)
  *    - parent-traversal segments (`..`, `.`)
@@ -46,15 +46,15 @@ export function getSpaceName(): string {
  *  Returns the normalized POSIX path. */
 /** Quietly transform a user-supplied filename so it survives writing
  *  to disk on any sane filesystem. Used at create / rename time only —
- *  reads still pass through `safePath` verbatim, so vaults imported
- *  from other tools (Obsidian etc.) that already have `:` in filenames
+ *  reads still pass through `safePath` verbatim, so folders imported
+ *  from other tools that already have `:` in filenames
  *  keep working.
  *
  *  - Replaces Windows / FAT32 / exFAT reserved chars (`: ? * < > | \`)
  *    with `-`. This is what breaks Dropbox / iCloud / git on Windows.
  *  - Normalises Unicode to NFC — HFS+ stores filenames decomposed
  *    (NFD), APFS uses precomposed (NFC); without normalisation the same
- *    Chinese title can show up as two different files when the vault
+ *    Chinese title can show up as two different files when the folder
  *    moves between disks.
  *
  *  Slashes between path segments are preserved (so nested folders stay
@@ -81,15 +81,15 @@ function safePath(rel: string): string {
   return norm;
 }
 
-/** Resolve relative-to-space path to an absolute filesystem path AND
- *  defend against any edge case where the result escapes the space root. */
+/** Resolve relative-to-folder path to an absolute filesystem path AND
+ *  defend against any edge case where the result escapes the folder root. */
 function resolveSafe(rel: string): string {
-  const root = spaceRoot();
+  const root = folderRoot();
   const safe = safePath(rel);
   const full = path.join(root, safe);
   const back = path.relative(root, full);
   if (back.startsWith('..') || path.isAbsolute(back)) {
-    throw new Error('path escapes space');
+    throw new Error('path escapes folder');
   }
   return full;
 }
@@ -99,20 +99,20 @@ function isPathInsideOrSame(parent: string, child: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-function realSpaceRoot(): string {
-  return fs.realpathSync.native(spaceRoot());
+function realFolderRoot(): string {
+  return fs.realpathSync.native(folderRoot());
 }
 
-function assertRealPathInsideSpace(absPath: string, label = 'path'): void {
+function assertRealPathInsideFolder(absPath: string, label = 'path'): void {
   const real = fs.realpathSync.native(absPath);
-  if (!isPathInsideOrSame(realSpaceRoot(), real)) {
-    throw new Error(`${label} escapes space through symlink`);
+  if (!isPathInsideOrSame(realFolderRoot(), real)) {
+    throw new Error(`${label} escapes folder through symlink`);
   }
 }
 
-function assertCreatablePathInsideSpace(absPath: string, label = 'path'): void {
-  const root = spaceRoot();
-  const rootReal = realSpaceRoot();
+function assertCreatablePathInsideFolder(absPath: string, label = 'path'): void {
+  const root = folderRoot();
+  const rootReal = realFolderRoot();
   let probe = path.resolve(path.dirname(absPath));
   while (!fs.existsSync(probe)) {
     const parent = path.dirname(probe);
@@ -121,11 +121,11 @@ function assertCreatablePathInsideSpace(absPath: string, label = 'path'): void {
   }
   const probeRel = path.relative(root, probe);
   if (probeRel.startsWith('..') || path.isAbsolute(probeRel)) {
-    throw new Error(`${label} escapes space`);
+    throw new Error(`${label} escapes folder`);
   }
   const probeReal = fs.realpathSync.native(probe);
   if (!isPathInsideOrSame(rootReal, probeReal)) {
-    throw new Error(`${label} escapes space through symlink`);
+    throw new Error(`${label} escapes folder through symlink`);
   }
 }
 
@@ -137,7 +137,7 @@ export function fileVersion(relPath: string): string | null {
   let target: string;
   try { target = resolveSafe(relPath); } catch { return null; }
   try {
-    assertRealPathInsideSpace(target);
+    assertRealPathInsideFolder(target);
     const st = fs.statSync(target);
     if (!st.isFile()) return null;
     return `sha256:${crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex')}`;
@@ -149,12 +149,12 @@ export function fileVersion(relPath: string): string | null {
 /** Write raw bytes (e.g. images / css / fonts that arrive alongside
  *  an HTML bundle on drag-import). Same atomic write-then-rename as
  *  saveText so partial writes don't leave a half-baked file in the
- *  space. */
+ *  folder. */
 export function saveBytes(relPath: string, bytes: Buffer): void {
   const target = resolveSafe(relPath);
-  assertCreatablePathInsideSpace(target);
+  assertCreatablePathInsideFolder(target);
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  assertCreatablePathInsideSpace(target);
+  assertCreatablePathInsideFolder(target);
   const tmp = path.join(
     path.dirname(target),
     `.${path.basename(target)}.${process.pid}.${crypto.randomUUID()}.tmp`,
@@ -174,9 +174,9 @@ export function saveBytes(relPath: string, bytes: Buffer): void {
  *  directories if needed. */
 export function createTextExclusive(relPath: string, content: string): boolean {
   const target = resolveSafe(relPath);
-  assertCreatablePathInsideSpace(target);
+  assertCreatablePathInsideFolder(target);
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  assertCreatablePathInsideSpace(target);
+  assertCreatablePathInsideFolder(target);
   try {
     fs.writeFileSync(target, content, { encoding: 'utf8', flag: 'wx' });
     return true;
@@ -194,36 +194,36 @@ export function renameOnDisk(oldRel: string, newRel: string): void {
   if (!fs.existsSync(o) || !fs.statSync(o).isFile()) {
     throw new Error('source file not found');
   }
-  assertRealPathInsideSpace(o, 'source file');
-  assertCreatablePathInsideSpace(n, 'target file');
+  assertRealPathInsideFolder(o, 'source file');
+  assertCreatablePathInsideFolder(n, 'target file');
   if (fs.existsSync(n)) {
     throw new Error('target already exists');
   }
   fs.mkdirSync(path.dirname(n), { recursive: true });
-  assertCreatablePathInsideSpace(n, 'target file');
+  assertCreatablePathInsideFolder(n, 'target file');
   fs.renameSync(o, n);
   // Notes carry an implicit "<stem>_files/" attachment bundle (browser
   // "Save Page As Complete" output for HTML, paste/drag image targets
   // for both formats). When the note itself is renamed, keep the
   // bundle in lockstep so the iframe's relative URLs stay resolvable.
   renameBundleSibling(oldRel, newRel);
-  // Binary viewer files (PDF/images) own hidden extracted markdown
-  // siblings. Keep those artifacts next to the source on rename/move so
-  // search does not point at an orphaned old path.
+  // Legacy cleanup: older builds kept PDF/image derived artifacts as hidden
+  // siblings. Current AppData-derived artifacts are handled by the route layer
+  // after the source path changes.
   if (/\.pdf$/i.test(oldRel) || isImageFile(oldRel)) {
     renameDerivedArtifactsForSource(oldRel, newRel);
   }
 }
 
-/** Resolve a space-relative path to an absolute filesystem path for
+/** Resolve a folder-relative path to an absolute filesystem path for
  *  asset serving (images, css, fonts referenced from an HTML iframe).
- *  Returns null if the path resolves outside the space, doesn't exist,
+ *  Returns null if the path resolves outside the folder, doesn't exist,
  *  or isn't a regular file. Safe to pass to `fs.createReadStream`. */
 export function resolveAsset(relPath: string): string | null {
   let target: string;
   try { target = resolveSafe(relPath); } catch { return null; }
   try {
-    assertRealPathInsideSpace(target);
+    assertRealPathInsideFolder(target);
     const st = fs.statSync(target);
     if (!st.isFile()) return null;
   } catch { return null; }
@@ -234,28 +234,28 @@ export function readText(relPath: string): string | null {
   let target: string;
   try { target = resolveSafe(relPath); } catch { return null; }
   try {
-    assertRealPathInsideSpace(target);
+    assertRealPathInsideFolder(target);
     return fs.readFileSync(target, 'utf8');
   } catch { return null; }
 }
 
-/** True if a file or directory exists at the space-relative path. */
+/** True if a file or directory exists at the folder-relative path. */
 export function pathExists(relPath: string): boolean {
   let target: string;
   try { target = resolveSafe(relPath); } catch { return false; }
-  try { assertRealPathInsideSpace(target); fs.statSync(target); return true; } catch { return false; }
+  try { assertRealPathInsideFolder(target); fs.statSync(target); return true; } catch { return false; }
 }
 
-/** Resolve to an absolute path if anything exists at the space-relative
+/** Resolve to an absolute path if anything exists at the folder-relative
  *  location (file OR directory). Used by the reveal-in-OS route, which
  *  needs to accept both files and folders. */
 export function resolveExisting(relPath: string): string | null {
   let target: string;
   try { target = resolveSafe(relPath); } catch { return null; }
-  try { assertRealPathInsideSpace(target); fs.statSync(target); return target; } catch { return null; }
+  try { assertRealPathInsideFolder(target); fs.statSync(target); return target; } catch { return null; }
 }
 
-/** Delete a file at the given space-relative path. Returns false only
+/** Delete a file at the given folder-relative path. Returns false only
  *  when the file genuinely isn't there (ENOENT) — every other failure
  *  throws so the route can surface a real error instead of silently
  *  reporting success while the file stays on disk. */
@@ -264,7 +264,7 @@ export function deleteFile(relPath: string): boolean {
   let removed = false;
   try {
     if (!fs.existsSync(target)) return false;
-    assertRealPathInsideSpace(target, 'file');
+    assertRealPathInsideFolder(target, 'file');
     fs.unlinkSync(target);
     removed = true;
   } catch (err: any) {
@@ -274,20 +274,17 @@ export function deleteFile(relPath: string): boolean {
     // Tear down the note's bundle (if any) so we don't leave an orphan
     // `<stem>_files/` behind. Best-effort: a missing bundle is fine.
     deleteBundleSibling(relPath);
-    // Deleting a `paper.pdf` also tears down the dot-prefixed app-
-    // derived sibling note (`.paper.pdf.md` / `.paper.html`) and its
-    // bundle (`.paper.pdf_files/`). Without this, those orphaned files
-    // would re-appear in the sidebar (the sibling-bound hide rule in
-    // `walk()` depends on the parent PDF still being there).
+    // Deleting a `paper.pdf` also tears down legacy dot-prefixed sibling
+    // artifacts from older builds. Current AppData-derived artifacts are
+    // cleaned by the route layer with the absolute source path.
     if (/\.pdf$/i.test(relPath)) deleteDerivedArtifactsForSource(relPath);
-    // Same story for an image's OCR sibling note (`.shot.png.md`) — no
-    // bundle, just the single derived note.
+    // Same story for an image's legacy OCR sibling note.
     else if (isImageFile(relPath)) deleteDerivedArtifactsForSource(relPath);
   }
   return removed;
 }
 
-/** Map a note's space-relative path to its `<stem>_files/` sibling
+/** Map a note's folder-relative path to its `<stem>_files/` sibling
  *  bundle dir. Returns null when the path isn't a recognised note. */
 function bundleDirSibling(noteRel: string): string | null {
   const m = matchNoteStem(path.posix.basename(noteRel));
@@ -329,10 +326,9 @@ export interface DerivedArtifacts {
   bundles: string[];
 }
 
-/** App-maintained derived artifacts for a PDF/image source. Current names
- *  carry the full source basename (`paper.pdf` → `.paper.pdf.md`) so
- *  same-stem PDFs/images cannot collide. Legacy names without the source
- *  extension are included for cleanup only. */
+/** Legacy sibling-derived artifacts for a PDF/image source. Current derived
+ *  Markdown lives in AppData (`derived-store.ts`); these names are kept only
+ *  to clean up older on-disk artifacts and stale index rows. */
 export function derivedArtifactsForSource(relPath: string): DerivedArtifacts {
   const base = path.posix.basename(relPath);
   const parent = path.posix.dirname(relPath);
@@ -365,7 +361,7 @@ export function derivedArtifactsForSource(relPath: string): DerivedArtifacts {
   return { notes, bundles };
 }
 
-/** Tear down a source file's app-derived siblings. Best-effort: missing
+/** Tear down a source file's legacy app-derived siblings. Best-effort: missing
  *  artifacts are fine, but permission/IO failures are logged so hidden
  *  stale conversion output is diagnosable. */
 function deleteDerivedArtifactsForSource(sourceRel: string): void {
@@ -428,14 +424,14 @@ function renameFirstExistingArtifact(oldRels: string[], newRel: string | undefin
   }
 }
 
-/** Create a (possibly nested) folder inside the space. Returns false if
+/** Create a (possibly nested) folder inside the folder. Returns false if
  *  the folder already exists, throws on other errors. */
 export function createFolder(relPath: string): boolean {
   const target = resolveSafe(relPath);
   if (fs.existsSync(target)) return false;
-  assertCreatablePathInsideSpace(target, 'folder');
+  assertCreatablePathInsideFolder(target, 'folder');
   fs.mkdirSync(target, { recursive: true });
-  assertRealPathInsideSpace(target, 'folder');
+  assertRealPathInsideFolder(target, 'folder');
   return true;
 }
 
@@ -446,8 +442,8 @@ export function createFolder(relPath: string): boolean {
 export function renameFolder(oldRel: string, newRel: string): void {
   const oldAbs = resolveSafe(oldRel);
   const newAbs = resolveSafe(newRel);
-  assertRealPathInsideSpace(oldAbs, 'source folder');
-  assertCreatablePathInsideSpace(newAbs, 'target folder');
+  assertRealPathInsideFolder(oldAbs, 'source folder');
+  assertCreatablePathInsideFolder(newAbs, 'target folder');
   if (!fs.existsSync(oldAbs) || !fs.statSync(oldAbs).isDirectory()) {
     throw new Error('source folder not found');
   }
@@ -455,7 +451,7 @@ export function renameFolder(oldRel: string, newRel: string): void {
     throw new Error('target already exists');
   }
   fs.mkdirSync(path.dirname(newAbs), { recursive: true });
-  assertCreatablePathInsideSpace(newAbs, 'target folder');
+  assertCreatablePathInsideFolder(newAbs, 'target folder');
   fs.renameSync(oldAbs, newAbs);
 }
 
@@ -470,7 +466,7 @@ export function deleteFolder(relPath: string): boolean {
   try { target = resolveSafe(relPath); } catch { return false; }
   try {
     if (!fs.existsSync(target)) return false;
-    assertRealPathInsideSpace(target, 'folder');
+    assertRealPathInsideFolder(target, 'folder');
     fs.rmSync(target, { recursive: true, force: true });
     return true;
   } catch (err: any) {
@@ -480,7 +476,7 @@ export function deleteFolder(relPath: string): boolean {
 }
 
 export interface FileEntry {
-  /** Space-relative POSIX path (e.g. `topic/note.md`). */
+  /** Folder-relative POSIX path (e.g. `topic/note.md`). */
   name: string;
   /** Widened to `ViewerFormat` to include viewable-only formats like
    *  `pdf` (which are surfaced in the sidebar but never indexed). */
@@ -493,14 +489,14 @@ export interface FileEntry {
 }
 
 interface FolderEntry {
-  /** Space-relative POSIX path (e.g. `topic/sub`). */
+  /** Folder-relative POSIX path (e.g. `topic/sub`). */
   path: string;
 }
 
 /** Per-file preview cache keyed by absolute path. Avoids re-reading
  *  every file on every `GET /api/files`. Invalidated by mtime: if the
  *  file's mtime hasn't moved, reuse the cached preview. Survives the
- *  lifetime of the process; bounded by the size of one vault. */
+ *  lifetime of the process; bounded by the size of one opened folder. */
 interface PreviewCacheEntry {
   mtimeMs: number;
   heading: string;
@@ -509,19 +505,19 @@ interface PreviewCacheEntry {
 }
 const previewCache = new Map<string, PreviewCacheEntry>();
 
-// Drop preview entries for the previous space when the user opens a
-// new one — absolute paths from space A never overlap with space B, so
-// without this the cache grows monotonically with every space the user
+// Drop preview entries for the previous folder when the user opens a
+// new one — absolute paths from folder A never overlap with folder B, so
+// without this the cache grows monotonically with every folder the user
 // visits in a session. Registered at module load.
 onSwitch(() => previewCache.clear());
 
-/** Recursive walk of the space. Returns every recognised note file with
+/** Recursive walk of the folder. Returns every recognised note file with
  *  its relative path, format, first-heading preview, and disk mtime.
  *  Sorted by full path so the tree renders in a stable order.
- *  Per-file preview is cached by mtime so large vaults don't pay
+ *  Per-file preview is cached by mtime so large folders don't pay
  *  N × readFile on every sidebar refresh. */
 export function listFiles(): FileEntry[] {
-  const root = spaceRoot();
+  const root = folderRoot();
   const out: FileEntry[] = [];
   const seen = new Set<string>();
   walk(root, '', (rel, full, ent) => {
@@ -569,7 +565,7 @@ export function listFiles(): FileEntry[] {
  *  (`<stem>_files/` next to `<stem>.{md,html}`) are filtered out at
  *  the `walk` level, so they don't surface here either. */
 export function listFolders(): FolderEntry[] {
-  const root = spaceRoot();
+  const root = folderRoot();
   const out: FolderEntry[] = [];
   walk(root, '', (rel, _full, ent) => {
     if (ent.isDirectory()) out.push({ path: rel });
@@ -579,13 +575,12 @@ export function listFolders(): FolderEntry[] {
 }
 
 /** Text files that should be carried through a folder-level index rename.
- *  Unlike `listFiles()`, this includes app-derived hidden notes
- *  (`.paper.pdf.md`, `.shot.png.md`) because those are the actual indexed
- *  text for PDF/image sources. */
+ *  Includes legacy hidden derived notes if they still exist on disk; current
+ *  PDF/image AppData-derived notes are handled by conversion/index reconcile. */
 export function listIndexableTextFilesUnder(relPrefix: string): Array<{ name: string; content: string }> {
   const safePrefix = safePath(relPrefix);
   const start = resolveSafe(safePrefix);
-  assertRealPathInsideSpace(start, 'folder');
+  assertRealPathInsideFolder(start, 'folder');
   const out: Array<{ name: string; content: string }> = [];
   walk(start, safePrefix, (rel, full, ent) => {
     if (!ent.isFile()) return;
@@ -602,9 +597,9 @@ export function listIndexableTextFilesUnder(relPrefix: string): Array<{ name: st
 /** Dot-prefixed dir / file names we **always** hide from the sidebar.
  *
  *  Three categories:
- *    1. Our own internal storage (`.stashbase/` — milvus.db, per-space
- *       config, cache). User deleting / renaming it would corrupt the
- *       index, so we just keep it invisible.
+ *    1. Legacy StashBase sidecars (`.stashbase/`). Current app-owned state
+ *       lives in AppData, but old installs may still have sidecar files;
+ *       keep them invisible so internal state never looks like user content.
  *    2. Huge, opaque, never-user-content: `.git/`. Cloned repos would
  *       otherwise flood the sidebar with object files.
  *    3. OS / iCloud junk: `.DS_Store`, `.Trashes`, `.fseventsd`, ...
@@ -655,13 +650,11 @@ function walk(
     // `.github` / `.obsidian`, …) and shows through.
     if (e.name.startsWith('.') && HIDDEN_DOT_DIRS.has(e.name)) continue;
     if (e.isDirectory() && isIndexExcludedDirName(e.name)) continue;
-    // Always hide app-derived dot-prefixed notes (`.<name>.md` /
-    // `.html`) and their bundle dirs — these are PDF converter
-    // outputs (or other future derived content). The unconditional
-    // rule means an orphaned derived file (PDF got deleted out from
-    // under it, conversion crashed mid-write, git checkout left it
-    // stale) stays hidden too, instead of leaking into the sidebar
-    // and surprising users.
+    // Always hide legacy dot-prefixed derived notes (`.<name>.md` /
+    // `.html`) and their bundle dirs. Current PDF/image derived text
+    // lives in AppData, but old artifacts can still exist in user
+    // folders; an orphaned legacy file should stay hidden instead of
+    // leaking into the sidebar and surprising users.
     //
     // Indexer / agent shell still see these files (the daemon's
     // scanner doesn't apply this rule); Cmd+P quick-open can target
@@ -678,7 +671,7 @@ function walk(
       // `<stem>_files/` siblings to user-authored notes (browser
       // "Save complete webpage" convention).
       if (noteStems.has(stem)) continue;
-      // `.<sourceBasename>_files/` dot-prefixed app-derived bundle — always hide.
+      // `.<sourceBasename>_files/` legacy dot-prefixed bundle — always hide.
       if (stem.startsWith('.')) continue;
     }
     // PDF extraction publishes the final dot-prefixed bundle only when
@@ -762,7 +755,7 @@ function previewMarkdown(md: string): { heading: string; snippet: string } {
 }
 
 /** Cheap HTML preview without spinning up linkedom — file listing fires
- *  this on every file in the space, so the regex path is the right
+ *  this on every file in the folder, so the regex path is the right
  *  tradeoff (the chunker does the proper DOM walk later). Strips tags
  *  and decodes the handful of entities that block readability. */
 function previewHtml(html: string): { heading: string; snippet: string } {

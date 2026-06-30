@@ -10,7 +10,7 @@
 import { marked } from 'marked';
 
 // `breaks: true` makes single newlines render as <br> instead of
-// collapsing to spaces. Matches GitHub / Obsidian default and "what you
+// collapsing to folders. Matches GitHub / Obsidian default and "what you
 // see in the editor is what you see in the preview" — important for
 // transcripts and other line-per-thought notes where the author meant
 // the line break literally. Prose with soft-wrap at 72 columns is
@@ -40,7 +40,7 @@ export function renderMarkdown(md: string): string {
 }
 
 /** Kebab-case heading slug. Mirrors GitHub's approach: lowercase, drop
- *  punctuation, collapse spaces to dashes. Cross-file anchor links use
+ *  punctuation, collapse folders to dashes. Cross-file anchor links use
  *  this so `[..](other.md#layered-small-world-routing)` resolves. */
 export function slugifyHeading(text: string): string {
   return text
@@ -125,87 +125,3 @@ img[data-stashbase-previewable="true"] { cursor: zoom-in; }
 hr { border: 0; border-top: 1px solid rgb(236, 238, 241); margin: 1em 0; }
 `;
 
-/** Append the same postMessage scroll / external-link listener
- *  `server/html.ts` injects into prepared HTML, so edit-mode previews
- *  behave like read-only ones. */
-export function withScrollBootstrap(html: string, currentPath = ''): string {
-  // Mirrors `server/html.ts:addScrollBootstrap` (kept in sync by hand).
-  // Used for edit-mode HTML preview where the source is a blob URL and
-  // `server/html.ts` hasn't processed it.
-  const pathLiteral = JSON.stringify(currentPath);
-  const script = `<script>
-var STASHBASE_CURRENT_PATH = ${pathLiteral};
-window.addEventListener("message", function(e) {
-  if (!e || !e.data || e.data.type !== "stashbase-scroll") return;
-  var el = document.getElementById(e.data.id);
-  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-});
-document.addEventListener("click", function(e) {
-  var node = e.target;
-  while (node && node.tagName !== "A" && node.tagName !== "IMG") node = node.parentElement;
-  if (!node) return;
-  if (node.tagName === "IMG") {
-    var src = node.currentSrc || node.getAttribute("src");
-    if (!src) return;
-    try {
-      e.preventDefault();
-      window.parent.postMessage({
-        type: "stashbase-preview-image",
-        src: new URL(src, document.baseURI).href,
-        alt: node.getAttribute("alt") || ""
-      }, "*");
-    } catch (_) {}
-    return;
-  }
-  var raw = node.getAttribute("href");
-  if (!raw) return;
-  if (raw.charAt(0) === "#") {
-    var hashOnly = raw.slice(1);
-    if (!hashOnly) return;
-    try {
-      if (!STASHBASE_CURRENT_PATH) return;
-      window.parent.postMessage({
-        type: "stashbase-nav",
-        path: STASHBASE_CURRENT_PATH,
-        anchor: hashOnly
-      }, "*");
-    } catch (_) {}
-    return;
-  }
-  try {
-    var url = new URL(raw, document.baseURI);
-    if (url.origin === location.origin && url.pathname.indexOf("/asset/") === 0) {
-      var encoded = url.pathname.slice("/asset/".length);
-      if (encoded.indexOf("__window/") === 0) {
-        var windowSlash = encoded.indexOf("/", "__window/".length);
-        encoded = windowSlash >= 0 ? encoded.slice(windowSlash + 1) : "";
-      }
-      var decoded;
-      try {
-        decoded = encoded.split("/").map(decodeURIComponent).join("/");
-      } catch (_) { return; }
-      if (/\\.(md|markdown|html|htm)$/i.test(decoded)) {
-        e.preventDefault();
-        var anchor = url.hash && url.hash.charAt(0) === "#" ? url.hash.slice(1) : "";
-        window.parent.postMessage({
-          type: "stashbase-nav",
-          path: decoded,
-          anchor: anchor || undefined
-        }, "*");
-        return;
-      }
-      // Non-note assets (recording webm, etc.) open in the system browser.
-      e.preventDefault();
-      window.parent.postMessage({ type: "stashbase-open-external", href: url.href }, "*");
-      return;
-    }
-    if ((url.protocol === "http:" || url.protocol === "https:") && url.origin !== location.origin) {
-      e.preventDefault();
-      window.parent.postMessage({ type: "stashbase-open-external", href: url.href }, "*");
-    }
-  } catch (_) {}
-});
-<\/script>`;
-  const idx = html.lastIndexOf('</body>');
-  return idx >= 0 ? html.slice(0, idx) + script + html.slice(idx) : html + script;
-}

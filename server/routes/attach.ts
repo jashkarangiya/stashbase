@@ -1,10 +1,10 @@
 /**
  * Composer attachments — files a user drags or picks into the chat panel
  * as transient context. Unlike `/api/upload` (which imports into the
- * active space, where files are indexed + tree-visible + tracked by git),
+ * active folder, where files are indexed + tree-visible + tracked by git),
  * these are written to a throwaway OS temp dir and referenced by absolute
  * path: the agent reads them via its Read tool, but they never land in
- * the user's knowledge base.
+ * the user's library.
  */
 import express from 'express';
 import multer from 'multer';
@@ -24,7 +24,7 @@ const upload = multer({
 
 const ATTACHMENT_MAX_AGE_MS = 24 * 60 * 60_000;
 
-/** Root for transient attachment files, outside any space. */
+/** Root for transient attachment files, outside any folder. */
 function attachRoot(): string {
   return path.join(os.tmpdir(), 'stashbase-attachments');
 }

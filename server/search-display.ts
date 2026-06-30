@@ -1,4 +1,5 @@
 import { displayPathForHit } from './pdf.ts';
+import { derivedNoteFor } from './derived-store.ts';
 import type { SearchHit } from './indexer.ts';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -32,7 +33,8 @@ export function remapKeywordFilesForDisplay(
   for (const file of files) {
     const display = displayPathForHit(file.path, baseAbs);
     if (display == null) continue;
-    const pageMap = display !== file.path ? pdfDerivedLineMap(file.path, baseAbs) : null;
+    const pageMap = pdfSourceLineMap(display, baseAbs)
+      ?? (display !== file.path ? pdfLineMapForPath(path.resolve(baseAbs, file.path), baseAbs) : null);
     let bucket = byPath.get(display);
     if (!bucket) {
       bucket = { path: display, matches: [], totalMatches: 0 };
@@ -73,7 +75,8 @@ export function remapSearchHitsForDisplay(hits: SearchHit[], baseAbs: string): S
   for (const hit of hits) {
     const display = displayPathForHit(hit.fileName, baseAbs);
     if (display == null) continue;
-    const pageMap = display !== hit.fileName ? pdfDerivedLineMap(hit.fileName, baseAbs) : null;
+    const pageMap = pdfSourceLineMap(display, baseAbs)
+      ?? (display !== hit.fileName ? pdfLineMapForPath(path.resolve(baseAbs, hit.fileName), baseAbs) : null);
     const next = {
       ...hit,
       fileName: display,
@@ -101,10 +104,17 @@ interface PdfDerivedLineMap {
   markers: Array<{ line: number; page: number }>;
 }
 
-function pdfDerivedLineMap(rel: string, baseAbs: string): PdfDerivedLineMap | null {
-  const full = path.resolve(baseAbs, rel);
-  const back = path.relative(baseAbs, full);
-  if (back.startsWith('..') || path.isAbsolute(back)) return null;
+function pdfSourceLineMap(displayPath: string, baseAbs: string): PdfDerivedLineMap | null {
+  if (!/\.pdf$/i.test(displayPath)) return null;
+  const sourceAbs = path.resolve(baseAbs, displayPath);
+  return pdfLineMapForPath(derivedNoteFor(sourceAbs), undefined);
+}
+
+function pdfLineMapForPath(full: string, baseAbs?: string): PdfDerivedLineMap | null {
+  if (baseAbs) {
+    const back = path.relative(baseAbs, full);
+    if (back.startsWith('..') || path.isAbsolute(back)) return null;
+  }
   let text: string;
   try { text = fs.readFileSync(full, 'utf8'); } catch { return null; }
   const lines = text.split(/\r?\n/);

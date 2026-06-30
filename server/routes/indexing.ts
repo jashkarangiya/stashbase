@@ -8,19 +8,25 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { rgPath } from '@vscode/ripgrep';
 import { logger } from '../log.ts';
-import { fromKbRelForSpace, getCurrentSpace, getCurrentSpaceName, getKbRoot, isInsideKbRoot, requireSpaceExistsByName, validateSpaceRef } from '../space.ts';
+import {
+  relInFolder,
+  getCurrentFolder,
+  memberFolderRoots,
+  resolveFolderRoot,
+  toPosixAbs,
+} from '../folder.ts';
 import { getApiKey } from '../app-config.ts';
-import { hasNoExtractableText, shouldIndexFilePath } from '../indexable.ts';
+import { hasNoExtractableText, isCloudPlaceholderName, isIndexExcludedDirName, shouldIndexFilePath } from '../indexable.ts';
 import { derivedPathsForPdf, displayPathForHit, maybeConvertPdf } from '../pdf.ts';
 import { derivedNotePathForImage, maybeConvertImage } from '../image.ts';
 import { getInFlightConversions } from '../conversion.ts';
 import { isImageFile } from '../format.ts';
 import { clearRecord, isInFlight, listFailed, listInFlight, readAll as readConversionStatus, readProgress, type ConversionProgress } from '../conversion-status.ts';
 import { getFsChangeCounter } from '../watcher.ts';
-import { getDaemon } from '../mfs-daemon.ts';
-import { clearIndexWarning, clearSnapshotWarning, getIndexWarning, getSnapshotWarning, indexer, syncSpaceNow } from '../state.ts';
+import { clearIndexWarning, getIndexWarning, indexer, syncFolderNow } from '../state.ts';
 import { noteTreeChanged } from '../watcher.ts';
 import { sendError } from '../http.ts';
+import { derivedNoteFor } from '../derived-store.ts';
 import {
   remapKeywordFilesForDisplay,
   remapSearchHitsForDisplay,
@@ -31,61 +37,48 @@ import {
 
 const log = logger('routes/indexing');
 
-export interface SnapshotExportResult {
-  path: string;
-  vectors: number;
-  chunks: number;
-  version: number;
-  embedder: { provider: string; model: string | null; dim: number };
-}
-
-export interface SnapshotMeta {
-  version: number;
-  space: string;
-  embedder: { provider: string; model: string | null; dim: number };
-  vectors: number;
-  chunks: number;
-  exported_at: string;
-}
-
-function parseSpaceParam(value: unknown): string | undefined {
+function parseFolderParam(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-function requireRequestSpace(explicit?: string): { spaceName: string; spaceRoot: string } {
-  if (explicit) {
-    const bad = validateSpaceRef(explicit);
-    if (bad) {
-      const err = new Error(bad);
-      (err as any).status = 400;
-      throw err;
-    }
-    return { spaceName: explicit, spaceRoot: requireSpaceExistsByName(explicit) };
-  }
-  const spaceName = getCurrentSpaceName();
-  const spaceRoot = getCurrentSpace();
-  if (!spaceName || !spaceRoot) {
-    const err = new Error('no space open');
-    (err as any).status = 412;
-    (err as any).code = 'NO_SPACE';
+function requireMemberFolderRoot(ref: string): string {
+  const root = resolveFolderRoot(ref);
+  if (!memberFolderRoots().includes(root)) {
+    const err = new Error('folder is not in your folders');
+    (err as any).status = 404;
+    (err as any).code = 'FOLDER_NOT_FOUND';
     throw err;
   }
-  return { spaceName, spaceRoot };
+  return root;
 }
 
-function kbRelForAbs(absPath: string): string | null {
-  const rel = path.relative(getKbRoot(), absPath);
-  if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
-  return rel.split(path.sep).join('/');
+function requireRequestFolder(explicit?: string): { folderRoot: string } {
+  if (explicit) {
+    const root = requireMemberFolderRoot(explicit);
+    return { folderRoot: root };
+  }
+  const folderRoot = getCurrentFolder();
+  if (!folderRoot) {
+    const err = new Error('no folder open');
+    (err as any).status = 412;
+    (err as any).code = 'NO_FOLDER';
+    throw err;
+  }
+  return { folderRoot: toPosixAbs(folderRoot) };
 }
 
-export function conversionFailuresForSpace(space: string): Array<{ path: string; lastError: string; attempts: number }> {
+function sourcePathForAbs(absPath: string): string {
+  return toPosixAbs(absPath);
+}
+
+export function conversionFailuresForFolder(folderRoot: string): Array<{ path: string; lastError: string; attempts: number }> {
+  const root = toPosixAbs(folderRoot);
   const out: Array<{ path: string; lastError: string; attempts: number }> = [];
-  for (const { path: kbRel, entry } of listFailed()) {
-    const rel = fromKbRelForSpace(kbRel, space);
+  for (const { path: sourcePath, entry } of listFailed()) {
+    const rel = relInFolder(sourcePath, root);
     if (rel == null) continue;
-    if (!fs.existsSync(path.join(getKbRoot(), kbRel))) {
-      clearRecord(kbRel);
+    if (!fs.existsSync(sourcePath)) {
+      clearRecord(sourcePath);
       continue;
     }
     out.push({ path: rel, lastError: entry.lastError ?? '', attempts: entry.attempts });
@@ -93,18 +86,19 @@ export function conversionFailuresForSpace(space: string): Array<{ path: string;
   return out;
 }
 
-export function conversionProgressForSpace(space: string): Record<string, ConversionProgress> {
+export function conversionProgressForFolder(folderRoot: string): Record<string, ConversionProgress> {
+  const root = toPosixAbs(folderRoot);
   const out: Record<string, ConversionProgress> = {};
-  for (const kbRel of listInFlight()) {
-    const rel = fromKbRelForSpace(kbRel, space);
+  for (const sourcePath of listInFlight()) {
+    const rel = relInFolder(sourcePath, root);
     if (rel == null) continue;
-    const progress = readProgress(kbRel);
+    const progress = readProgress(sourcePath);
     if (progress) out[rel] = progress;
   }
   return out;
 }
 
-export function retryConversionInSpace(relPath: string, spaceName?: string): void {
+export function retryConversionInFolder(relPath: string, folderName?: string): void {
   const rel = typeof relPath === 'string' ? relPath.trim() : '';
   if (!rel) {
     const err = new Error('path required');
@@ -119,49 +113,25 @@ export function retryConversionInSpace(relPath: string, spaceName?: string): voi
     throw err;
   }
 
-  let spaceRoot: string | null;
-  let resolvedSpace = spaceName?.trim();
-  if (resolvedSpace) {
-    const bad = validateSpaceRef(resolvedSpace);
-    if (bad) {
-      const err = new Error(bad);
-      (err as any).status = 400;
-      throw err;
-    }
-    spaceRoot = requireSpaceExistsByName(resolvedSpace);
-  } else {
-    spaceRoot = getCurrentSpace();
-    resolvedSpace = getCurrentSpaceName() ?? undefined;
-  }
-  if (!spaceRoot || !resolvedSpace) {
-    const err = new Error('no space open');
-    (err as any).status = 412;
-    (err as any).code = 'NO_SPACE';
-    throw err;
-  }
+  const { folderRoot } = requireRequestFolder(folderName?.trim() || undefined);
 
-  const abs = path.resolve(spaceRoot, rel);
-  const spaceRel = path.relative(spaceRoot, abs);
-  if (spaceRel.startsWith('..') || path.isAbsolute(spaceRel) || !isInsideKbRoot(abs)) {
-    const err = new Error('path escapes space');
+  const abs = path.resolve(folderRoot, rel);
+  const folderRel = path.relative(folderRoot, abs);
+  if (folderRel.startsWith('..') || path.isAbsolute(folderRel)) {
+    const err = new Error('path escapes folder');
     (err as any).status = 400;
     throw err;
   }
-  const kbRel = kbRelForAbs(abs);
-  if (!kbRel) {
-    const err = new Error('path escapes KB root');
-    (err as any).status = 400;
-    throw err;
-  }
+  const sourcePath = sourcePathForAbs(abs);
   if (!fs.existsSync(abs)) {
-    clearRecord(kbRel);
+    clearRecord(sourcePath);
     const err = new Error('file not found');
     (err as any).status = 404;
     throw err;
   }
-  if (isInFlight(kbRel)) return;
+  if (isInFlight(sourcePath)) return;
 
-  clearRecord(kbRel);
+  clearRecord(sourcePath);
   if (isPdf) {
     const { notePath: staleNote, bundleDir: staleBundle } = derivedPathsForPdf(abs);
     try { fs.rmSync(staleNote, { force: true }); } catch { /* no stale to remove */ }
@@ -174,22 +144,16 @@ export function retryConversionInSpace(relPath: string, spaceName?: string): voi
 }
 
 export function mount(app: express.Express): void {
-  // Trigger a space sync manually — useful after external edits / file
+  // Trigger a folder sync manually — useful after external edits / file
   // moves. Returns the diff (added / removed / failed). Defaults to the
-  // active space; accepts `?space=<name>` to sync any known space
+  // active folder; accepts `?folder=<name>` to sync any known folder
   // (powers MCP `reindex` so external agents can refresh an
-  // unopened space's index without the user opening it first).
+  // unopened folder's index without the user opening it first).
   app.post('/api/sync', async (req, res) => {
     try {
-      const explicit = typeof req.query.space === 'string' && req.query.space.trim()
-        ? req.query.space.trim() : undefined;
-      if (explicit) {
-        const bad = validateSpaceRef(explicit);
-        if (bad) return res.status(400).json({ error: bad });
-      }
-      const space = explicit ?? getCurrentSpaceName() ?? undefined;
-      if (!space) return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
-      const result = await syncSpaceNow(requireSpaceExistsByName(space), { reason: 'manual sync' });
+      const explicit = parseFolderParam(req.query.folder);
+      const { folderRoot } = requireRequestFolder(explicit);
+      const result = await syncFolderNow(folderRoot, { reason: 'manual sync' });
       // `/api/sync` is also the explicit "something outside the app may
       // have changed" reconcile hook. Bump even when the semantic diff is
       // empty: no-key mode, non-indexable assets, empty dirs, and fast
@@ -202,9 +166,9 @@ export function mount(app: express.Express): void {
     }
   });
 
-  // Hybrid (vector + BM25) search, scoped to the current open space.
-  // Cross-space search lives behind the MCP `search_kb` tool (different
-  // mental model: "AI searching all my notes" vs "I'm searching the KB
+  // Hybrid (vector + BM25) search, scoped to the current open folder.
+  // Cross-folder search lives behind the MCP `search_library` tool (different
+  // mental model: "AI searching all my notes" vs "I'm searching the library
   // I'm currently editing").
   app.post('/api/search', async (req, res) => {
     try {
@@ -217,30 +181,24 @@ export function mount(app: express.Express): void {
           code: 'EMBEDDER_KEY_REQUIRED',
         });
       }
-      const explicit = typeof req.body?.space === 'string' && req.body.space.trim()
-        ? req.body.space.trim() : undefined;
-      if (explicit) {
-        const bad = validateSpaceRef(explicit);
-        if (bad) return res.status(400).json({ error: bad });
-      }
-      const space = explicit ?? getCurrentSpaceName();
-      const spaceRoot = explicit ? requireSpaceExistsByName(explicit) : getCurrentSpace();
-      if (!space || !spaceRoot) return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
-      const hits = await indexer.search(query, topK, space);
-      // Daemon hits arrive kbRoot-relative; translate fileName back to
-      // space-relative for the sidebar (which only knows the current
-      // space). Then `displayPathForHit` rewrites a derived note to its
+      const explicit = parseFolderParam(req.body?.folder);
+      const { folderRoot } = requireRequestFolder(explicit);
+      const root = toPosixAbs(folderRoot);
+      const hits = await indexer.search(query, topK, root);
+      // Daemon hits arrive as absolute paths; translate fileName back to
+      // folder-relative for the sidebar (which only knows the current
+      // folder). Then `displayPathForHit` rewrites a derived note to its
       // source PDF/image (or drops an orphan) so a hidden `.md` never
       // shows — PdfPreview/ImagePreview pick up the chunk text from
       // pendingHighlight and jump to the matching passage.
       const out = remapSearchHitsForDisplay(
         hits
           .map((h) => {
-            const rel = fromKbRelForSpace(h.fileName, space);
+            const rel = relInFolder(h.fileName, root);
             return rel == null ? null : { ...h, fileName: rel };
           })
           .filter((h): h is NonNullable<typeof h> => h !== null),
-        spaceRoot,
+        folderRoot,
       );
       res.json({ hits: out });
     } catch (err: unknown) {
@@ -249,7 +207,7 @@ export function mount(app: express.Express): void {
   });
 
   // Keyword (substring / regex) search via ripgrep, scoped to the
-  // active space directory. Bypasses the daemon and the index — useful
+  // active folder directory. Bypasses the daemon and the index — useful
   // for finding specific tokens (function names, exact phrases) that
   // semantic search blurs out. Defaults to smart-case, restricts to
   // markdown / HTML (the only formats we index anyway), caps per-file
@@ -258,41 +216,38 @@ export function mount(app: express.Express): void {
     try {
       const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
       if (!query) return res.status(400).json({ error: 'q required' });
-      const explicit = typeof req.query.space === 'string' && req.query.space.trim()
-        ? req.query.space.trim() : undefined;
-      if (explicit) {
-        const bad = validateSpaceRef(explicit);
-        if (bad) return res.status(400).json({ error: bad });
-      }
-      const spaceName = explicit ?? getCurrentSpaceName() ?? undefined;
-      if (!spaceName) return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
-      const spaceDir = requireSpaceExistsByName(spaceName);
+      const explicit = parseFolderParam(req.query.folder);
+      const { folderRoot: folderDir } = requireRequestFolder(explicit);
       const caseStrict = req.query.case_strict === '1' || req.query.case_strict === 'true';
       const wholeWord = req.query.whole_word === '1' || req.query.whole_word === 'true';
-      const result = await runRipgrep(query, spaceDir, { caseStrict, wholeWord });
-      // ripgrep's `*.md` glob also matches the hidden dot-prefixed
+      const result = mergeKeywordResults(
+        await runRipgrep(query, folderDir, { caseStrict, wholeWord }),
+        searchDerivedMarkdown(query, folderDir, { caseStrict, wholeWord }),
+      );
+      // ripgrep's `*.md` glob may also match legacy hidden dot-prefixed
       // derived notes (`.paper.pdf.md` / `.shot.png.md`). Apply the same
       // remap-or-drop rule as the semantic routes so a hit's row points
       // at the openable source PDF / image (the matched OCR / converted
       // snippet stays) and an orphan note never surfaces.
-      const remapped = remapKeywordFilesForDisplay(result.files, spaceDir);
-      res.json({ query, space: spaceName, ...result, ...remapped });
+      const remapped = remapKeywordFilesForDisplay(result.files, folderDir);
+      res.json({ query, folder: folderDir, ...result, ...remapped });
     } catch (err: unknown) {
       sendError(res, err);
     }
   });
 
   // Lightweight status — full `pending` list (not a sample) so the
-  // sidebar can grey out the right rows. Scoped to the current space.
+  // sidebar can grey out the right rows. Scoped to the current folder.
   // `treeVersion` bumps on every external fs event, covering writes
   // from Claude Code / `touch` that wouldn't move `pending`
   // (non-indexable files, empty dirs). Also surfaces in-flight PDF
   // conversions for the conversion indicator.
   app.get('/api/index-status', async (req, res) => {
     try {
-      const { spaceName: space, spaceRoot: cur } = requireRequestSpace(parseSpaceParam(req.query.space));
-      const status = await indexer.status(space);
-      // Convert kbRoot-relative paths back to space-relative for the UI.
+      const { folderRoot: cur } = requireRequestFolder(parseFolderParam(req.query.folder));
+      const curRoot = toPosixAbs(cur);
+      const status = await indexer.status(curRoot);
+      // Convert absolute paths back to folder-relative for the UI.
       // The daemon should already apply the same admission rules Node
       // pushes via `set_rules`, but status is a user-facing indicator:
       // defensively re-check Node's source-of-truth path rules here so
@@ -302,8 +257,8 @@ export function mount(app: express.Express): void {
       // of the daemon: files with no extractable text chunk to nothing,
       // never enter Milvus, and would otherwise remain pending forever.
       const pendingSet = new Set<string>();
-      for (const kbRel of status.pending) {
-        const rel = fromKbRelForSpace(kbRel, space);
+      for (const sourcePath of status.pending) {
+        const rel = relInFolder(sourcePath, curRoot);
         if (rel == null) continue;
         if (!shouldIndexFilePath(rel)) continue;
         if (hasNoExtractableText(path.join(cur, rel))) continue;
@@ -312,74 +267,49 @@ export function mount(app: express.Express): void {
       }
       const pending = [...pendingSet].sort();
       const orphaned = status.orphaned
-        .map((p) => fromKbRelForSpace(p, space))
+        .map((p) => relInFolder(p, curRoot))
         .filter((p): p is string => p != null);
-      // Conversion status: space-scoped. `pendingConversions` keeps the
+      // Conversion status: folder-scoped. `pendingConversions` keeps the
       // old shape (in-flight only) for the sidebar "Converting…"
       // indicator. `conversionFailures` surfaces the persistent failure
       // list so the UI can render Retry entries — for BOTH PDFs
       // (pdf_extract) and images (ocr_extract), which share this
       // status DB. `/api/conversion/retry` dispatches by extension, so a
       // failed image re-runs OCR (not pdf_extract).
-      const conversionFailures = space ? conversionFailuresForSpace(space) : [];
+      const conversionFailures = conversionFailuresForFolder(curRoot);
       res.json({
-        space,
+        folder: curRoot,
         ...status,
         pending,
         pendingCount: pending.length,
         orphaned,
         orphanedCount: orphaned.length,
         visibleIndexingSettled: pending.length === 0,
-        pendingConversions: getInFlightConversions(space),
-        conversionProgress: space ? conversionProgressForSpace(space) : {},
+        pendingConversions: getInFlightConversions(curRoot),
+        conversionProgress: conversionProgressForFolder(curRoot),
         conversionFailures,
         treeVersion: getFsChangeCounter(),
-        // Surface any unresolved snapshot-import warning for the
-        // current space so the renderer can show a banner. `null` when
-        // nothing's wrong (the typical state).
-        snapshotWarning: space ? getSnapshotWarning(space) : null,
-        indexWarning: space ? getIndexWarning(space) : null,
+        indexWarning: getIndexWarning(curRoot),
       });
     } catch (err: unknown) {
       sendError(res, err);
     }
   });
 
-  // Dismiss the current space's snapshot warning. Renderer calls this
-  // when the user clicks "Dismiss" on the banner. Idempotent — a
-  // dismissed warning won't reappear unless a new import surfaces a
-  // fresh skip count.
-  app.post('/api/snapshot-warning/dismiss', (req, res) => {
-    const explicit = typeof req.body?.space === 'string' && req.body.space.trim()
-      ? req.body.space.trim()
-      : undefined;
-    if (explicit) {
-      const bad = validateSpaceRef(explicit);
-      if (bad) return res.status(400).json({ error: bad });
-    }
-    const space = explicit ?? getCurrentSpaceName();
-    if (!space) return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
-    clearSnapshotWarning(space);
-    res.json({ ok: true });
-  });
-
   app.post('/api/index-warning/dismiss', (req, res) => {
-    const explicit = typeof req.body?.space === 'string' && req.body.space.trim()
-      ? req.body.space.trim()
-      : undefined;
-    if (explicit) {
-      const bad = validateSpaceRef(explicit);
-      if (bad) return res.status(400).json({ error: bad });
+    try {
+      const explicit = parseFolderParam(req.body?.folder);
+      const { folderRoot } = requireRequestFolder(explicit);
+      clearIndexWarning(folderRoot);
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      sendError(res, err);
     }
-    const space = explicit ?? getCurrentSpaceName();
-    if (!space) return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
-    clearIndexWarning(space);
-    res.json({ ok: true });
   });
 
-  // PDF conversion status: full map, KB-wide. Used by PdfPreview to
+  // PDF conversion status: full map, library-wide. Used by PdfPreview to
   // render the per-file failure banner (cheaper than polling the
-  // space-scoped /api/index-status when the viewer just needs one
+  // folder-scoped /api/index-status when the viewer just needs one
   // PDF's status).
   app.get('/api/pdf/status', (_req, res) => {
     try {
@@ -389,7 +319,7 @@ export function mount(app: express.Express): void {
     }
   });
 
-  // Conversion Retry: take a space-relative path, clear its status
+  // Conversion Retry: take a folder-relative path, clear its status
   // record, remove the stale derived note, then re-fire the right
   // converter — pdf_extract for `.pdf`, ocr_extract for images. The
   // fire-and-forget convert path writes back to state.db with the new
@@ -397,73 +327,16 @@ export function mount(app: express.Express): void {
   app.post('/api/conversion/retry', (req, res) => {
     try {
       const rel = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
-      const targetSpace = typeof req.body?.space === 'string' && req.body.space.trim()
-        ? req.body.space.trim()
+      const targetFolder = typeof req.body?.folder === 'string' && req.body.folder.trim()
+        ? req.body.folder.trim()
         : undefined;
-      retryConversionInSpace(rel, targetSpace);
+      retryConversionInFolder(rel, targetFolder);
       res.json({ ok: true });
     } catch (err: unknown) {
       sendError(res, err);
     }
   });
 
-  // Export the current space's embeddings to a portable snapshot at
-  // `<space>/.stashbase/snapshot.parquet` (a pure {text_hash,
-  // dense_vector} cache) plus a `snapshot.meta.json` descriptor.
-  // Downstream consumers prime the cache on bind and reuse vectors
-  // during reindex (see `maybeImportSnapshot` in state.ts).
-  app.post('/api/space/export-snapshot', async (req, res) => {
-    try {
-      const { spaceName, spaceRoot: cur } = requireRequestSpace(parseSpaceParam(req.body?.space));
-      const outPath = path.join(cur, '.stashbase', 'snapshot.parquet');
-      fs.mkdirSync(path.dirname(outPath), { recursive: true });
-      const result = await getDaemon().call<SnapshotExportResult>('export_space', { space: spaceName, out_path: outPath });
-      // The Parquet holds only vectors; the human-readable descriptor
-      // (embedder identity, counts, timestamp) lives in a sibling JSON so
-      // import can validate the embedder without decoding any vectors.
-      const metaPath = path.join(cur, '.stashbase', 'snapshot.meta.json');
-      writeSnapshotMetaOrCleanup(metaPath, outPath, makeSnapshotMeta(spaceName, result));
-      log.info(
-        `snapshot export ${spaceName}: ${result.vectors} vector(s) from ${result.chunks} chunk(s) → ${result.path}`,
-      );
-      res.json({ ...result, meta: metaPath });
-    } catch (err: unknown) {
-      sendError(res, err);
-    }
-  });
-}
-
-export function makeSnapshotMeta(spaceName: string, result: SnapshotExportResult, now = new Date()): SnapshotMeta {
-  return {
-    version: result.version,
-    space: spaceName,
-    embedder: result.embedder,
-    vectors: result.vectors,
-    chunks: result.chunks,
-    exported_at: now.toISOString(),
-  };
-}
-
-export function writeSnapshotMetaOrCleanup(metaPath: string, snapshotPath: string, meta: SnapshotMeta): void {
-  try {
-    writeTextAtomic(metaPath, JSON.stringify(meta, null, 2) + '\n');
-  } catch (err) {
-    try { fs.rmSync(snapshotPath, { force: true }); } catch { /* best effort */ }
-    throw err;
-  }
-}
-
-function writeTextAtomic(file: string, content: string): void {
-  const dir = path.dirname(file);
-  fs.mkdirSync(dir, { recursive: true });
-  const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
-  try {
-    fs.writeFileSync(tmp, content, 'utf8');
-    fs.renameSync(tmp, file);
-  } catch (err) {
-    try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
-    throw err;
-  }
 }
 
 
@@ -589,6 +462,144 @@ function runRipgrep(query: string, cwd: string, opts: RipgrepOpts): Promise<Keyw
       resolve({ files, totalMatches: total, truncated });
     });
   });
+}
+
+function searchDerivedMarkdown(query: string, folderRoot: string, opts: RipgrepOpts): KeywordSearchResult {
+  const files: KeywordHitFile[] = [];
+  let total = 0;
+  let truncated = false;
+  const caseSensitive = opts.caseStrict || /[A-Z]/.test(query);
+
+  walkConvertibleSources(folderRoot, '', (rel, abs) => {
+    if (total >= RG_TOTAL_CAP) {
+      truncated = true;
+      return;
+    }
+    let text: string;
+    try { text = fs.readFileSync(derivedNoteFor(abs), 'utf8'); } catch { return; }
+    const lines = text.split(/\r?\n/);
+    const matches: KeywordMatch[] = [];
+    let fileMatches = 0;
+    lines.forEach((line, i) => {
+      if (fileMatches >= RG_PER_FILE_CAP || total >= RG_TOTAL_CAP) {
+        truncated = true;
+        return;
+      }
+      const ranges = findLiteralRanges(line, query, caseSensitive)
+        .filter(([start, end]) => !opts.wholeWord || hasWholeTokenBoundaries(line, start, end));
+      if (ranges.length === 0) return;
+      const snippet = snippetForLine(line, ranges);
+      matches.push({
+        line: i + 1,
+        text: snippet.text,
+        ranges: snippet.ranges,
+        ...(/\.pdf$/i.test(rel) ? { pdfPage: pdfPageForDerivedLine(lines, i + 1) } : {}),
+      });
+      fileMatches += ranges.length;
+      total += ranges.length;
+    });
+    if (matches.length > 0) {
+      files.push({ path: rel, matches, totalMatches: fileMatches });
+    }
+  });
+
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  return { files, totalMatches: total, truncated };
+}
+
+function walkConvertibleSources(
+  dir: string,
+  prefix: string,
+  fn: (rel: string, abs: string) => void,
+): void {
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const ent of entries) {
+    if (isCloudPlaceholderName(ent.name)) continue;
+    if (ent.name.startsWith('.')) continue;
+    if (ent.isDirectory() && isIndexExcludedDirName(ent.name)) continue;
+    if (ent.isDirectory() && ent.name.endsWith('_files')) continue;
+    const rel = prefix ? `${prefix}/${ent.name}` : ent.name;
+    const abs = path.join(dir, ent.name);
+    if (ent.isDirectory()) {
+      walkConvertibleSources(abs, rel, fn);
+    } else if (ent.isFile() && (/\.pdf$/i.test(ent.name) || isImageFile(ent.name))) {
+      fn(rel, abs);
+    }
+  }
+}
+
+function findLiteralRanges(line: string, query: string, caseSensitive: boolean): Array<[number, number]> {
+  const haystack = caseSensitive ? line : line.toLocaleLowerCase();
+  const needle = caseSensitive ? query : query.toLocaleLowerCase();
+  const ranges: Array<[number, number]> = [];
+  let offset = 0;
+  while (needle) {
+    const idx = haystack.indexOf(needle, offset);
+    if (idx < 0) break;
+    ranges.push([idx, idx + needle.length]);
+    offset = idx + Math.max(needle.length, 1);
+  }
+  return ranges;
+}
+
+function snippetForLine(line: string, matchRanges: Array<[number, number]>): { text: string; ranges: Array<[number, number]> } {
+  let windowStart = 0;
+  if (line.length > RG_MAX_LINE_CHARS && matchRanges.length > 0) {
+    const firstStart = matchRanges[0]?.[0] ?? 0;
+    windowStart = Math.max(0, Math.min(
+      line.length - RG_MAX_LINE_CHARS,
+      firstStart - Math.floor(RG_MAX_LINE_CHARS / 3),
+    ));
+  }
+  const windowEnd = Math.min(line.length, windowStart + RG_MAX_LINE_CHARS);
+  const leading = windowStart > 0 ? '…' : '';
+  const trailing = windowEnd < line.length ? '…' : '';
+  const text = leading + line.slice(windowStart, windowEnd) + trailing;
+  const ranges: Array<[number, number]> = [];
+  for (const [start, end] of matchRanges) {
+    const localStart = start - windowStart + leading.length;
+    const localEnd = end - windowStart + leading.length;
+    if (localEnd <= leading.length) continue;
+    if (localStart >= text.length - trailing.length) continue;
+    ranges.push([
+      Math.max(leading.length, localStart),
+      Math.min(text.length - trailing.length, localEnd),
+    ]);
+  }
+  return { text, ranges };
+}
+
+function pdfPageForDerivedLine(lines: string[], lineNumber: number): number | undefined {
+  let page: number | undefined;
+  for (let i = 0; i < Math.min(lines.length, lineNumber); i++) {
+    const line = lines[i] ?? '';
+    const marker = line.match(/stashbase-pdf-pages?:\s*(\d+)(?:\s*-\s*(\d+))?/i);
+    const pageHeading = line.match(/^#{1,6}\s+Page\s+(\d+)\b/i);
+    const next = marker ? Number(marker[1]) : pageHeading ? Number(pageHeading[1]) : NaN;
+    if (Number.isFinite(next) && next > 0) page = next;
+  }
+  return page;
+}
+
+function mergeKeywordResults(a: KeywordSearchResult, b: KeywordSearchResult): KeywordSearchResult {
+  const byPath = new Map<string, KeywordHitFile>();
+  for (const file of [...a.files, ...b.files]) {
+    const existing = byPath.get(file.path);
+    if (!existing) {
+      byPath.set(file.path, { ...file, matches: [...file.matches] });
+      continue;
+    }
+    existing.matches.push(...file.matches);
+    existing.matches.sort((x, y) => x.line - y.line);
+    existing.totalMatches += file.totalMatches;
+  }
+  const files = [...byPath.values()].sort((x, y) => x.path.localeCompare(y.path));
+  return {
+    files,
+    totalMatches: files.reduce((sum, file) => sum + file.totalMatches, 0),
+    truncated: a.truncated || b.truncated,
+  };
 }
 
 function normalizeRipgrepSubmatches(line: string, subs: unknown[]): Array<[number, number]> {

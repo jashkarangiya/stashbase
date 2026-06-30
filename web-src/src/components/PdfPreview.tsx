@@ -13,7 +13,7 @@ import {
 import PdfWorker from '../lib/pdfWorker?worker';
 import { api, assetUrl, errorMessage } from '../api';
 import { useApp } from '../store/AppContext';
-import { isVisibleStashing } from '../store/state';
+import { getFileReadiness } from '../store/fileReadiness';
 
 // Polyfill the main-thread scope too — render() calls getOrInsertComputed
 // synchronously before it ever talks to the worker.
@@ -53,7 +53,7 @@ const PDF_MAX_SCALE = 3;
  *      the chunk text so the PDF jumps to the same passage.
  */
 /** Fold the unicode variants pdfjs emits (curly quotes, en/em dashes,
- *  thin / zero-width spaces) to ASCII so a needle built from chunk text
+ *  thin / zero-width folders) to ASCII so a needle built from chunk text
  *  or a find query matches the page's flattened string. */
 function foldPdfText(s: string): string {
   return s
@@ -203,7 +203,7 @@ function findPdfChunkMatch(fp: FlatPage, raw: string): { idx: number; length: nu
     if (idx !== undefined) return { idx, length: anchor.length, score: 800 + anchor.length };
   }
 
-  // Fuzzy fallback: short compact anchors survive OCR-added spaces,
+  // Fuzzy fallback: short compact anchors survive OCR-added folders,
   // heading markers, and small reflow differences. Use the earliest
   // matching anchor on the highest-scoring page.
   const anchors = compactAnchors(raw, 18, 8);
@@ -301,8 +301,8 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
   const activeTab = state.tabs.find((t) => t.id === state.activeTabId) ?? null;
   const pendingHighlight = activeTab?.pendingHighlight ?? null;
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const currentRef = useRef({ space: state.space, name });
-  currentRef.current = { space: state.space, name };
+  const currentRef = useRef({ folderPath: state.folderPath, name });
+  currentRef.current = { folderPath: state.folderPath, name };
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [numPages, setNumPages] = useState(0);
   const [scale, setScale] = useState(1);
@@ -312,11 +312,11 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
   const [retryStarted, setRetryStarted] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [pageHighlight, setPageHighlight] = useState<PdfPageHighlight | null>(null);
-  const failure = state.conversionFailures.find((f) => f.path === name);
+  const readiness = getFileReadiness(state, name);
+  const failure = readiness.conversionFailure;
   const failureMessage = failure ? pdfConversionFailureMessage(failure.lastError) : '';
   const conversionProgress = state.conversionProgress[name];
-  const notSearchableYet = !failure
-    && isVisibleStashing(state, name);
+  const notSearchableYet = !failure && readiness.isStashing;
   const notSearchableDetail = pdfNotSearchableDetail(conversionProgress, numPages);
   const chromeStatus = failure && showConversionBanner
     ? {
@@ -578,12 +578,12 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
   async function onRetry() {
     setRetryBusy(true);
     setRetryError(null);
-    const spaceAtStart = state.space;
+    const folderPathAtStart = state.folderPath;
     const nameAtStart = name;
     const stillCurrent = () =>
-      currentRef.current.space === spaceAtStart && currentRef.current.name === nameAtStart;
+      currentRef.current.folderPath === folderPathAtStart && currentRef.current.name === nameAtStart;
     try {
-      await api.retryConversion(name, { space: spaceAtStart || undefined });
+      await api.retryConversion(name, { folder: folderPathAtStart || undefined });
       if (!stillCurrent()) return;
       setRetryStarted(true);
     } catch (err: unknown) {
@@ -653,7 +653,7 @@ function pdfNotSearchableDetail(
 /** Render the PDF chrome (zoom controls + page count) into the
  *  `#pdf-chrome-slot` MainPane mounts at the top-right of the
  *  breadcrumb row — replaces the old "second toolbar row" so the
- *  viewer doesn't waste vertical space on what's effectively chrome.
+ *  viewer doesn't waste vertical folder on what's effectively chrome.
  *  Falls back to inline rendering if MainPane hasn't mounted yet
  *  (initial render race). */
 function PdfChromePortal({

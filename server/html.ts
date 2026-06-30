@@ -438,7 +438,7 @@ document.addEventListener('click', function(e) {
   try {
     var url = new URL(raw, document.baseURI);
     // Same-origin /asset/ links to .md / .html files = cross-file
-    // navigation inside the space. Hand off to the parent so the
+    // navigation inside the folder. Hand off to the parent so the
     // back/forward stack records the jump.
     if (url.origin === location.origin && url.pathname.indexOf('/asset/') === 0) {
       var encoded = url.pathname.slice('/asset/'.length);

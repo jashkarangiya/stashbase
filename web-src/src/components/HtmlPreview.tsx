@@ -7,7 +7,7 @@ import { isTrustedFrameSource } from '../lib/previewMessages';
 /**
  * Read-only HTML preview. Loads via `/asset/*` so the iframe's base
  * resolves relative references in the page (`<img src="X_files/foo.png">`)
- * to the sibling files inside the space dir.
+ * to the sibling files inside the folder dir.
  *
  * Sandbox = `allow-scripts allow-same-origin` — `allow-scripts` lets
  * inline scripts run (Wikipedia snapshots, arxiv reports, self-contained

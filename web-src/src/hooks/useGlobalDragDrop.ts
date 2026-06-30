@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { FILE_MIME } from '../dragMime';
+import { acceptsKnowledgeBaseDrop } from '../dragRouting';
 import { useApp } from '../store/AppContext';
 
 /**
@@ -7,7 +8,7 @@ import { useApp } from '../store/AppContext';
  *
  *  - Veil overlay shows the moment a file drag enters the window
  *    (`dataTransfer.types` includes "Files").
- *  - The folder row / SPACE header under the cursor gets a
+ *  - The folder row / FOLDER header under the cursor gets a
  *    `.drop-target` highlight while dragover fires. We compute it from
  *    `e.target.closest(...)` each event because React's drag events on
  *    individual rows fight us if a row scrolls in/out mid-drag.
@@ -46,14 +47,14 @@ export function useGlobalDragDrop(): boolean {
       clearDropHighlights();
     }
     // The chat panel (AgentView) manages its own file drops — files
-    // dropped there are transient context, NOT KB imports. So the global
-    // coordinator (which imports into the space) sits out over that
+    // dropped there are transient context, NOT library imports. So the global
+    // coordinator (which imports into the folder) sits out over that
     // region: no veil, no folder-highlight, no upload.
     function inChatPanel(e: DragEvent): boolean {
       return e.target instanceof Element && !!e.target.closest('.agent-view');
     }
     function onDragEnter(e: DragEvent) {
-      if (!e.dataTransfer?.types.includes('Files')) return;
+      if (!e.dataTransfer || !acceptsKnowledgeBaseDrop(e.dataTransfer)) return;
       if (inChatPanel(e)) return;
       dragDepth.current += 1;
       hotRef.current = true;
@@ -75,6 +76,7 @@ export function useGlobalDragDrop(): boolean {
     }
     function onDragOver(e: DragEvent) {
       if (inChatPanel(e)) { hideVeil(); return; } // panel handles its own dragover
+      if (e.dataTransfer && !acceptsKnowledgeBaseDrop(e.dataTransfer)) return;
       e.preventDefault();
       const tgt = e.target instanceof Element ? e.target : null;
       const folderEl = tgt?.closest('.tree-row.folder') as HTMLElement | null;

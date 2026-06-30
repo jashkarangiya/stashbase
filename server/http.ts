@@ -1,6 +1,6 @@
 /**
  * HTTP-layer helpers used by every route module: error envelope,
- * space-open gate, OpenAI-key validator, and the OS file-manager
+ * folder-open gate, OpenAI-key validator, and the OS file-manager
  * spawn (used by the reveal route).
  *
  * Kept separate from the route files so they can be imported without
@@ -10,21 +10,21 @@ import express from 'express';
 import childProcess from 'node:child_process';
 import path from 'node:path';
 import { logger, errorMessage, errorCode } from './log.ts';
-import { getCurrentSpace, runWithWindowId, WINDOW_ID_HEADER } from './space.ts';
+import { getCurrentFolder, runWithWindowId, WINDOW_ID_HEADER } from './folder.ts';
 
 const log = logger('http');
 
 /** Standard error envelope: `{ error: string, code?: string }` with an
- *  HTTP status code chosen by the situation. `NO_SPACE` translates a
- *  thrown `requireCurrentSpace` failure from the files layer into the
+ *  HTTP status code chosen by the situation. `NO_FOLDER` translates a
+ *  thrown `requireCurrentFolder` failure from the files layer into the
  *  conventional 412 the client expects. */
 export function sendError(res: express.Response, err: unknown): void {
-  if (errorCode(err) === 'NO_SPACE') {
-    res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
+  if (errorCode(err) === 'NO_FOLDER') {
+    res.status(412).json({ error: 'no folder open', code: 'NO_FOLDER' });
     return;
   }
-  if (errorCode(err) === 'SPACE_NOT_FOUND') {
-    res.status(404).json({ error: 'space not found', code: 'SPACE_NOT_FOUND' });
+  if (errorCode(err) === 'FOLDER_NOT_FOUND') {
+    res.status(404).json({ error: 'folder not found', code: 'FOLDER_NOT_FOUND' });
     return;
   }
   if (errorCode(err) === 'FILE_CHANGED') {
@@ -44,13 +44,13 @@ export function sendError(res: express.Response, err: unknown): void {
   res.status(500).json({ error: errorMessage(err) });
 }
 
-/** Express middleware: 412 when no space is currently open. Mounted on
+/** Express middleware: 412 when no folder is currently open. Mounted on
  *  the path prefixes (/api/files, /api/folders, /api/search, …) that
- *  rely on `getCurrentSpace()` returning a value. Routes that work
- *  before a space is open (welcome screen) stay outside the prefix. */
-export const requireSpace: express.RequestHandler = (_req, res, next) => {
-  if (!getCurrentSpace()) {
-    return res.status(412).json({ error: 'no space open', code: 'NO_SPACE' });
+ *  rely on `getCurrentFolder()` returning a value. Routes that work
+ *  before a folder is open (welcome screen) stay outside the prefix. */
+export const requireFolder: express.RequestHandler = (_req, res, next) => {
+  if (!getCurrentFolder()) {
+    return res.status(412).json({ error: 'no folder open', code: 'NO_FOLDER' });
   }
   next();
 };

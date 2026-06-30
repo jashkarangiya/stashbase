@@ -44,7 +44,7 @@ export function ClipboardImportModal({
     <ModalShell onCancel={onClose}>
       <h2 className="modal-title">Add image to StashBase?</h2>
       <p className="modal-hint">
-        There's an image on your clipboard. Add it to this space — its text
+        There's an image on your clipboard. Add it to this folder — its text
         gets extracted so you can search it later.
       </p>
       <div className="clipboard-offer-preview">

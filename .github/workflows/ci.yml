@@ -29,8 +29,5 @@ jobs:
       - name: Typecheck renderer (web-src)
         run: pnpm exec tsc --noEmit -p web-src/tsconfig.json
 
-      - name: Import folder tests
-        run: pnpm test:import-folder
-
       - name: Build web + server
         run: pnpm build

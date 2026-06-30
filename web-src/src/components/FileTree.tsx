@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent } from 'react';
-import { ChevronDownIcon, ClaudeIcon, CodexIcon, StashBaseIcon } from '../icons';
+import { ChevronDownIcon, ClaudeIcon, CodexIcon } from '../icons';
 import type { FileMeta, FolderMeta } from '../api';
 import { FILE_MIME, FOLDER_MIME } from '../dragMime';
 import { useApp } from '../store/AppContext';
-import { isVisibleIndexPending } from '../store/state';
+import { getFileReadiness } from '../store/fileReadiness';
 import { RenameInput, useRenameTarget } from './RenameInput';
 
 /** Where in a row the cursor is during dragover — drives the drop
@@ -107,7 +107,7 @@ function buildTree(
 }
 
 /** Split a path into `parent` and `basename`. Parent is `""` for
- *  space-root entries. Used by drag-to-reorder to verify same-parent
+ *  folder-root entries. Used by drag-to-reorder to verify same-parent
  *  before accepting a drop. */
 function splitParent(p: string): { parent: string; base: string } {
   const i = p.lastIndexOf('/');
@@ -126,19 +126,6 @@ function reorder(
   const without = names.filter((n) => n !== dragName);
   const dropIdx = without.indexOf(dropName);
   if (dropIdx < 0) return names; // dropName not in current list — bail
-  const insertAt = edge === 'above' ? dropIdx : dropIdx + 1;
-  return [...without.slice(0, insertAt), dragName, ...without.slice(insertAt)];
-}
-
-function insertIntoOrder(
-  names: string[],
-  dragName: string,
-  dropName: string,
-  edge: 'above' | 'below',
-): string[] {
-  const without = names.filter((n) => n !== dragName);
-  const dropIdx = without.indexOf(dropName);
-  if (dropIdx < 0) return names;
   const insertAt = edge === 'above' ? dropIdx : dropIdx + 1;
   return [...without.slice(0, insertAt), dragName, ...without.slice(insertAt)];
 }
@@ -304,7 +291,7 @@ function FolderRow({
       void (async () => {
         const moved = await actions.moveFile(filePath, parent);
         if (!moved) return;
-        const next = insertIntoOrder(siblings, dragSourceName!, node.name, slot);
+        const next = reorder(siblings, dragSourceName!, node.name, slot);
         await actions.setFolderOrder(parent, next);
       })();
       return;
@@ -373,42 +360,32 @@ function FileRow({
 }) {
   const { state, actions, dispatch } = useApp();
   const isActive = state.selectedPath === path;
-  const isPending = isVisibleIndexPending(state, path);
-  const isConverting = state.pendingConversions.includes(path);
-  const isTemporarilyUnsearchable = isPending || isConverting;
-  const conversionFailure = state.conversionFailures.find((f) => conversionFailureMatchesTarget(f.path, path));
+  const readiness = getFileReadiness(state, path);
   const renaming = useRenameTarget(path, 'file');
   const [dropEdge, setDropEdge] = useState<DropEdge>(null);
 
   const basename = path.split('/').pop() ?? path;
-  // Named files get their own glyph instead of the format icon:
-  //   • Agent rules-books are tagged by their owner's logo —
-  //     STASHBASE.md → StashBase, CLAUDE.md → Claude, AGENTS.md → Codex.
-  // Only STASHBASE.md is a "meta file" (muted, system row via
-  // `.meta-file`); CLAUDE.md / AGENTS.md are ordinary notes that merely
-  // borrow a brand logo, so they keep normal row styling.
+  // Named agent rules-books are tagged by their owner's logo —
+  // CLAUDE.md → Claude, AGENTS.md → Codex. They are ordinary notes that
+  // merely borrow a brand logo, so they keep normal row styling.
   const metaIcon =
-    basename === 'STASHBASE.md' ? <StashBaseIcon />
-    : basename === 'CLAUDE.md' ? <ClaudeIcon />
+    basename === 'CLAUDE.md' ? <ClaudeIcon />
     : basename === 'AGENTS.md' ? <CodexIcon />
     : null;
 
-  const isMetaFile = basename === 'STASHBASE.md';
-
   const rowClass =
     `tree-row file format-${format}` +
-    (isMetaFile ? ' meta-file' : '') +
     (isActive ? ' active' : '') +
-    (isPending ? ' not-indexed' : '') +
-    (isTemporarilyUnsearchable ? ' temporarily-unsearchable' : '') +
-    (conversionFailure ? ' conversion-failed' : '') +
+    (readiness.isIndexPending ? ' not-indexed' : '') +
+    (readiness.isTemporarilyUnsearchable ? ' temporarily-unsearchable' : '') +
+    (readiness.conversionFailure ? ' conversion-failed' : '') +
     (dropEdge === 'above' ? ' drop-edge-above' : '') +
     (dropEdge === 'below' ? ' drop-edge-below' : '');
 
   const display = displayName(basename);
-  const title = conversionFailure
+  const title = readiness.conversionFailure
     ? `Text extraction failed; this file is not searchable. ${path}`
-    : isTemporarilyUnsearchable
+    : readiness.isTemporarilyUnsearchable
       ? `Not searchable yet; StashBase is still processing this file. ${path}`
         : path;
   // Protect the extension during inline rename for every recognised
@@ -480,7 +457,7 @@ function FileRow({
       void (async () => {
         const moved = await actions.moveFile(filePath, parent);
         if (!moved) return;
-        const next = insertIntoOrder(siblings, dragSourceName!, basename, slot);
+        const next = reorder(siblings, dragSourceName!, basename, slot);
         await actions.setFolderOrder(parent, next);
       })();
       return;
@@ -546,7 +523,7 @@ function FileRow({
       ) : (
         <span className="label">{display}</span>
       )}
-      {conversionFailure ? (
+      {readiness.conversionFailure ? (
         <span
           className="conversion-status-icon conversion-failure-icon"
           aria-label="Text extraction failed"
@@ -557,14 +534,6 @@ function FileRow({
       ) : null}
     </div>
   );
-}
-
-function conversionFailureMatchesTarget(failurePath: string, target: string): boolean {
-  if (failurePath === target) return true;
-  const slash = target.lastIndexOf('/');
-  const dir = slash >= 0 ? target.slice(0, slash + 1) : '';
-  const base = slash >= 0 ? target.slice(slash + 1) : target;
-  return failurePath === `${dir}.${base}.md`;
 }
 
 function WarningGlyph() {

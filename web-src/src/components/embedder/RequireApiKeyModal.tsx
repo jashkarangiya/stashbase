@@ -1,11 +1,11 @@
 /**
- * Auto-pops on space open when no OpenAI key is on file. V1 is
+ * Auto-pops on folder open when no OpenAI key is on file. V1 is
  * OpenAI-only, so without a key embedding/index updates and semantic
  * search are disabled. Two
  * exits:
  *   • Save key — validates + persists via `/api/embedder/key`, daemon
  *     hot-swap, modal closes.
- *   • Later — dismiss; modal will re-pop next time the space opens.
+ *   • Later — dismiss; modal will re-pop next time the folder opens.
  * We deliberately don't show a plain "Cancel" — "Later" is the soft
  * escape.
  */

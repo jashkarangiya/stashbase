@@ -20,14 +20,19 @@ import { FILE_MIME } from '../dragMime';
 import { useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react';
 
 interface ElectronBridge {
-  openSpaceWindow?: (name: string) => Promise<boolean>;
+  openFolderDialog?: (opts?: {
+    title?: string;
+    buttonLabel?: string;
+    defaultPath?: string;
+    allowCreateDirectory?: boolean;
+  }) => Promise<string | null>;
+  openFolderWindow?: (folder: string) => Promise<boolean>;
 }
 
 /**
  * Left rail composition. The activity bar (narrow icon column on the
  * far left) toggles between two mutually-exclusive side panels:
- *   - Files   → a KNOWLEDGE BASE section (KB-root STASHBASE.md), then
- *               the SnapshotWarning, the SPACE header, and the file tree
+ *   - Files   → the index warning, the FOLDER header, and the file tree
  *   - Search  → search input + ≈/= toggle + result list (see
  *               `SearchPanel.tsx`)
  *
@@ -46,41 +51,10 @@ export function Sidebar() {
   );
 }
 
-/** KB-root governance file pinned at the top of the Files panel —
- *  STASHBASE.md (the rules book). KB-scope (the same in every window /
- *  space), so it sits above the per-space tree as a scope label, not
- *  inside it. Per-space STASHBASE.md files live in the tree below, where
- *  they physically are. */
-function KbSection() {
-  const { state, actions } = useApp();
-  const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
-  const activeKbName = activeTab?.file?.kind === 'kb' ? activeTab.file.name : null;
-
-  return (
-    <>
-      <div className="panel-section-head">
-        <span className="panel-section-title">Knowledge base</span>
-      </div>
-      <div className="kb-file-list">
-        <button
-          type="button"
-          className={'kb-file-row' + (activeKbName === 'STASHBASE.md' ? ' selected' : '')}
-          onClick={() => { void actions.openKbRules(); }}
-          title="KB-level maintenance rules (STASHBASE.md)"
-        >
-          <span className="kb-file-icon"><StashBaseIcon /></span>
-          <span className="kb-file-label">STASHBASE.md</span>
-        </button>
-      </div>
-    </>
-  );
-}
-
 /** The current sidebar content minus the search input — owns the
- *  KNOWLEDGE BASE section, the snapshot-warning banner, a VSCode-style
- *  two-tier SPACE header (a "SPACE" section row with the space-actions ⋯
- *  above the folder row: current space name + the 4 file-action
- *  buttons), and the file tree. */
+ *  index-warning banner, a VSCode-style two-tier FOLDER header (a
+ *  "FOLDER" section row with the folder-actions ⋯ above the folder row:
+ *  current folder name + the 4 file-action buttons), and the file tree. */
 function FilesPanel() {
   const { state, actions, dispatch } = useApp();
   const [sideHeadDrop, setSideHeadDrop] = useState(false);
@@ -108,21 +82,19 @@ function FilesPanel() {
 
   return (
     <div className="files-panel" id="sidebar-panel-files" role="tabpanel">
-      <KbSection />
-      <SnapshotWarningBanner />
       <IndexWarningBanner />
-      {/* VSCode-style two-tier header: a section-title row ("SPACE" +
-          space-actions ⋯, mirroring EXPLORER) above the folder row
-          (current space name + file actions). */}
-      <div className="panel-section-head space-section-head">
-        <span className="panel-section-title">SPACE</span>
-        {/* Stashing status sits left, right after the SPACE label — and
+      {/* VSCode-style two-tier header: a section-title row ("FOLDER" +
+          folder-actions ⋯, mirroring EXPLORER) above the folder row
+          (current folder name + file actions). */}
+      <div className="panel-section-head folder-section-head">
+        <span className="panel-section-title">FOLDER</span>
+        {/* Stashing status sits left, right after the FOLDER label — and
             OUTSIDE .side-actions (which is hover-reveal-only) so the count
             stays visible at all times. The ⋯ actions are pushed to the
             right edge via `margin-left:auto`. */}
         <StashingIndicator />
         <div className="side-actions">
-          <SpaceMenu />
+          <FolderMenu />
         </div>
       </div>
       <div
@@ -136,33 +108,33 @@ function FilesPanel() {
         onDragLeave={onSideHeadDragLeave}
         onDrop={onSideHeadDrop}
       >
-        <span className={'space-title' + (state.spaceCollapsed ? ' collapsed' : '')}>
-          {/* Chevron alone toggles whole-space fold. Clicking the
-              label selects "space root" so the next new-note / +folder
+        <span className={'folder-title' + (state.folderCollapsed ? ' collapsed' : '')}>
+          {/* Chevron alone toggles whole-folder fold. Clicking the
+              label selects "folder root" so the next new-note / +folder
               lands at the top level — mirrors VSCode where the
               workspace header is itself a selectable container. */}
           <span
-            className="space-chev"
+            className="folder-chev"
             onClick={(e) => {
               e.stopPropagation();
-              dispatch({ type: 'SPACE_FOLD_TOGGLE' });
+              dispatch({ type: 'FOLDER_FOLD_TOGGLE' });
             }}
           ><ChevronDownIcon /></span>
           <span
             className="folder-label"
-            title={state.space || 'notes'}
+            title={state.folder || 'notes'}
             onClick={(e) => {
               e.stopPropagation();
               dispatch({ type: 'ACTIVE_FOLDER', path: '' });
             }}
-          >{(state.space || 'notes').toUpperCase()}</span>
+          >{(state.folder || 'notes').toUpperCase()}</span>
         </span>
         <div className="side-actions">
           <NewNoteButton />
           <button
             className="icon-btn"
             type="button"
-            title={'New folder in ' + (state.activeFolder || (state.space || 'space root'))}
+            title={'New folder in ' + (state.activeFolder || (state.folder || 'folder root'))}
             onClick={() => {
               // Make sure the target parent is expanded so the inline
               // input appears in view; FileTree mounts it there.
@@ -176,20 +148,20 @@ function FilesPanel() {
           <FolderFoldToggle />
         </div>
       </div>
-      <div className={'file-list' + (state.spaceCollapsed ? ' collapsed' : '')}>
+      <div className={'file-list' + (state.folderCollapsed ? ' collapsed' : '')}>
         <FileTree />
       </div>
     </div>
   );
 }
 
-/** "N stashing" pill in the SPACE header (left of the ⋯ actions). A
+/** "N stashing" pill in the FOLDER header (left of the ⋯ actions). A
  *  file is *stashing* while the server is still turning it into
  *  searchable content — BOTH the slow conversion phase (PDF/image OCR,
  *  recording analysis) and the indexing/embedding phase that every
  *  dropped file goes through. `stashingPaths` unions the two so a folder
  *  drop of plain markdown gets a count too, not just PDFs. Counts the
- *  active space only. Clicking opens a Chrome-downloads-style list of
+ *  active folder only. Clicking opens a Chrome-downloads-style list of
  *  what's in flight. The logo is a placeholder for the eventual animated
  *  "stashing" mark. */
 function StashingIndicator() {
@@ -286,15 +258,15 @@ function StashingList({
   );
 }
 
-function SpaceMenu() {
+function FolderMenu() {
   const { state, actions } = useApp();
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
-  const [modal, setModal] = useState<null | { kind: 'new' | 'rename' | 'switch'; name: string }>(null);
-  const [spaces, setSpaces] = useState<string[]>([]);
+  const [switchOpen, setSwitchOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const current = state.space || '';
+  const current = state.folder || '';
+  const currentPath = state.folderPath || '';
 
   function toggle() {
     if (anchor) { setAnchor(null); return; }
@@ -302,117 +274,61 @@ function SpaceMenu() {
     if (r) setAnchor(r);
   }
 
-  async function loadSpaces() {
-    try {
-      const r = await api.listAvailableSpaces();
-      setSpaces(r.names);
-    } catch (err) {
-      setError(errorMessage(err));
-    }
-  }
-
-  function openModal(kind: 'new' | 'rename' | 'switch') {
+  function openSwitchModal() {
     setError(null);
     setAnchor(null);
-    if (kind === 'switch') void loadSpaces();
-    setModal({ kind, name: kind === 'rename' ? current : '' });
+    setSwitchOpen(true);
   }
 
-  async function submitName() {
-    if (!modal) return;
-    const name = modal.name.trim();
-    if (!name) { setError('Name required'); return; }
+  async function switchTo(path: string) {
     setBusy(true);
     setError(null);
-    const prevSpaces = spaces;
     try {
-      if (modal.kind === 'new') {
-        setSpaces((currentSpaces) => currentSpaces.includes(name) ? currentSpaces : [...currentSpaces, name].sort());
-        await actions.openSpaceByName(name, { create: true, exclusiveCreate: true });
-      } else if (modal.kind === 'rename') {
-        setSpaces((currentSpaces) => currentSpaces.map((v) => (v === current ? name : v)).sort());
-        await api.renameSpace(current, name);
-        await actions.openSpaceByName(name);
-      } else {
-        await actions.openSpaceByName(name);
-      }
-      setModal(null);
-    } catch (err) {
-      setSpaces(prevSpaces);
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function switchTo(name: string) {
-    setBusy(true);
-    setError(null);
-    setModal({ kind: 'switch', name });
-    try {
-      await actions.openSpaceByName(name);
-      setModal(null);
+      await actions.openFolder(path);
+      setSwitchOpen(false);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function deleteCurrent() {
-    if (!current) return;
-    const ok = await actions.confirm(`Delete space "${current}" and everything inside it?`);
-    if (!ok) return;
-    const prevSpaces = spaces;
-    setSpaces((currentSpaces) => currentSpaces.filter((name) => name !== current));
-    if (!(await actions.goHome())) {
-      setSpaces(prevSpaces);
-      return;
-    }
-    try {
-      await api.deleteSpace(current);
-    } catch (err) {
-      setSpaces(prevSpaces);
-      try { await actions.openSpaceByName(current); } catch { /* original delete error is what matters */ }
-      await actions.alert('Delete failed: ' + errorMessage(err));
     }
   }
 
   async function openCurrentInNewWindow() {
-    if (!current) return;
+    if (!currentPath) return;
     const bridge = (window as { electron?: ElectronBridge }).electron;
-    const ok = await bridge?.openSpaceWindow?.(current);
+    const ok = await bridge?.openFolderWindow?.(currentPath);
     if (!ok) await actions.alert('New window is only available in the desktop app.');
   }
 
-  // Bake the space's embeddings into `.stashbase/snapshot.parquet` plus
-  // `snapshot.meta.json` so the folder carries reusable vectors when
-  // copied / git-cloned (the other end validates the embedder and reuses
-  // them by text_hash instead of re-embedding).
-  async function exportSnapshot() {
-    if (!current) return;
+  async function newFolderFromPicker() {
+    setAnchor(null);
+    const bridge = (window as { electron?: ElectronBridge }).electron;
+    if (typeof bridge?.openFolderDialog !== 'function') {
+      await actions.alert('New folder is only available in the desktop app.');
+      return;
+    }
     setBusy(true);
+    setError(null);
     try {
-      const r = await api.exportSnapshot(current);
-      actions.toast(
-        `Embedding snapshot baked — ${r.vectors} vector(s) from ${r.chunks} chunk(s) into ${current}/.stashbase/.`,
-        { level: 'success' },
-      );
+      const { path } = await api.getFolderHome();
+      const picked = await bridge.openFolderDialog({
+        title: 'New folder',
+        buttonLabel: 'Open',
+        defaultPath: path,
+        allowCreateDirectory: true,
+      });
+      if (picked) await actions.openFolder(picked);
     } catch (err) {
-      actions.toast('Snapshot export failed: ' + errorMessage(err), { level: 'error' });
+      await actions.alert('New folder failed: ' + errorMessage(err));
     } finally {
       setBusy(false);
     }
   }
 
   const items: MenuItem[] = [
-    { label: 'Switch space', onSelect: () => openModal('switch') },
+    { label: 'Switch folder', onSelect: openSwitchModal },
     { label: 'Open in new window', disabled: !current, onSelect: () => { void openCurrentInNewWindow(); } },
-    { label: 'New space', onSelect: () => openModal('new') },
-    { label: 'Rename space', disabled: !current, onSelect: () => openModal('rename') },
-    { label: 'Export embedding snapshot', detail: 'Bake reusable vectors into .stashbase/', disabled: !current, onSelect: () => { void exportSnapshot(); } },
-    { separator: true },
-    { label: 'Delete space', danger: true, disabled: !current, onSelect: () => { void deleteCurrent(); } },
+    { label: 'New folder', onSelect: () => { void newFolderFromPicker(); } },
   ];
 
   return (
@@ -421,57 +337,38 @@ function SpaceMenu() {
         ref={buttonRef}
         className="icon-btn"
         type="button"
-        title="Space actions"
+        title="Folder actions"
         onClick={toggle}
       >⋯</button>
       {anchor && <Menu anchor={{ rect: anchor }} items={items} onClose={() => setAnchor(null)} />}
-      {modal && (
-        <ModalShell top onCancel={busy ? () => {} : () => setModal(null)}>
-          <h3>{modal.kind === 'new' ? 'New space' : modal.kind === 'rename' ? 'Rename space' : 'Switch space'}</h3>
-          {modal.kind === 'switch' ? (
-            spaces.length === 0 ? (
-              <p className="modal-hint">No spaces found.</p>
-            ) : (
-              <div className="welcome-open-list">
-                {spaces.map((name) => (
+      {switchOpen && (
+        <ModalShell top onCancel={busy ? () => {} : () => setSwitchOpen(false)}>
+          <h3>Switch folder</h3>
+          {state.recent.length === 0 ? (
+            <p className="modal-hint">No folders found.</p>
+          ) : (
+            <div className="welcome-open-list">
+              {state.recent.map((folder) => {
+                const name = folder.path.split('/').filter(Boolean).pop() || folder.path;
+                const isCurrent = folder.path === current || name === current;
+                return (
                   <button
-                    key={name}
+                    key={folder.path}
                     type="button"
                     className="welcome-open-row"
-                    disabled={busy || name === current}
-                    onClick={() => { void switchTo(name); }}
+                    disabled={busy || isCurrent}
+                    onClick={() => { void switchTo(folder.path); }}
                   >
                     <FolderIcon className="welcome-open-row-icon" />
                     <span className="welcome-open-row-name">{name}</span>
                   </button>
-                ))}
-              </div>
-            )
-          ) : (
-            <input
-              type="text"
-              className="modal-input"
-              autoFocus
-              onFocus={(e) => e.currentTarget.select()}
-              spellCheck={false}
-              value={modal.name}
-              disabled={busy}
-              onChange={(e) => setModal({ ...modal, name: e.target.value })}
-              onKeyDown={(e) => {
-                if (e.nativeEvent.isComposing) return;
-                if (e.key === 'Enter') { e.preventDefault(); void submitName(); }
-                if (e.key === 'Escape' && !busy) { e.preventDefault(); setModal(null); }
-              }}
-            />
+                );
+              })}
+            </div>
           )}
           {error && <div className="modal-error">{error}</div>}
           <div className="modal-actions">
-            <button type="button" className="modal-btn" onClick={() => setModal(null)} disabled={busy}>Cancel</button>
-            {modal.kind !== 'switch' && (
-              <button type="button" className="modal-btn primary" onClick={() => { void submitName(); }} disabled={busy || !modal.name.trim()}>
-                {busy ? 'Saving…' : modal.kind === 'new' ? 'Create' : 'Rename'}
-              </button>
-            )}
+            <button type="button" className="modal-btn" onClick={() => setSwitchOpen(false)} disabled={busy}>Cancel</button>
           </div>
         </ModalShell>
       )}
@@ -484,7 +381,7 @@ function SpaceMenu() {
  *  away, so there's no format picker — one click, one .md draft. */
 function NewNoteButton() {
   const { state, actions } = useApp();
-  const target = state.activeFolder || state.space || 'space root';
+  const target = state.activeFolder || state.folder || 'folder root';
 
   return (
     <button
@@ -496,63 +393,29 @@ function NewNoteButton() {
   );
 }
 
-/** One-time banner shown above the file tree when the active space's
- *  most recent snapshot import skipped chunks because their provider
- *  key didn't match the knowledge base's current embedder. Most users will
- *  see this exactly once (after cloning a starter space whose snapshot
- *  was exported with a different embedder). The banner offers a quick
- *  link to the embedder settings + a dismiss button. */
-function SnapshotWarningBanner() {
-  const { state, actions } = useApp();
-  const w = state.snapshotWarning;
-  if (!w) return null;
-  const detail = w.details
-    .map((d) => `${d.chunks} from ${d.provider}`)
-    .join(', ');
-  return (
-    <div className="snapshot-warning">
-      <div className="snapshot-warning-body">
-        <div className="snapshot-warning-title">
-          Snapshot partly imported
-        </div>
-        <div className="snapshot-warning-msg">
-          Skipped {w.skipped} chunk{w.skipped === 1 ? '' : 's'} ({detail}).
-          Switch the knowledge base's embedder to match — or re-export the snapshot.
-        </div>
-      </div>
-      <button
-        type="button"
-        className="snapshot-warning-dismiss"
-        title="Dismiss"
-        onClick={() => { void actions.dismissSnapshotWarning(); }}
-      >×</button>
-    </div>
-  );
-}
-
 function IndexWarningBanner() {
   const { state, actions } = useApp();
   const w = state.indexWarning;
   if (!w) return null;
   return (
-    <div className="snapshot-warning">
-      <div className="snapshot-warning-body">
-        <div className="snapshot-warning-title">
+    <div className="index-warning">
+      <div className="index-warning-body">
+        <div className="index-warning-title">
           Indexing needs attention
         </div>
-        <div className="snapshot-warning-msg">
+        <div className="index-warning-msg">
           Search may be incomplete: {w.message}
         </div>
       </div>
       <button
         type="button"
-        className="snapshot-warning-dismiss"
+        className="index-warning-dismiss"
         title="Retry indexing"
         onClick={() => { void actions.runSync(); }}
       ><SyncIcon /></button>
       <button
         type="button"
-        className="snapshot-warning-dismiss"
+        className="index-warning-dismiss"
         title="Dismiss"
         onClick={() => { void actions.dismissIndexWarning(); }}
       >×</button>
@@ -565,7 +428,7 @@ function SyncButton() {
   const [tip, setTip] = useState('Re-scan disk for external changes');
   // Decoupled from `state.syncRunning` so the icon keeps spinning for
   // a guaranteed minimum even when the sync request resolves in <100ms
-  // (small / already-indexed spaces). Without this the click felt
+  // (small / already-indexed folders). Without this the click felt
   // like nothing happened.
   const [spinning, setSpinning] = useState(false);
   const tipTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

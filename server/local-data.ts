@@ -18,15 +18,15 @@ export function appDataRoot(): string {
   return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), APP_NAME);
 }
 
-export function kbLocalDataDir(kbRoot: string): string {
-  const resolved = canonicalKbRoot(kbRoot);
+export function localDataDirForRoot(root: string): string {
+  const resolved = canonicalRoot(root);
   const hash = crypto.createHash('sha256').update(resolved).digest('hex').slice(0, 16);
-  const base = path.basename(resolved).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'kb';
-  return path.join(appDataRoot(), 'kb', `${base}-${hash}`);
+  const base = path.basename(resolved).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'folder';
+  return path.join(appDataRoot(), 'folders', `${base}-${hash}`);
 }
 
-function canonicalKbRoot(kbRoot: string): string {
-  const resolved = path.resolve(kbRoot);
+function canonicalRoot(root: string): string {
+  const resolved = path.resolve(root);
   try {
     return fs.realpathSync.native(resolved);
   } catch {
@@ -34,10 +34,25 @@ function canonicalKbRoot(kbRoot: string): string {
   }
 }
 
-export function stateDbPathForKb(kbRoot: string): string {
-  return path.join(kbLocalDataDir(kbRoot), 'state', 'state.db');
+/** Legacy per-root state DB path. Current conversion state is app-level
+ *  (`appStateDbPath`); this remains only so old installs can migrate. */
+export function stateDbPathForRoot(root: string): string {
+  return path.join(localDataDirForRoot(root), 'state', 'state.db');
 }
 
-export function vectorStoreDirForKb(kbRoot: string): string {
-  return path.join(kbLocalDataDir(kbRoot), 'vector-store');
+export function appStateDbPath(): string {
+  return path.join(appDataRoot(), 'state', 'state.db');
+}
+
+export function fileOrderDir(): string {
+  return path.join(appDataRoot(), 'file-order');
+}
+
+/** The single global vector store for the whole app. The daemon holds one
+ *  Milvus collection here; every opened folder is indexed into it, keyed by
+ *  absolute path. `.nosync` keeps iCloud off the WAL files even though this
+ *  lives under Application Support (which isn't iCloud-synced) — the suffix
+ *  is a cheap per-machine guard that travels with the convention. */
+export function globalVectorStoreDir(): string {
+  return path.join(appDataRoot(), 'vector-store.nosync');
 }

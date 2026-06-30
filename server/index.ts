@@ -10,7 +10,7 @@
  *   1. JSON body parser
  *   2. Security middleware (CSP + Origin check)
  *   3. Static web bundle (no-op in DEV_VITE; falls through on miss)
- *   4. `requireSpace` mounted on data-route prefixes
+ *   4. `requireFolder` mounted on data-route prefixes
  *   5. Route modules in the order they should resolve
  *   6. Vite dev-only proxy (last — it swallows /everything/)
  *   7. `listen` + WebSocket upgrade handler
@@ -18,6 +18,8 @@
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
+import { blake3 } from '@noble/hashes/blake3.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 import { fileURLToPath } from 'node:url';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { WebSocketServer } from 'ws';
@@ -29,26 +31,24 @@ import {
   attachCodexWebSocket,
   killActiveCodex,
 } from './codex-agent.ts';
-import { stopSpaceMcpServers, switchSpaceMcpServers } from './mcp-host.ts';
-import { getKbRoot, onBeforeKbRootChange, onClose, onKbRootChange, onSwitch, ensureKbRoot, needsKbRootPicker, seedBuiltinSpace } from './space.ts';
-import { migrateLegacyEmbedderConfig } from './app-config.ts';
-import { bootBindAllSpaces } from './state.ts';
+import { onClose, onSwitch, ensureFolderHome, toPosixAbs } from './folder.ts';
+import { getApiKey, migrateLegacyEmbedderConfig } from './app-config.ts';
+import { bootBindAllFolders } from './state.ts';
 import { reapOrphanDaemons } from './stale-lock.ts';
 import { logger } from './log.ts';
 import { setDerivedNoteIndexer } from './conversion.ts';
 import { noteTreeChanged } from './watcher.ts';
 import { indexer } from './state.ts';
 import { closeStateDb } from './state-db.ts';
-import { requireSpace, withWindowContext } from './http.ts';
-import { mount as mountSpaceRoutes } from './routes/space.ts';
+import { requireFolder, withWindowContext } from './http.ts';
+import { mount as mountLibraryRoutes } from './routes/library.ts';
 import { mount as mountEmbedderRoutes } from './routes/embedder.ts';
 import { mount as mountFilesRoutes } from './routes/files.ts';
 import { mount as mountFoldersRoutes } from './routes/folders.ts';
 import { mount as mountUploadRoutes } from './routes/upload.ts';
-import { mount as mountRecordingRoutes } from './routes/recording.ts';
 import { mount as mountAttachRoutes } from './routes/attach.ts';
 import { mount as mountIndexingRoutes } from './routes/indexing.ts';
-import { mount as mountKbRoutes } from './routes/kb.ts';
+import { mount as mountLibraryFileRoutes } from './routes/library-files.ts';
 import { mount as mountTerminalRoutes } from './routes/terminal.ts';
 import { mount as mountMcpRoutes } from './routes/mcp.ts';
 import { mount as mountSessionsRoutes } from './routes/sessions.ts';
@@ -59,10 +59,15 @@ const log = logger('server');
 // Converters push their derived notes straight into the index on
 // completion — there is no fs-watcher intermediary anymore. Wired here
 // (not inside conversion.ts) to avoid a conversion ↔ state module cycle.
-setDerivedNoteIndexer(async (noteAbs) => {
-  const kbRel = path.relative(getKbRoot(), noteAbs).split(path.sep).join('/');
-  const content = fs.readFileSync(noteAbs, 'utf8');
-  await indexer.upsertFile(kbRel, content);
+setDerivedNoteIndexer(async (sourceAbs, derivedAbs) => {
+  if (!getApiKey()) return;
+  // The derived markdown lives in app data; index it UNDER the source
+  // PDF/image path so folder-scoped search finds it. Stamp the SOURCE's
+  // byte hash so the daemon's scan_diff (which hashes the source file) sees
+  // it as unchanged rather than re-converting in a loop.
+  const derivedMd = fs.readFileSync(derivedAbs, 'utf8');
+  const sourceHash = bytesToHex(blake3(fs.readFileSync(sourceAbs)));
+  await indexer.upsertConvertedFile(toPosixAbs(sourceAbs), derivedMd, sourceHash);
   noteTreeChanged();
 });
 
@@ -92,20 +97,15 @@ const WEB_BUILD_DIR = path.resolve(APP_ROOT, 'web', 'dist-app');
 
 // One-time migration from the old global-provider schema. Idempotent.
 migrateLegacyEmbedderConfig();
-const kbRootReadyAtBoot = !needsKbRootPicker();
-if (kbRootReadyAtBoot) {
-  // Ensure the configured/default KB root exists and prune any stale
-  // recent entries. On a true first launch we skip this until the
-  // picker persists the user's chosen root.
-  ensureKbRoot();
-  // NB: the daemon is NOT spawned here — `bootBindAllSpaces` runs from the
-  // `listen` success callback below, i.e. only AFTER we win the `:8090`
-  // arbiter. That way the loser of a startup race never spawns a daemon
-  // (no race orphan), and the winner reaps pre-existing orphans before
-  // spawning its own (clean Milvus lock).
-} else {
-  log.info('kbRoot is not initialised; waiting for first-run picker');
-}
+// Ensure the default folder home exists and seed the built-in manual, and
+// prune any stale recent entries. There is no first-run picker — the home
+// is a fixed path, always ready.
+ensureFolderHome();
+// NB: the daemon is NOT spawned here — `bootBindAllFolders` runs from the
+// `listen` success callback below, i.e. only AFTER we win the `:8090`
+// arbiter. That way the loser of a startup race never spawns a daemon
+// (no race orphan), and the winner reaps pre-existing orphans before
+// spawning its own (clean Milvus lock).
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -183,7 +183,7 @@ app.use((req, res, next) => {
 });
 
 // Cheap identity probe for Electron's startup arbiter. A random process
-// can be listening on :8090 and even answer `/api/space`; the main
+// can be listening on :8090 and even answer `/api/folder`; the main
 // process should only reuse a server that explicitly identifies itself
 // as StashBase.
 app.get('/api/health', (_req, res) => {
@@ -204,10 +204,6 @@ app.get('/api/health', (_req, res) => {
 if (!DEV_VITE) {
   if (fs.existsSync(path.join(WEB_BUILD_DIR, 'index.html'))) {
     app.use(express.static(WEB_BUILD_DIR));
-  } else if (process.env.STASHBASE_HEADLESS) {
-    // Headless boot (spawned by the MCP host for API/MCP traffic only) —
-    // no renderer will connect, so a missing web build is fine.
-    log.warn('web build missing; serving API only (headless)');
   } else {
     throw new Error(
       `web/dist-app/index.html not found. Run \`pnpm build:web\` first.`,
@@ -215,11 +211,15 @@ if (!DEV_VITE) {
   }
 }
 
+// Folder/library routes include Welcome-screen operations that must work
+// before a window has an open folder, so mount them before the gate.
+mountLibraryRoutes(app);
+
 // Route-prefix gate: every API path under these roots needs an open
-// space. Centralises the NO_SPACE 412 response so individual handlers
-// don't have to call `requireCurrentSpace()` and the search route
+// folder. Centralises the NO_FOLDER 412 response so individual handlers
+// don't have to call `requireCurrentFolder()` and the search route
 // (which bypasses the files layer) can't silently run against a
-// previously-bound space.
+// previously-bound folder.
 app.use([
   '/api/files',
   '/api/folders',
@@ -229,22 +229,20 @@ app.use([
   '/api/file-order',
   '/api/reveal',
   '/asset',
-], requireSpace);
+], requireFolder);
 
 // ----- mount routes -------------------------------------------------------
-mountSpaceRoutes(app);
 mountEmbedderRoutes(app);
 mountFilesRoutes(app);
 mountFoldersRoutes(app);
 mountUploadRoutes(app);
-mountRecordingRoutes(app);
 mountAttachRoutes(app);
 mountIndexingRoutes(app);
-mountKbRoutes(app);
+mountLibraryFileRoutes(app);
 mountTerminalRoutes(app);
 mountMcpRoutes(app);
-mountSessionsRoutes(app); // global (no requireSpace) — lists all local sessions
-mountCodexSessionsRoutes(app); // global (no requireSpace) — filters to current space when open
+mountSessionsRoutes(app); // global (no requireFolder) — lists all local sessions
+mountCodexSessionsRoutes(app); // global (no requireFolder) — filters to current folder when open
 
 // Renderer error sink. The root `ErrorBoundary` POSTs render-time
 // exceptions here so they appear in the same server log developers
@@ -287,20 +285,18 @@ const server = app.listen(PORT, '127.0.0.1', () => {
   // previous server that died hard (kill -9 / crash / lost the startup
   // race) BEFORE spawning ours, so it gets a clean Milvus lock instead of
   // fighting an orphan and black-holing writes (data-layer §8.1).
-  if (kbRootReadyAtBoot) {
-    try { reapOrphanDaemons(getKbRoot()); } catch (err: unknown) {
-      log.warn(`reap orphan daemons failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    // NB: the built-in manual is seeded inside `ensureKbRoot` (called at
-    // module load above when the root is ready), so by the time we bind
-    // here the seeded space is already on disk and gets picked up.
-    // Configure the daemon + bind every known space so MCP / cross-space
-    // search works without waiting for the user to open one. Background.
-    bootBindAllSpaces().catch((err) =>
-      log.warn(`bootBindAllSpaces failed: ${err?.message ?? err}`),
-    );
+  try { reapOrphanDaemons(); } catch (err: unknown) {
+    log.warn(`reap orphan daemons failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-  log.info('waiting for the user to pick a space');
+  // NB: the built-in manual is seeded inside `ensureFolderHome` (called at
+  // module load above), so by the time we bind here the seeded folder is
+  // already on disk and gets picked up. Configure the daemon + bind every
+  // known folder so MCP / cross-folder search works without waiting for the
+  // user to open one. Background.
+  bootBindAllFolders().catch((err) =>
+    log.warn(`bootBindAllFolders failed: ${err?.message ?? err}`),
+  );
+  log.info('waiting for the user to pick a folder');
 });
 
 // Surface common bind failures (port collision, permission denied) with
@@ -364,64 +360,17 @@ function resumeOf(req: import('node:http').IncomingMessage): string | undefined 
   }
 }
 
-// Tear the agent session down when the user switches spaces — it was
-// bound to the old cwd; the renderer reconnects for the new space when
+// Tear the agent session down when the user switches folders — it was
+// bound to the old cwd; the renderer reconnects for the new folder when
 // the user opens the panel again.
 onSwitch((newRoot, windowId) => {
   killActiveAgent(windowId);
   killActiveCodex(windowId);
-  void switchSpaceMcpServers(windowId, newRoot);
 });
 onClose((_oldRoot, windowId) => {
   killActiveAgent(windowId);
   killActiveCodex(windowId);
-  void stopSpaceMcpServers(windowId);
 });
-onBeforeKbRootChange(async () => {
-  const failures: string[] = [];
-  try {
-    await stopSpaceMcpServers();
-  } catch (err: unknown) {
-    failures.push(`stop MCP servers failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  try {
-    killActiveAgent();
-  } catch (err: unknown) {
-    failures.push(`stop active agent failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  try {
-    killActiveCodex();
-  } catch (err: unknown) {
-    failures.push(`stop active Codex failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  try {
-    await indexer.close();
-  } catch (err: unknown) {
-    failures.push(`close indexer failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  try {
-    closeStateDb();
-  } catch (err: unknown) {
-    failures.push(`close state db failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  if (failures.length > 0) {
-    throw new Error(failures.join('; '));
-  }
-});
-onKbRootChange(async () => {
-  // Our old daemon is closed; sweep any orphan for the new root before
-  // re-binding so the fresh daemon takes a clean lock.
-  try { reapOrphanDaemons(getKbRoot()); } catch (err: unknown) {
-    log.warn(`reap orphan daemons failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  // First-run picker lands here after the user chooses a root — seed the
-  // built-in manual into it before binding (no-op once latched / non-empty).
-  seedBuiltinSpace();
-  bootBindAllSpaces().catch((err) =>
-    log.warn(`bootBindAllSpaces failed after kbRoot change: ${err?.message ?? err}`),
-  );
-});
-
 // Hook WebSocket upgrades. `/ws/agent` and `/ws/codex` go to our
 // structured chat bridges; everything else (Vite HMR in dev) falls
 // through to the existing
@@ -478,7 +427,6 @@ async function shutdown(reason: string): Promise<void> {
   // Stop accepting new connections immediately; in-flight ones drain.
   try { server.close(); } catch { /* already gone */ }
   try { killActiveAgent(); } catch { /* swallow */ }
-  try { await stopSpaceMcpServers(); } catch { /* swallow */ }
   try { closeStateDb(); } catch { /* swallow */ }
   // Hard ceiling: if the indexer's close ladder can't unstick the
   // Python child in 4 s, exit anyway. The daemon's own kill ladder

@@ -6,7 +6,7 @@
  * transcript deletion endpoint.
  */
 import express from 'express';
-import { getCurrentSpace } from '../space.ts';
+import { getCurrentFolder } from '../folder.ts';
 import { sendError } from '../http.ts';
 import {
   deleteCodexSession,
@@ -18,7 +18,7 @@ import {
 export function mount(app: express.Express): void {
   app.get('/api/codex/sessions', async (_req, res) => {
     try {
-      res.json(await listCodexSessions(getCurrentSpace()));
+      res.json(await listCodexSessions(getCurrentFolder()));
     } catch (err: unknown) {
       sendError(res, err);
     }
@@ -26,7 +26,7 @@ export function mount(app: express.Express): void {
 
   app.get('/api/codex/sessions/:id/messages', async (req, res) => {
     try {
-      res.json(await getCodexSessionMessages(req.params.id, getCurrentSpace()));
+      res.json(await getCodexSessionMessages(req.params.id, getCurrentFolder()));
     } catch (err: unknown) {
       sendError(res, err);
     }
@@ -39,7 +39,7 @@ export function mount(app: express.Express): void {
       return;
     }
     try {
-      res.json(await renameCodexSession(req.params.id, title, getCurrentSpace()));
+      res.json(await renameCodexSession(req.params.id, title, getCurrentFolder()));
     } catch (err: unknown) {
       sendError(res, err);
     }
@@ -47,7 +47,7 @@ export function mount(app: express.Express): void {
 
   app.delete('/api/codex/sessions/:id', async (req, res) => {
     try {
-      await deleteCodexSession(req.params.id, getCurrentSpace());
+      await deleteCodexSession(req.params.id, getCurrentFolder());
       res.json({});
     } catch (err: unknown) {
       sendError(res, err);

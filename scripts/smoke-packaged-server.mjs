@@ -70,7 +70,7 @@ function requestJson(port, requestPath, timeoutMs) {
 }
 
 async function requestOk(port, timeoutMs) {
-  const res = await requestJson(port, '/api/space', timeoutMs);
+  const res = await requestJson(port, '/api/folder', timeoutMs);
   return res.ok && res.statusCode >= 200 && res.statusCode < 500;
 }
 
@@ -245,11 +245,11 @@ async function smokePdfExtractor(extractBin) {
 
 async function smokeDaemon(daemonBin) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'stashbase-smoke-py-'));
-  const kbRoot = path.join(tmp, 'kb');
+  const folderHome = path.join(tmp, 'folder-home');
+  const folderRoot = path.join(folderHome, 'Smoke');
   const storeRoot = path.join(tmp, 'store');
-  const snapshot = path.join(tmp, 'snapshot.parquet');
-  fs.mkdirSync(kbRoot, { recursive: true });
-  const child = spawn(daemonBin, ['--kb-root', kbRoot, '--store-root', storeRoot], {
+  fs.mkdirSync(folderRoot, { recursive: true });
+  const child = spawn(daemonBin, ['--store-root', storeRoot], {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let output = '';
@@ -275,24 +275,20 @@ async function smokeDaemon(daemonBin) {
           try {
             const msg = JSON.parse(line);
             if (msg.event === 'ready') {
-              send(1, 'bind_space', { space: 'Smoke', provider: 'openai', api_key: 'sk-smoke' });
+              send(1, 'bind_folder', { folder: folderRoot, provider: 'openai', api_key: 'sk-smoke' });
               continue;
             }
             if (msg.id === 1) {
               if (!msg.ok) {
-                settle(reject, new Error(`daemon bind_space failed: ${msg.error}\n${output.slice(-4_000)}`));
+                settle(reject, new Error(`daemon bind_folder failed: ${msg.error}\n${output.slice(-4_000)}`));
                 continue;
               }
-              send(2, 'export_space', { space: 'Smoke', out_path: snapshot });
+              send(2, 'list', { folder: folderRoot });
               continue;
             }
             if (msg.id === 2) {
               if (!msg.ok) {
-                settle(reject, new Error(`daemon export_space failed: ${msg.error}\n${output.slice(-4_000)}`));
-                continue;
-              }
-              if (!fs.existsSync(snapshot)) {
-                settle(reject, new Error(`daemon export_space did not create ${snapshot}`));
+                settle(reject, new Error(`daemon list failed: ${msg.error}\n${output.slice(-4_000)}`));
                 continue;
               }
               settle(resolve);
@@ -309,7 +305,7 @@ async function smokeDaemon(daemonBin) {
         settle(reject, new Error(`daemon exited before smoke completed (code=${code}, signal=${signal})\n${output.slice(-4_000)}`));
       });
     });
-    console.log('[smoke] python daemon responded and exported a snapshot');
+    console.log('[smoke] python daemon responded to bind/list');
   } finally {
     child.stdin.end();
     if (child.exitCode == null) child.kill('SIGTERM');
