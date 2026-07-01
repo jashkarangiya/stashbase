@@ -39,6 +39,11 @@ function prettifyHome(abs: string, home: string): string {
   return abs;
 }
 
+function basenameOfPath(path: string): string {
+  const segs = path.split('/').filter(Boolean);
+  return segs.pop() || path;
+}
+
 function folderIndexSnapshot(status: IndexStatus): FolderIndexSnapshot {
   const hasError = status.indexWarning || (status.preparationFailures?.length ?? 0) > 0;
   const pending = status.pendingCount ?? 0;
@@ -74,6 +79,7 @@ export function Welcome() {
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [folderMenu, setFolderMenu] = useState<{ path: string; name: string; rect: DOMRect } | null>(null);
   const [folderIndexSnapshots, setFolderIndexSnapshots] = useState<Record<string, FolderIndexSnapshot>>({});
+  const [openingFolder, setOpeningFolder] = useState<{ path: string; name: string } | null>(null);
   const [removing, setRemoving] = useState(false);
   const welcomeReconcileStartedAt = useRef<Map<string, number>>(new Map());
 
@@ -118,6 +124,10 @@ export function Welcome() {
       .catch(() => { /* keep the current welcome state */ });
     return () => { cancelled = true; };
   }, [dispatch, refreshFolderHome, state.welcomeVisible]);
+
+  useEffect(() => {
+    if (!state.welcomeVisible) setOpeningFolder(null);
+  }, [state.welcomeVisible]);
 
   useEffect(() => {
     if (!state.welcomeVisible || state.recent.length === 0) {
@@ -177,7 +187,11 @@ export function Welcome() {
   }, [state.recent, state.welcomeVisible]);
 
   function openRecent(path: string) {
+    if (openingFolder) return;
+    setFolderMenu(null);
+    setOpeningFolder({ path, name: basenameOfPath(path) });
     void actions.openFolder(path).catch((e) => {
+      setOpeningFolder(null);
       const msg = errorMessage(e);
       // Remove the failed entry immediately so a stale/deleted path
       // doesn't remain clickable if the server refresh also fails.
@@ -229,8 +243,19 @@ export function Welcome() {
             </span>
             <div className="welcome-recent-head-right">
               <div className="welcome-actions welcome-actions--header">
-                <OpenFolderButton shortLabel primary />
-                <NewFolderButton shortLabel folderHome={folderHome} refreshFolderHome={refreshFolderHome} />
+                <OpenFolderButton
+                  shortLabel
+                  primary
+                  disabled={!!openingFolder}
+                  onOpeningFolder={setOpeningFolder}
+                />
+                <NewFolderButton
+                  shortLabel
+                  disabled={!!openingFolder}
+                  folderHome={folderHome}
+                  refreshFolderHome={refreshFolderHome}
+                  onOpeningFolder={setOpeningFolder}
+                />
               </div>
             </div>
           </div>
@@ -257,6 +282,7 @@ export function Welcome() {
                         type="button"
                         className="welcome-recent-open"
                         title={r.path}
+                        disabled={!!openingFolder}
                         onClick={() => openRecent(r.path)}
                       >
                         <FolderIcon />
@@ -283,6 +309,7 @@ export function Welcome() {
                         aria-label={`More actions for ${name}`}
                         aria-haspopup="menu"
                         aria-expanded={folderMenu?.path === r.path}
+                        disabled={!!openingFolder}
                         onClick={(e) => {
                           setFolderMenu({ path: r.path, name, rect: e.currentTarget.getBoundingClientRect() });
                         }}
@@ -324,6 +351,12 @@ export function Welcome() {
           <div className="welcome-err">{state.welcomeError}</div>
         )}
       </div>
+      {openingFolder && (
+        <div className="welcome-loading" role="status" aria-live="polite">
+          <div className="welcome-loading-spinner" />
+          <div className="welcome-loading-text">Opening {openingFolder.name}</div>
+        </div>
+      )}
       {folderMenu && (
         <Menu
           anchor={{ rect: folderMenu.rect, align: 'right' }}
@@ -389,9 +422,13 @@ function WarningMark() {
 function OpenFolderButton({
   shortLabel = false,
   primary = false,
+  disabled = false,
+  onOpeningFolder,
 }: {
   shortLabel?: boolean;
   primary?: boolean;
+  disabled?: boolean;
+  onOpeningFolder?: (folder: { path: string; name: string } | null) => void;
 }) {
   const { actions, dispatch } = useApp();
   const [busy, setBusy] = useState(false);
@@ -401,7 +438,7 @@ function OpenFolderButton({
   );
   if (typeof bridge?.openFolderDialog !== 'function') return null;
   async function onClick() {
-    if (busy) return;
+    if (busy || disabled) return;
     setBusy(true);
     try {
       const picked = await bridge!.openFolderDialog!({
@@ -409,8 +446,12 @@ function OpenFolderButton({
         buttonLabel: 'Open',
         allowCreateDirectory: true,
       });
-      if (picked) await actions.openFolder(picked);
+      if (picked) {
+        onOpeningFolder?.({ path: picked, name: basenameOfPath(picked) });
+        await actions.openFolder(picked);
+      }
     } catch (err) {
+      onOpeningFolder?.(null);
       dispatch({ type: 'WELCOME_ERROR', error: errorMessage(err) });
     } finally {
       setBusy(false);
@@ -421,7 +462,7 @@ function OpenFolderButton({
       className={'welcome-action' + (primary ? ' is-primary' : '')}
       type="button"
       onClick={onClick}
-      disabled={busy}
+      disabled={busy || disabled}
       title="Add any folder on your disk to the library — indexed in place, not copied"
     >
       <span className="welcome-action-icon">
@@ -438,10 +479,14 @@ function NewFolderButton({
   folderHome,
   refreshFolderHome,
   shortLabel = false,
+  disabled = false,
+  onOpeningFolder,
 }: {
   folderHome: string;
   refreshFolderHome: () => Promise<string>;
   shortLabel?: boolean;
+  disabled?: boolean;
+  onOpeningFolder?: (folder: { path: string; name: string } | null) => void;
 }) {
   const { actions, dispatch } = useApp();
   const [busy, setBusy] = useState(false);
@@ -453,7 +498,7 @@ function NewFolderButton({
   if (typeof bridge?.openFolderDialog !== 'function') return null;
 
   async function onClick() {
-    if (busy) return;
+    if (busy || disabled) return;
     setBusy(true);
     try {
       const defaultPath = folderHome || await refreshFolderHome();
@@ -463,8 +508,12 @@ function NewFolderButton({
         defaultPath,
         allowCreateDirectory: true,
       });
-      if (picked) await actions.openFolder(picked);
+      if (picked) {
+        onOpeningFolder?.({ path: picked, name: basenameOfPath(picked) });
+        await actions.openFolder(picked);
+      }
     } catch (err) {
+      onOpeningFolder?.(null);
       dispatch({ type: 'WELCOME_ERROR', error: errorMessage(err) });
     } finally {
       setBusy(false);
@@ -476,7 +525,7 @@ function NewFolderButton({
       className="welcome-action"
       type="button"
       onClick={onClick}
-      disabled={busy}
+      disabled={busy || disabled}
       title="Create or choose a folder under the default StashBase location and add it to the library"
     >
       <span className="welcome-action-icon">

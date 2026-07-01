@@ -1245,6 +1245,27 @@
       box-shadow: 0 3px 10px rgba(16, 24, 40, 0.075);
     }
 
+    .welcome-action:disabled {
+      cursor: default;
+      opacity: 0.62;
+      box-shadow: none;
+    }
+
+    .welcome-action:disabled:hover {
+      border-color: #dfe3e8;
+      background: #fff;
+      box-shadow: none;
+    }
+
+    .welcome-action.is-primary:disabled,
+    .welcome-action.is-primary:disabled:hover {
+      border-color: rgba(var(--accent-rgb), 0.52);
+      background: var(--accent);
+      color: #fff;
+      opacity: 0.72;
+      box-shadow: none;
+    }
+
     .welcome-action:active {
       box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
     }
@@ -1519,6 +1540,10 @@
       background: #f7fbfc;
     }
 
+    .welcome-recent-row:has(.welcome-recent-open:disabled):hover {
+      background: transparent;
+    }
+
     .welcome-recent-empty {
       padding: 18px 10px;
       color: #8a8f96;
@@ -1540,6 +1565,10 @@
       color: #1f1f1f;
       font: inherit;
       cursor: pointer;
+    }
+
+    .welcome-recent-open:disabled {
+      cursor: default;
     }
 
     .welcome-recent-main {
@@ -1633,6 +1662,11 @@
       transition: opacity 0.08s ease, background 0.08s ease, color 0.08s ease;
     }
 
+    .welcome-recent-more:disabled {
+      cursor: default;
+      opacity: 0.35;
+    }
+
     .welcome-recent-more svg {
       width: 16px;
       height: 16px;
@@ -1648,6 +1682,48 @@
       background: rgba(0, 0, 0, 0.06);
       color: #5f6670;
       outline: none;
+    }
+
+    .welcome-recent-more:disabled:hover {
+      background: transparent;
+      color: #8a8f96;
+    }
+
+    .welcome-loading {
+      position: fixed;
+      inset: 0;
+      z-index: 70;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      background: rgba(245, 246, 248, 0.78);
+      backdrop-filter: blur(2px);
+      color: #6b7280;
+      pointer-events: auto;
+    }
+
+    .welcome-loading-spinner {
+      width: 30px;
+      height: 30px;
+      border-radius: 999px;
+      border: 2px solid rgba(var(--accent-rgb), 0.18);
+      border-top-color: var(--accent);
+      animation: welcome-spin 0.76s linear infinite;
+    }
+
+    .welcome-loading-text {
+      max-width: min(360px, calc(100vw - 48px));
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    @keyframes welcome-spin {
+      to { transform: rotate(360deg); }
     }
 
     .welcome-open-list {
