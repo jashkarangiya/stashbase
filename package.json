@@ -1,6 +1,6 @@
 {
   "name": "stashbase",
-  "version": "0.9.4",
+  "version": "1.0.0",
   "packageManager": "pnpm@11.5.1",
   "description": "Local-first knowledge base desktop app.",
   "author": {
