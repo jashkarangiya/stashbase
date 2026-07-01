@@ -11,7 +11,7 @@ This is not a second architecture document. `architecture.md` explains where mod
 | User operation | What can go wrong | Data-layer contract |
 |-|-|-|
 | Open a folder | A previous run was interrupted; derived state may be missing, stale, or partial. | Reconcile must rediscover missing or incomplete work before treating the folder as settled. |
-| Land on Welcome | The user may not open any specific folder, but previous library work may still be incomplete. | Welcome must trigger folder-explicit library reconcile in the background; status polling alone is not recovery. |
+| Land on Welcome | The user may not open any specific folder, but previous library work may still be incomplete. | Welcome triggers folder-explicit reconcile in the background with a cooldown; status polling alone is not recovery. |
 | Go Home / close the active folder | Conversion may still be running, while the UI leaves the folder view. | In-flight work is process-owned. Welcome may keep a display snapshot, but it is not data truth. |
 | Reopen a folder | Old derived Markdown may exist from a partial or legacy conversion. | Completion must be verified, not inferred from file existence alone. |
 | Import or copy in a large PDF | Some PDF batches may finish before the app exits or the extractor is killed. | Batch scratch can be reused, but the final PDF note is complete only with the completion marker. |
@@ -19,10 +19,12 @@ This is not a second architecture document. `architecture.md` explains where mod
 | Import an image | OCR may fail or produce empty text. | Empty OCR text is a preparation failure for search; the source image remains viewable. |
 | Search immediately after import | Conversion completion and semantic indexing completion are different clocks. | Keyword search can use completed derived text; semantic search depends on daemon index status only when embeddings are enabled. |
 | Reprocess a failed file | Stale derived artifacts or stale failure rows may poison the next attempt. | Reprocess clears the failure row. PDF/image sources clear stale final artifacts and queue extraction; directly readable files trigger reconcile/index from source. |
+| Add or remove the OpenAI API key | Folder bindings or semantic readiness may reflect stale daemon runtime config. | Reset/rebind the daemon runtime and reconcile library folders after key changes; without a key, semantic search is disabled, not pending. |
 | Edit or replace a source file externally | Existing index rows or derived notes may describe old content. | Reconcile compares source identity and content state; stale derived/index state must not be treated as current. |
 | Rename or move a file | Old source identity may leave derived artifacts, failure rows, or index rows behind. | Source identity is absolute path; rename/move must remap or clean old app-owned state. |
 | Delete a source file | Derived text, failure rows, and index rows may become orphaned. | Cleanup must remove app-owned state for the deleted source. |
 | Remove a folder from the library | User files must remain, but app state for that subtree must disappear. | Clear index rows, derived artifacts, preparation rows, sidebar order, runtime bindings, and library membership. |
+| Delete a folder inside the active tree | The user intends a real filesystem delete, but app-owned state can become orphaned. | Delete the folder on disk only through the explicit file-tree delete path, then clean derived state, preparation rows, file order, and index rows for that subtree. |
 | App restart | Process-memory in-flight state is gone. | Persisted failures survive; incomplete work is rediscovered by reconcile. |
 | MCP `reindex` on an unopened folder | There may be no active UI folder context. | Reindex/status must be folder-explicit and must not depend on the current window. |
 
@@ -70,7 +72,7 @@ Without an OpenAI API key, semantic search is disabled, not pending. `/api/index
 
 # 3. Conversion State & Recovery
 
-Conversion has three practical states:
+Conversion has four practical states:
 
 | State | Stored where | Recovery rule |
 |-|-|-|
@@ -120,13 +122,14 @@ Reconcile is the operation that catches the system up with disk reality.
 
 It runs on:
 
-- app boot for all member folders
-- Welcome loading the library list
+- server boot, after all member folders are bound into the daemon
+- Welcome loading the library list, with a per-folder cooldown
 - opening or switching a folder
 - manual Sync
 - MCP `reindex`
 - app focus returning
 - Agent turn completion
+- OpenAI key changes
 
 Reconcile must be folder-explicit. It must not rely on an active window when the caller already names a folder.
 
@@ -139,7 +142,7 @@ For each folder, reconcile checks:
 - daemon index rows that need add/update/delete
 - source paths that should no longer surface in search
 
-Only changed content should be embedded. A no-op reconcile should not spend embedding tokens.
+Only changed content should be embedded. A no-op reconcile should not spend embedding tokens. When no OpenAI key is configured, reconcile still discovers PDF/image work and keeps keyword-searchable derived text fresh; semantic indexing is skipped and reported as disabled.
 
 External writes are not immediately searchable. Editors, Git, cloud sync, terminal commands, and external Agents change the filesystem outside StashBase's write path. They become searchable after reconcile. StashBase-owned file helper writes should schedule or perform index maintenance as part of the write when possible.
 
@@ -147,17 +150,19 @@ External writes are not immediately searchable. Editors, Git, cloud sync, termin
 
 # 6. Cleanup Rules
 
-User files belong to the user. StashBase cleanup removes only app-owned state.
+User files belong to the user. Library removal removes only app-owned state.
 
 Removing a folder from the library:
 
 - removes it from `~/.stashbase/config.json` `recentFolders`
 - clears semantic index rows under that folder path
 - deletes AppData-derived text/assets for sources under that folder
-- clears preparation rows and in-flight state under that path prefix
+- clears preparation records under that path prefix
 - removes AppData sidebar ordering for that folder
 - unbinds the folder from the daemon
 - never deletes the folder on disk
+
+Deleting a folder from inside an opened folder is a separate filesystem operation. It deletes the user folder on disk after confirmation, then removes derived artifacts, preparation rows, file-order state, and index rows for that subtree.
 
 Deleting a PDF/image source clears:
 
@@ -170,7 +175,7 @@ Deleting a PDF/image source clears:
 
 Reprocessing a PDF/image clears stale final derived artifacts and failure rows before queueing extraction. Reprocessing a directly readable source clears the failure row and reconciles the folder. It should not leave old output available as if it belonged to the new attempt.
 
-Renames and moves use absolute source path identity. If rows can be remapped safely by content hash, the daemon may reuse embeddings; otherwise the old source identity is cleaned and the new source identity is indexed or converted.
+Renames and moves use absolute source path identity. Structured text files can move index rows when the content remains readable. PDF/image moves clear old derived artifacts and old index rows, then queue conversion again under the new absolute source path.
 
 ---
 
@@ -179,12 +184,14 @@ Renames and moves use absolute source path identity. If rows can be remapped saf
 | State | Owner | Durable? | Review question |
 |-|-|-|-|
 | Source files | User filesystem | Yes | Are we ever moving or rewriting user files as app state? |
-| Library membership | `~/.stashbase/config.json` | Yes | Does this represent searchable membership, not just MRU? |
+| Library membership | `~/.stashbase/config.json` `recentFolders` | Yes | Does this represent searchable membership, not just MRU? |
 | Folder descriptions | `~/.stashbase/config.json` | Yes | Are they treated as orientation metadata, not indexed source content? |
 | Derived text/assets | AppData | Rebuildable | Can stale or partial artifacts be mistaken for completion? |
 | Derived source manifest | AppData | Rebuildable | Can AppData artifacts still be traced to a source path when semantic indexing is disabled? Is the manifest updated atomically, and do failed cleanups keep enough mapping to reprocess? |
 | PDF batch scratch | AppData | Rebuildable/resumable | Is it preserved across transient interruption but removed on source cleanup? |
-| Vector index | AppData daemon store | Rebuildable | Is the daemon the source of truth for index status? |
+| MCP launcher wrapper | `~/.stashbase/bin/stashbase-mcp` | Rebuildable | Is generated client setup kept outside app config and regenerated by the server when needed? |
+| Client MCP config | Claude/Codex client config files | Yes | Is Settings writing the target client's own config file, not duplicating config state in StashBase? |
+| Vector index | AppData daemon store | Rebuildable | Is the daemon the source of truth for semantic index status? |
 | Preparation failures | AppData `state.db` | Yes | Is reprocess possible, and are persistent failures not silently retried forever? |
 | In-flight conversions | Process memory | No | Can lost in-flight state be rediscovered? |
 | Search readiness snapshot | Renderer memory | No | Is it display-only and reconciled from `/api/index-status`? |
@@ -205,6 +212,7 @@ When reviewing code that touches conversion, indexing, sync, search, folder memb
 - Search results point to user-facing source paths, not AppData paths.
 - Source identity is absolute POSIX path once work enters conversion, indexing, search, or daemon calls.
 - Folder-explicit routes work even when no folder is open in the UI.
-- Removing a folder deletes app-owned state but never deletes user files.
+- Removing a folder from the library deletes app-owned state but never deletes user files.
+- Deleting a folder in the active file tree is a real filesystem delete and must clean app-owned state for the deleted subtree.
 - UI status snapshots do not become data truth.
 - Background preparation is quiet by default. Files and folders show failure markers only; the Search view is where pending/failed preparation is summarized because that is where incomplete readiness affects the user.

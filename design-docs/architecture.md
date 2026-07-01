@@ -62,7 +62,8 @@ StashBase does not introduce a new workspace model. A user points it at ordinary
 ## 2.1 Input Paths
 
 - Opening a folder adds that local directory to the indexed set.
-- Removing a folder clears StashBase-owned state for that folder — index rows, derived text/assets, conversion state, and runtime bindings. It never deletes the user's files.
+- Removing a folder from the library clears StashBase-owned state for that folder — index rows, derived text/assets, preparation state, runtime bindings, file-order state, and membership. It never deletes the user's files.
+- Deleting a folder from inside an opened folder is different: that is a normal filesystem delete, guarded by the app's confirmation flow.
 - New Folder opens the native folder picker at `~/Documents/StashBase`. The picker creates or selects a normal local folder; the location is a default, not a boundary.
 - One app window views one folder at a time. This is UI scope, not a separate library.
 
@@ -72,7 +73,7 @@ One installation has **one library**: the set of opened folders indexed into one
 
 MCP search defaults to the whole library. Calls can narrow scope by folder root or path prefix. The in-app search UI is scoped to the current window's folder.
 
-App boot and the Welcome screen reconcile library folders in the background. This keeps interrupted conversion/index work moving even when no folder is opened into the editor view.
+On server boot, StashBase binds every library folder into the daemon and then reconciles them in the background. The Welcome screen also reconciles library folders with a short cooldown and polls folder status. This keeps interrupted conversion/index work moving even when no folder is opened into the editor view.
 
 Each opened folder can carry a short optional description in app config. The description is orientation metadata for humans and Agents: it explains what the folder is for, but it is not indexed content and it does not define access scope. It can be written by the user first and later generated or refreshed by AI. Removing a folder from "Your Folders" removes its description with the folder membership record.
 
@@ -87,13 +88,14 @@ The file system is the source of truth. Converted content, indexes, and app stat
 User-visible files stay in the folder tree. StashBase has one user-level config file under the user's home directory. Derived state stays in AppData.
 
 ```text
-~/.stashbase/config.json          # user-level app config: library folders, embedder, MCP clients
+~/.stashbase/config.json          # user-level app config: library folders, descriptions, API key
+~/.stashbase/bin/stashbase-mcp    # generated MCP launcher wrapper
 
 <folder>/
   paper.pdf                       # user file
 
 <appData>/vector-store.nosync/    # Milvus Lite store, per-machine derived data
-<appData>/derived.nosync/         # converted text and extracted assets
+<appData>/derived.nosync/         # converted text, extracted assets, manifest, PDF batch scratch
 <appData>/state/state.db          # durable preparation failures
 <appData>/file-order/             # sidebar ordering keyed by folder path
 ```
@@ -108,7 +110,9 @@ Deleting derived state may require re-conversion or re-embedding, but it should 
 
 ## 3.2 App Config
 
-`~/.stashbase/config.json` is the only persistent app config file. It stores user-level configuration such as the folders in the local library, embedder settings, and generated MCP client configuration.
+`~/.stashbase/config.json` is the only persistent StashBase app config file. It stores user-level configuration such as the folders in the local library, optional folder descriptions, the OpenAI API key, and first-run seed state.
+
+MCP client configuration is not stored in StashBase config. The Settings UI calls the server over HTTP; the server writes the target client's own config file when one-click setup is supported and generates `~/.stashbase/bin/stashbase-mcp` as the launcher command.
 
 ---
 
@@ -182,11 +186,14 @@ Reconcile compares local files against indexed records using content hashes. It 
 
 Common triggers include:
 
+- server boot
+- Welcome loading the library list
 - opening or switching a folder
 - returning focus to the app
 - an Agent turn ending
 - manual Sync
 - MCP `reindex`
+- OpenAI key changes
 
 ---
 
@@ -207,7 +214,7 @@ Search defaults to the whole library for MCP callers. It can be narrowed by fold
 
 The desktop UI search is scoped to the current folder because the UI is showing one folder at a time.
 
-The desktop UI does not surface background conversion or indexing as a general browsing status. Folder and file views stay quiet while StashBase prepares content. The Search view is where the UI summarizes search readiness and explains incomplete or failed preparation; file and folder rows only show lightweight failure markers.
+The desktop UI does not surface background conversion or indexing as a general browsing status. Folder and file views stay quiet while StashBase prepares content. Welcome, folder rows, and file rows only show lightweight failure markers. The Search view is where the UI summarizes search readiness and explains incomplete or failed preparation, because that is where incomplete readiness affects the user.
 
 ## 6.3 Result Mapping
 
@@ -244,6 +251,8 @@ StashBase also exposes bounded file helpers:
 
 These helpers are not a second general-purpose filesystem. They exist because many local Agent clients run in sandboxes where the host user's files are not directly readable or writable. The helpers accept absolute paths under opened folders, hide app-maintained derived artifacts, map PDF reads to AppData-derived Markdown, and update the semantic index when possible. The only AppData path `read_file` accepts is a manifest-known PDF derived Markdown note whose source PDF still belongs to an opened folder.
 
+One-click MCP setup is available only for clients with stable local config files: Claude Code, Codex CLI, and Claude Desktop on macOS. Other MCP-capable clients use the standard JSON config shown in Settings. Codex is configured with prompting as the default approval mode, while low-risk read/search tools (`library_info`, `list_directory`, `read_file`, `search_library`) are auto-approved.
+
 The design boundary is:
 
 - MCP provides orientation, retrieval, explicit reindexing, and sandbox-safe access to opened folders.
@@ -254,7 +263,7 @@ The design boundary is:
 
 One machine runs one StashBase library through one MCP server.
 
-External clients and the built-in Agent panel use the same MCP server and the same generated client configuration while the StashBase app is running.
+External clients and the built-in Agent panel use the same MCP server while the StashBase app is running. CLI-backed panels rely on the same local client configuration that Settings writes; there is no separate built-in MCP path.
 
 If the StashBase app is not running, the MCP server is unavailable in V1. This keeps process ownership simple.
 

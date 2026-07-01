@@ -46,7 +46,7 @@ The product surface stays intentionally small: choose local folders, make their 
 
 Local files come in formats that Agents do not handle equally well. StashBase keeps the original files in place and creates derived text only where the format needs it.
 
-- **PDF**: converts layout-heavy documents into Markdown.
+- **PDF**: extracts Agent-readable Markdown from files that are awkward for Agents to read directly.
 - **Images**: uses OCR so text inside images can be searched.
 
 Derived content is app-owned data and can be regenerated.
