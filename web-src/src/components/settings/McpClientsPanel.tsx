@@ -3,22 +3,15 @@
  * config file); every other client just gets the standard MCP config shown
  * inline below, with their names listed for reference.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import { MCP_CLIENTS, mcpClientLabel, type McpClientId } from '../../agentCatalog';
 import { CopyIcon, CheckIcon } from '../../icons';
 
 interface McpConfigureResult {
-  ok: boolean;
   client?: McpClientId;
   file?: string;
   command?: string;
-  error?: string;
-}
-
-interface ElectronBridge {
-  configureMcp?: (client: McpClientId) => Promise<McpConfigureResult>;
-  disconnectMcp?: (client: McpClientId) => Promise<McpConfigureResult>;
 }
 
 type McpClientStatus = {
@@ -43,35 +36,40 @@ export function McpClientsPanel() {
     }
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    api.mcpStatus()
-      .then((res) => {
-        if (cancelled) return;
-        setClientStatus(normalizeClientStatuses(res.clients));
-        setConfig(JSON.stringify(res.config ?? {}, null, 2));
-      })
-      .catch(() => { /* status is best-effort */ });
-    return () => { cancelled = true; };
+  const loadStatus = useCallback(async (opts: { silent?: boolean } = {}) => {
+    try {
+      const res = await api.mcpStatus();
+      if (!mountedRef.current) return;
+      setClientStatus(normalizeClientStatuses(res.clients));
+      setConfig(JSON.stringify(res.config ?? {}, null, 2));
+    } catch (err: unknown) {
+      if (!mountedRef.current || opts.silent) return;
+      const text = err instanceof Error ? err.message : String(err);
+      setStatus({ kind: 'error', text });
+    }
   }, []);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    void loadStatus({ silent: true });
+  }, [loadStatus]);
+
   async function connect(client: McpClientId) {
-    const bridge = (window as { electron?: ElectronBridge }).electron;
     setBusy(client);
     setStatus(null);
     try {
-      const result = await configureMcp(client, bridge);
+      const result = await api.configureMcp(client) as McpConfigureResult;
       if (!mountedRef.current) return;
-      if (!result.ok) {
-        setStatus({ kind: 'error', text: result.error || 'Unable to configure MCP.' });
-        return;
-      }
       const file = result.file ? ` (${result.file})` : '';
       setClientStatus((next) => ({
         ...next,
-        [client]: { ...(next[client] ?? { configured: false }), configured: true, restartRequired: true },
+        [client]: {
+          ...(next[client] ?? { configured: false }),
+          configured: true,
+        },
       }));
       setStatus({ kind: 'ok', text: `Connected ${mcpClientLabel(client)}${file}.` });
+      void loadStatus({ silent: true });
     } catch (err: unknown) {
       if (!mountedRef.current) return;
       const text = err instanceof Error ? err.message : String(err);
@@ -82,22 +80,22 @@ export function McpClientsPanel() {
   }
 
   async function disconnect(client: McpClientId) {
-    const bridge = (window as { electron?: ElectronBridge }).electron;
     setBusy(client);
     setStatus(null);
     try {
-      const result = await disconnectMcp(client, bridge);
+      const result = await api.disconnectMcp(client) as McpConfigureResult;
       if (!mountedRef.current) return;
-      if (!result.ok) {
-        setStatus({ kind: 'error', text: result.error || 'Unable to disconnect MCP.' });
-        return;
-      }
       const file = result.file ? ` (${result.file})` : '';
       setClientStatus((next) => ({
         ...next,
-        [client]: { ...(next[client] ?? { configured: true }), configured: false, restartRequired: false },
+        [client]: {
+          ...(next[client] ?? { configured: true }),
+          configured: false,
+          restartRequired: false,
+        },
       }));
       setStatus({ kind: 'ok', text: `Disconnected ${mcpClientLabel(client)}${file}.` });
+      void loadStatus({ silent: true });
     } catch (err: unknown) {
       if (!mountedRef.current) return;
       const text = err instanceof Error ? err.message : String(err);
@@ -146,7 +144,7 @@ export function McpClientsPanel() {
     <div className="settings-section">
       <div className="settings-section-title">MCP clients</div>
       <div className="settings-section-hint">
-        Click Connect to add StashBase to a tool’s MCP config, then restart the tool.
+        Connect StashBase to your agents. Restart each app after connecting.
       </div>
       <div className="mcp-client-list">
         {MCP_CLIENTS.map((client) => {
@@ -163,12 +161,13 @@ export function McpClientsPanel() {
                 </span>
                 <span className="mcp-client-copy">
                   <span className="mcp-client-name">{client.name}</span>
-                  <span className="mcp-client-detail">{client.detail}</span>
                 </span>
               </span>
-              <span className={'mcp-status-pill ' + badge.tone} title={badge.title}>
-                {badge.label}
-              </span>
+              {badge && (
+                <span className={'mcp-status-pill ' + badge.tone} title={badge.title}>
+                  {badge.label}
+                </span>
+              )}
               <button
                 type="button"
                 className={'modal-btn mcp-connector-btn' + (isConnected ? ' connected' : '')}
@@ -192,7 +191,7 @@ export function McpClientsPanel() {
 
       <div className="mcp-other">
         <div className="settings-section-hint">
-          For any other AI tool, paste this configuration into its MCP settings:
+          For any other MCP-compatible agent, paste this configuration into its MCP settings:
         </div>
         <div className="mcp-config-preview">
           <div className="mcp-config-preview-head">
@@ -214,36 +213,6 @@ export function McpClientsPanel() {
   );
 }
 
-async function configureMcp(
-  client: McpClientId,
-  bridge: ElectronBridge | undefined,
-): Promise<McpConfigureResult> {
-  if (bridge?.configureMcp) {
-    try {
-      return await bridge.configureMcp(client);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes('No handler registered')) throw err;
-    }
-  }
-  return await api.configureMcp(client) as McpConfigureResult;
-}
-
-async function disconnectMcp(
-  client: McpClientId,
-  bridge: ElectronBridge | undefined,
-): Promise<McpConfigureResult> {
-  if (bridge?.disconnectMcp) {
-    try {
-      return await bridge.disconnectMcp(client);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes('No handler registered')) throw err;
-    }
-  }
-  return await api.disconnectMcp(client) as McpConfigureResult;
-}
-
 function normalizeClientStatuses(
   clients: Record<string, boolean | { configured?: boolean; cliInstalled?: boolean; restartRequired?: boolean }>,
 ): Record<string, McpClientStatus> {
@@ -260,19 +229,12 @@ function normalizeClientStatuses(
 function clientBadge(
   client: { cliId?: string },
   status: McpClientStatus,
-): { label: string; tone: string; title: string } {
+): { label: string; tone: string; title: string } | null {
   if (client.cliId && status.cliInstalled === false) {
     return {
       label: 'CLI missing',
       tone: 'warn',
       title: 'Install the CLI before starting the built-in chat.',
-    };
-  }
-  if (!status.configured) {
-    return {
-      label: 'Not configured',
-      tone: 'off',
-      title: 'StashBase has not been added to this client yet.',
     };
   }
   if (status.restartRequired) {
@@ -282,9 +244,5 @@ function clientBadge(
       title: 'The config is written. Restart the client so it picks up StashBase.',
     };
   }
-  return {
-    label: 'Configured',
-    tone: 'on',
-    title: 'StashBase is present in this client config.',
-  };
+  return null;
 }

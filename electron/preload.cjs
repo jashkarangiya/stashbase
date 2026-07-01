@@ -36,11 +36,6 @@ contextBridge.exposeInMainWorld('electron', {
    *  in-app webview overlay; too many sites block iframing for it to
    *  be reliable, and the system browser already has user cookies. */
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
-  /** Configure StashBase as an MCP server for one explicit client.
-   *  This is only run from the user's MCP Settings click path; app
-   *  launch and package install no longer modify client configs. */
-  configureMcp: (client) => ipcRenderer.invoke('mcp:configure', client),
-  disconnectMcp: (client) => ipcRenderer.invoke('mcp:disconnect', client),
   openFolderWindow: (name) => ipcRenderer.invoke('window:openFolder', name),
   /** Subscribe to "an image is on the clipboard, offer to import it"
    *  pushes fired when a main window regains focus. The renderer shows a

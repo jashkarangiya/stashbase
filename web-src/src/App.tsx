@@ -9,7 +9,6 @@ import {
 interface ElectronBridge {
   openFolderDialog?: (opts?: unknown) => Promise<string | null>;
   openExternal?: (url: string) => Promise<boolean>;
-  configureMcp?: (client: string) => Promise<unknown>;
   onClipboardImage?: (handler: (offer: ClipboardOffer) => void) => (() => void);
   markClipboardHandled?: (hash: string) => void;
 }

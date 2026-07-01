@@ -128,10 +128,6 @@ function readJsonObject(file) {
   return null;
 }
 
-function writeJson(file, value) {
-  writeFileAtomic(file, JSON.stringify(value, null, 2) + '\n');
-}
-
 function readAppConfig() {
   const cfg = readJsonObject(APP_CONFIG_FILE);
   return cfg && typeof cfg === 'object' ? cfg : {};
@@ -165,98 +161,6 @@ function writeMcpWrapper() {
   return wrapper;
 }
 
-function configureJsonMcp(file, serverConfig) {
-  const config = readJsonObject(file);
-  if (!config) throw new Error(`Couldn't parse ${file}; leaving it untouched.`);
-  const currentServers =
-    config.mcpServers && typeof config.mcpServers === 'object' && !Array.isArray(config.mcpServers)
-      ? config.mcpServers
-      : {};
-  config.mcpServers = {
-    ...currentServers,
-    stashbase: serverConfig,
-  };
-  writeJson(file, config);
-}
-
-function removeJsonMcp(file) {
-  if (!fs.existsSync(file)) return;
-  const config = readJsonObject(file);
-  if (!config) throw new Error(`Couldn't parse ${file}; leaving it untouched.`);
-  const servers = config.mcpServers;
-  if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return;
-  delete servers.stashbase;
-  if (Object.keys(servers).length === 0) delete config.mcpServers;
-  writeJson(file, config);
-}
-
-function replaceTomlTable(raw, tableName, block) {
-  const lines = raw.split(/\r?\n/);
-  const out = [];
-  const headerRe = /^\s*\[([^\]]+)\]\s*$/;
-  for (let i = 0; i < lines.length; i++) {
-    const match = lines[i].match(headerRe);
-    if (!match || match[1] !== tableName) {
-      out.push(lines[i]);
-      continue;
-    }
-    i += 1;
-    while (i < lines.length) {
-      const nextMatch = lines[i].match(headerRe);
-      if (nextMatch && nextMatch[1] !== tableName && !nextMatch[1].startsWith(`${tableName}.`)) {
-        break;
-      }
-      i += 1;
-    }
-    i -= 1;
-  }
-  const trimmed = out.join('\n').trimEnd();
-  return `${trimmed ? `${trimmed}\n\n` : ''}${block}\n`;
-}
-
-function configureCodex(wrapper) {
-  const file = path.join(os.homedir(), '.codex', 'config.toml');
-  const raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  const block = [
-    '[mcp_servers.stashbase]',
-    `command = ${JSON.stringify(wrapper)}`,
-  ].join('\n');
-  writeFileAtomic(file, replaceTomlTable(raw, 'mcp_servers.stashbase', block));
-  return true;
-}
-
-function removeTomlTable(raw, tableName) {
-  const lines = raw.split(/\r?\n/);
-  const out = [];
-  const headerRe = /^\s*\[([^\]]+)\]\s*$/;
-  for (let i = 0; i < lines.length; i++) {
-    const match = lines[i].match(headerRe);
-    if (!match || match[1] !== tableName) {
-      out.push(lines[i]);
-      continue;
-    }
-    i += 1;
-    while (i < lines.length) {
-      const nextMatch = lines[i].match(headerRe);
-      if (nextMatch && nextMatch[1] !== tableName && !nextMatch[1].startsWith(`${tableName}.`)) {
-        break;
-      }
-      i += 1;
-    }
-    i -= 1;
-  }
-  const trimmed = out.join('\n').trimEnd();
-  return trimmed ? `${trimmed}\n` : '';
-}
-
-function removeCodex() {
-  const file = path.join(os.homedir(), '.codex', 'config.toml');
-  if (!fs.existsSync(file)) return true;
-  const raw = fs.readFileSync(file, 'utf8');
-  writeFileAtomic(file, removeTomlTable(raw, 'mcp_servers.stashbase'));
-  return true;
-}
-
 function writeFileAtomic(file, content, options = {}) {
   const dir = path.dirname(file);
   fs.mkdirSync(dir, { recursive: true });
@@ -272,80 +176,6 @@ function writeFileAtomic(file, content, options = {}) {
     try { fs.rmSync(tmp, { force: true }); } catch { /* best-effort */ }
     throw err;
   }
-}
-
-function getStandardMcpJson(wrapper) {
-  return {
-    mcpServers: {
-      stashbase: {
-        command: wrapper,
-      },
-    },
-  };
-}
-
-// Only these three clients support one-click auto-connect; every other client
-// gets the standard config to paste. Mirror of server/routes/mcp.ts.
-function configureMcpClient(client) {
-  if (!fs.existsSync(MCP_ENTRY)) {
-    throw new Error(`MCP entry missing: ${MCP_ENTRY}`);
-  }
-
-  const wrapper = writeMcpWrapper();
-  if (client === 'claude-desktop') {
-    if (process.platform !== 'darwin') {
-      throw new Error('Claude Desktop auto configuration is currently supported on macOS only.');
-    }
-    const file = path.join(
-      os.homedir(),
-      'Library',
-      'Application Support',
-      'Claude',
-      'claude_desktop_config.json',
-    );
-    configureJsonMcp(file, { command: wrapper });
-    return { client, file, command: wrapper, manual: getStandardMcpJson(wrapper), mode: 'file' };
-  }
-  if (client === 'claude-code') {
-    const file = path.join(os.homedir(), '.claude.json');
-    configureJsonMcp(file, { type: 'stdio', command: wrapper });
-    return { client, file, command: wrapper, manual: getStandardMcpJson(wrapper), mode: 'file' };
-  }
-  if (client === 'codex-cli') {
-    const file = path.join(os.homedir(), '.codex', 'config.toml');
-    configureCodex(wrapper);
-    return { client, file, command: wrapper, manual: getStandardMcpJson(wrapper), mode: 'file' };
-  }
-  // Everything else: hand back the standard stdio config to paste manually.
-  return { client, command: wrapper, manual: getStandardMcpJson(wrapper), mode: 'clipboard' };
-}
-
-function disconnectMcpClient(client) {
-  if (client === 'claude-desktop') {
-    if (process.platform !== 'darwin') {
-      throw new Error('Claude Desktop auto configuration is currently supported on macOS only.');
-    }
-    const file = path.join(
-      os.homedir(),
-      'Library',
-      'Application Support',
-      'Claude',
-      'claude_desktop_config.json',
-    );
-    removeJsonMcp(file);
-    return { client, file, mode: 'file' };
-  }
-  if (client === 'claude-code') {
-    const file = path.join(os.homedir(), '.claude.json');
-    removeJsonMcp(file);
-    return { client, file, mode: 'file' };
-  }
-  if (client === 'codex-cli') {
-    const file = path.join(os.homedir(), '.codex', 'config.toml');
-    removeCodex();
-    return { client, file, mode: 'file' };
-  }
-  throw new Error(`${client} configuration is managed outside StashBase. Remove the pasted stashbase server from that client.`);
 }
 
 /** Spawn the Express server as a child. If something else is already on
@@ -818,32 +648,6 @@ ipcMain.handle('dialog:openFolder', async (_e, opts = {}) => {
 // local navigation through us.
 ipcMain.handle('shell:openExternal', async (_e, url) => {
   return openHttpExternal(url, 'renderer external URL');
-});
-
-ipcMain.handle('mcp:configure', async (_e, client) => {
-  if (typeof client !== 'string') {
-    return { ok: false, error: 'Invalid MCP client.' };
-  }
-  try {
-    const result = configureMcpClient(client);
-    return { ok: true, ...result };
-  } catch (err) {
-    const message = err && typeof err.message === 'string' ? err.message : String(err);
-    return { ok: false, error: message };
-  }
-});
-
-ipcMain.handle('mcp:disconnect', async (_e, client) => {
-  if (typeof client !== 'string') {
-    return { ok: false, error: 'Invalid MCP client.' };
-  }
-  try {
-    const result = disconnectMcpClient(client);
-    return { ok: true, ...result };
-  } catch (err) {
-    const message = err && typeof err.message === 'string' ? err.message : String(err);
-    return { ok: false, error: message };
-  }
 });
 
 ipcMain.handle('window:openFolder', async (_e, name) => {

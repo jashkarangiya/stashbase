@@ -295,9 +295,23 @@ function configureCodex(file: string, wrapper: string): void {
   const block = [
     '[mcp_servers.stashbase]',
     `command = ${JSON.stringify(wrapper)}`,
+    'default_tools_approval_mode = "prompt"',
+    '',
+    ...CODEX_AUTO_APPROVED_STASHBASE_TOOLS.flatMap((tool) => [
+      `[mcp_servers.stashbase.tools.${tool}]`,
+      'approval_mode = "approve"',
+      '',
+    ]),
   ].join('\n');
   writeTextAtomic(file, replaceTomlTable(raw, 'mcp_servers.stashbase', block));
 }
+
+const CODEX_AUTO_APPROVED_STASHBASE_TOOLS = [
+  'library_info',
+  'list_directory',
+  'read_file',
+  'search_library',
+];
 
 function removeCodex(file: string): void {
   if (!fs.existsSync(file)) return;
