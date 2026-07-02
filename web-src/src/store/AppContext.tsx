@@ -1699,6 +1699,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     keyBackfillGrace.current.clear();
     dispatch({ type: 'TABS_RESET' });
     dispatch({ type: 'CHAT_TABS_RESET' });
+    dispatch({ type: 'SIDEBAR_VIEW', view: 'files' });
     dispatch({ type: 'FILTER', q: '' });
     dispatch({ type: 'SEARCH_CLEAR' });
     dispatch({ type: 'ACTIVE_FOLDER', path: '' });
@@ -1730,11 +1731,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       folder: expected.name,
       folderPath: expectedFolderPath,
     });
-    // Load files BEFORE hiding the welcome overlay so the sidebar doesn't
-    // briefly flash "NOTES" with an empty tree behind the overlay's fade.
-    // Do not block the first paint on index/preparation status: large
-    // folders can make that status call noticeably slower, while failure
-    // markers and search readiness are auxiliary and can arrive on the
+    dispatch({ type: 'WELCOME_HIDE' });
+    // Enter the folder view before the recursive file listing finishes.
+    // Large folders or slow cloud-backed directories can make `/api/files`
+    // take seconds; that should not keep the Welcome overlay on screen.
+    // Index/preparation status is also auxiliary and can arrive on the
     // first background poll after the folder is visible.
     const [files] = await Promise.all([
       loadFiles(expectedFolderPath),
@@ -1744,7 +1745,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (opts.optimisticPendingOnOpen && stateRef.current.embedderHasKey !== false) {
       await markVisibleFilesPendingForSearch(files);
     }
-    dispatch({ type: 'WELCOME_HIDE' });
     setTimeout(() => {
       if (generation !== openGen.current || stateRef.current.folderPath !== expectedFolderPath) return;
       void refreshIndexState(expectedFolderPath);
@@ -1800,18 +1800,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const goHome = useCallback(async () => {
     if (editorRef.current && !(await flushSave())) return false;
     openGen.current += 1;
-    try {
-      await api.closeFolder();
-    } catch (err: unknown) {
-      toast('Could not close the current folder: ' + (err instanceof Error ? err.message : String(err)), { level: 'error' });
-      return false;
-    }
     resetFolderScopedState();
     dispatch({ type: 'FILES_LOADED', files: [], folders: [], folder: '', folderPath: '' });
-    // Recent entries can disappear or be removed while a folder is
-    // open. Show Welcome immediately, but wait for the server-filtered
-    // list before rendering pills so stale paths don't flash or stick.
-    dispatch({ type: 'WELCOME_SHOW', recent: [] });
+    // Show Welcome immediately with the last known library list. Refresh
+    // it in the background; clearing it first makes recent folders feel
+    // temporarily unclickable when the user quickly switches folders.
+    dispatch({ type: 'WELCOME_SHOW', recent: stateRef.current.recent, homeDir: stateRef.current.homeDir });
+    void api.closeFolder().catch((err: unknown) => {
+      toast('Could not close the current folder: ' + (err instanceof Error ? err.message : String(err)), { level: 'error' });
+    });
     void api.getFolder()
       .then((j) => dispatch({ type: 'WELCOME_SHOW', recent: j.recent ?? [], homeDir: j.homeDir }))
       .catch(() => { /* keep the empty list if the refresh fails */ });

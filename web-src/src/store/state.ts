@@ -610,14 +610,27 @@ export function reducer(s: State, a: Action): State {
       return s.folder === a.folder && s.folderPath === a.folderPath
         ? s
         : { ...s, folder: a.folder, folderPath: a.folderPath };
-    case 'FILES_LOADED':
+    case 'FILES_LOADED': {
+      const folderPath = a.folderPath ?? (a.folder ? s.folderPath : '');
+      const folderChanged = folderPath !== s.folderPath;
       return {
         ...s,
         files: a.files,
         folders: a.folders,
         folder: a.folder,
-        folderPath: a.folderPath ?? (a.folder ? s.folderPath : ''),
+        folderPath,
+        ...(folderChanged
+          ? {
+              activeSidebarView: 'files' as const,
+              filterQuery: '',
+              searching: false,
+              searchHits: null,
+              keywordResult: null,
+              searchError: null,
+            }
+          : {}),
       };
+    }
     case 'FILE_ORDER_LOADED':
       return { ...s, fileOrder: a.order };
     case 'FILE_ORDER_SET': {

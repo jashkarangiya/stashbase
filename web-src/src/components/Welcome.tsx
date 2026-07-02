@@ -28,6 +28,7 @@ interface FolderIndexSnapshot {
 }
 
 const WELCOME_RECONCILE_COOLDOWN_MS = 30_000;
+const OPEN_FOLDER_WATCHDOG_MS = 20_000;
 
 /** Shorten an absolute path for display: `/Users/foo/Notes` → `~/Notes`
  *  when it lives under the user's home dir. Falls through unchanged
@@ -82,6 +83,7 @@ export function Welcome() {
   const [openingFolder, setOpeningFolder] = useState<{ path: string; name: string } | null>(null);
   const [removing, setRemoving] = useState(false);
   const welcomeReconcileStartedAt = useRef<Map<string, number>>(new Map());
+  const openingRequestRef = useRef(0);
 
   const removeFolder = useCallback((path: string) => {
     setRemoving(true);
@@ -130,7 +132,19 @@ export function Welcome() {
   }, [state.welcomeVisible]);
 
   useEffect(() => {
-    if (!state.welcomeVisible || state.recent.length === 0) {
+    if (!openingFolder || !state.welcomeVisible) return undefined;
+    const timer = setTimeout(() => {
+      setOpeningFolder(null);
+      dispatch({
+        type: 'WELCOME_ERROR',
+        error: `Opening ${openingFolder.name} is taking longer than expected. Please try again.`,
+      });
+    }, OPEN_FOLDER_WATCHDOG_MS);
+    return () => clearTimeout(timer);
+  }, [dispatch, openingFolder, state.welcomeVisible]);
+
+  useEffect(() => {
+    if (!state.welcomeVisible || openingFolder || state.recent.length === 0) {
       setFolderIndexSnapshots({});
       return;
     }
@@ -165,46 +179,53 @@ export function Welcome() {
       const keepPolling = Object.values(nextForPolling).some((s) => s.state === 'preparing' || s.state === 'unknown');
       if (keepPolling) timer = setTimeout(refreshFolderStates, 1500);
     }
-    void refreshFolderStates();
+    timer = setTimeout(refreshFolderStates, 750);
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [state.libraryFolderStatuses, state.recent, state.welcomeVisible]);
+  }, [openingFolder, state.libraryFolderStatuses, state.recent, state.welcomeVisible]);
 
   useEffect(() => {
-    if (!state.welcomeVisible || state.recent.length === 0) return;
-    const now = Date.now();
-    for (const folder of state.recent) {
-      const lastStarted = welcomeReconcileStartedAt.current.get(folder.path) ?? 0;
-      if (now - lastStarted < WELCOME_RECONCILE_COOLDOWN_MS) continue;
-      welcomeReconcileStartedAt.current.set(folder.path, now);
-      void api.sync(folder.path)
-        .catch((err) => {
-          console.warn(`[welcome] reconcile failed for ${folder.path}:`, err);
-        });
-    }
-  }, [state.recent, state.welcomeVisible]);
+    if (!state.welcomeVisible || openingFolder || state.recent.length === 0) return;
+    const timer = setTimeout(() => {
+      const now = Date.now();
+      for (const folder of state.recent) {
+        const lastStarted = welcomeReconcileStartedAt.current.get(folder.path) ?? 0;
+        if (now - lastStarted < WELCOME_RECONCILE_COOLDOWN_MS) continue;
+        welcomeReconcileStartedAt.current.set(folder.path, now);
+        void api.sync(folder.path)
+          .catch((err) => {
+            console.warn(`[welcome] reconcile failed for ${folder.path}:`, err);
+          });
+      }
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [openingFolder, state.recent, state.welcomeVisible]);
 
   function openRecent(path: string) {
-    if (openingFolder) return;
+    const requestId = ++openingRequestRef.current;
     setFolderMenu(null);
     setOpeningFolder({ path, name: basenameOfPath(path) });
-    void actions.openFolder(path).catch((e) => {
-      setOpeningFolder(null);
-      const msg = errorMessage(e);
-      // Remove the failed entry immediately so a stale/deleted path
-      // doesn't remain clickable if the server refresh also fails.
-      dispatch({
-        type: 'WELCOME_SHOW',
-        recent: state.recent.filter((r) => r.path !== path),
-        homeDir: state.homeDir,
-        error: msg,
+    void actions.openFolder(path)
+      .catch((e) => {
+        if (requestId !== openingRequestRef.current) return;
+        const msg = errorMessage(e);
+        // Remove the failed entry immediately so a stale/deleted path
+        // doesn't remain clickable if the server refresh also fails.
+        dispatch({
+          type: 'WELCOME_SHOW',
+          recent: state.recent.filter((r) => r.path !== path),
+          homeDir: state.homeDir,
+          error: msg,
+        });
+        void api.getFolder()
+          .then((j) => dispatch({ type: 'WELCOME_SHOW', recent: j.recent ?? [], homeDir: j.homeDir, error: msg }))
+          .catch(() => { /* keep the optimistic removal + original open error */ });
+      })
+      .finally(() => {
+        if (requestId === openingRequestRef.current) setOpeningFolder(null);
       });
-      void api.getFolder()
-        .then((j) => dispatch({ type: 'WELCOME_SHOW', recent: j.recent ?? [], homeDir: j.homeDir, error: msg }))
-        .catch(() => { /* keep the optimistic removal + original open error */ });
-    });
   }
 
   if (!state.welcomeVisible) return null;
@@ -277,13 +298,19 @@ export function Welcome() {
                   };
                   const indexState = indexSnapshot.state;
                   return (
-                    <div key={r.path} className="welcome-recent-row">
+                    <div
+                      key={r.path}
+                      className="welcome-recent-row"
+                      onClick={() => openRecent(r.path)}
+                    >
                       <button
                         type="button"
                         className="welcome-recent-open"
                         title={r.path}
-                        disabled={!!openingFolder}
-                        onClick={() => openRecent(r.path)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openRecent(r.path);
+                        }}
                       >
                         <FolderIcon />
                         <span className="welcome-recent-main">
@@ -309,8 +336,8 @@ export function Welcome() {
                         aria-label={`More actions for ${name}`}
                         aria-haspopup="menu"
                         aria-expanded={folderMenu?.path === r.path}
-                        disabled={!!openingFolder}
                         onClick={(e) => {
+                          e.stopPropagation();
                           setFolderMenu({ path: r.path, name, rect: e.currentTarget.getBoundingClientRect() });
                         }}
                       >
@@ -451,9 +478,9 @@ function OpenFolderButton({
         await actions.openFolder(picked);
       }
     } catch (err) {
-      onOpeningFolder?.(null);
       dispatch({ type: 'WELCOME_ERROR', error: errorMessage(err) });
     } finally {
+      onOpeningFolder?.(null);
       setBusy(false);
     }
   }
@@ -513,9 +540,9 @@ function NewFolderButton({
         await actions.openFolder(picked);
       }
     } catch (err) {
-      onOpeningFolder?.(null);
       dispatch({ type: 'WELCOME_ERROR', error: errorMessage(err) });
     } finally {
+      onOpeningFolder?.(null);
       setBusy(false);
     }
   }

@@ -1530,6 +1530,7 @@
       border-radius: 0;
       border-bottom: 1px solid #edf0f3;
       transition: background 0.08s ease, box-shadow 0.08s ease;
+      cursor: pointer;
     }
 
     .welcome-recent-row:last-child {
@@ -1701,7 +1702,7 @@
       background: rgba(245, 246, 248, 0.78);
       backdrop-filter: blur(2px);
       color: #6b7280;
-      pointer-events: auto;
+      pointer-events: none;
     }
 
     .welcome-loading-spinner {
