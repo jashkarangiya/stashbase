@@ -1,11 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
+const requireFromRoot = createRequire(path.join(root, 'package.json'));
+const claudeAgentSdkDir = path.join(root, 'node_modules', '@anthropic-ai', 'claude-agent-sdk');
 const args = process.argv.slice(2);
 const platform = args.includes('--linux') ? 'linux' : args.includes('--win') ? 'win' : 'mac';
 const skipSidecarBuild = args.includes('--skip-sidecar-build') || process.env.STASHBASE_SKIP_SIDECAR_BUILD === '1';
@@ -243,12 +246,50 @@ function assertSidecarsForPlatform() {
   );
 }
 
+function assertRipgrepForPlatform() {
+  if (!hostMatchesTarget()) return;
+
+  const nodePlatform = targetRuntime().nodePlatform;
+  const packageName = `@vscode/ripgrep-${nodePlatform}-${process.arch}`;
+  const binary = nodePlatform === 'win32' ? 'rg.exe' : 'rg';
+  try {
+    requireFromRoot.resolve(`${packageName}/bin/${binary}`);
+  } catch {
+    throw new Error(
+      `${platform} packaging requires ${packageName}. ` +
+        `Run \`pnpm install --frozen-lockfile\` on ${targetRuntime().label} and make sure ` +
+        `package.json optionalDependencies includes ${packageName}.`,
+    );
+  }
+}
+
+function assertClaudeAgentSdkForPlatform() {
+  if (!hostMatchesTarget()) return;
+
+  const nodePlatform = targetRuntime().nodePlatform;
+  const packageName = `@anthropic-ai/claude-agent-sdk-${nodePlatform}-${process.arch}`;
+  const binary = nodePlatform === 'win32' ? 'claude.exe' : 'claude';
+  try {
+    const sdkRealDir = fs.realpathSync(claudeAgentSdkDir);
+    createRequire(path.join(sdkRealDir, 'sdk.mjs')).resolve(`${packageName}/${binary}`);
+  } catch {
+    throw new Error(
+      `${platform} packaging requires ${packageName}. ` +
+        `Run \`pnpm install --frozen-lockfile\` on ${targetRuntime().label} before packaging.`,
+    );
+  }
+}
+
 if (!hostMatchesTarget() || skipSidecarBuild) {
   assertSidecarsForPlatform();
+  assertRipgrepForPlatform();
+  assertClaudeAgentSdkForPlatform();
   runScript('build');
 } else {
   runScript('build:desktop');
   assertSidecarsForPlatform();
+  assertRipgrepForPlatform();
+  assertClaudeAgentSdkForPlatform();
 }
 clearQuarantine();
 runElectronBuilder();

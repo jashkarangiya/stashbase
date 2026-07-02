@@ -233,6 +233,8 @@
     "vite": "^8.0.12"
   },
   "optionalDependencies": {
-    "@vscode/ripgrep-darwin-arm64": "1.18.0"
+    "@vscode/ripgrep-darwin-arm64": "1.18.0",
+    "@vscode/ripgrep-linux-x64": "1.18.0",
+    "@vscode/ripgrep-win32-x64": "1.18.0"
   }
 }
