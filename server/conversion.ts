@@ -38,6 +38,7 @@ const log = logger('conversion');
 // Keep the in-flight indicator visible long enough for a 500ms-poll
 // client to catch even a sub-second run.
 const MIN_VISIBLE_MS = 800;
+const DEFAULT_CONVERSION_CONCURRENCY = 1;
 
 interface SourceSignature {
   size: number;
@@ -107,6 +108,26 @@ function derivedIsFresh(spec: ConversionSpec, absPath: string): boolean {
 
 const activeControllers = new Map<string, AbortController>();
 const activeRuns = new Map<string, Promise<void>>();
+let activeConversionSlots = 0;
+const conversionSlotQueue: Array<() => void> = [];
+
+function conversionConcurrency(): number {
+  const raw = Number(process.env.STASHBASE_CONVERSION_CONCURRENCY ?? DEFAULT_CONVERSION_CONCURRENCY);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_CONVERSION_CONCURRENCY;
+}
+
+async function withConversionSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeConversionSlots >= conversionConcurrency()) {
+    await new Promise<void>((resolve) => conversionSlotQueue.push(resolve));
+  }
+  activeConversionSlots += 1;
+  try {
+    return await fn();
+  } finally {
+    activeConversionSlots -= 1;
+    conversionSlotQueue.shift()?.();
+  }
+}
 
 export function cancelConversion(sourcePath: string): boolean {
   const controller = activeControllers.get(sourcePath);
@@ -118,6 +139,23 @@ export function cancelConversion(sourcePath: string): boolean {
 
 export async function cancelAllConversions(timeoutMs = 2500): Promise<string[]> {
   const sourcePaths = [...activeControllers.keys()];
+  if (sourcePaths.length === 0) return [];
+  for (const sourcePath of sourcePaths) cancelConversion(sourcePath);
+  const runs = sourcePaths
+    .map((sourcePath) => activeRuns.get(sourcePath))
+    .filter((run): run is Promise<void> => run != null);
+  if (runs.length === 0) return sourcePaths;
+  await Promise.race([
+    Promise.allSettled(runs),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+  return sourcePaths;
+}
+
+export async function cancelConversionsUnder(sourcePathPrefix: string, timeoutMs = 2500): Promise<string[]> {
+  const root = toPosixAbs(sourcePathPrefix).replace(/\/+$/, '');
+  const sourcePaths = [...activeControllers.keys()]
+    .filter((sourcePath) => sourcePath === root || sourcePath.startsWith(`${root}/`));
   if (sourcePaths.length === 0) return [];
   for (const sourcePath of sourcePaths) cancelConversion(sourcePath);
   const runs = sourcePaths
@@ -180,7 +218,9 @@ function runConversion(absPath: string, sourcePath: string | null, spec: Convers
       log.warn(`${spec.kind}: failed-output cleanup failed for ${absPath}: ${errorMessage(cleanupErr)}`);
     }
   };
-  const run = spec.convert(absPath, (progress) => { if (sourcePath) setProgress(sourcePath, progress); }, controller.signal).then(
+  const run = withConversionSlot(() =>
+    spec.convert(absPath, (progress) => { if (sourcePath) setProgress(sourcePath, progress); }, controller.signal),
+  ).then(
     async () => {
       if (sourcePath) activeControllers.delete(sourcePath);
       log.info(`${spec.kind}: done in ${Date.now() - t0}ms (${path.basename(spec.derivedNote(absPath))})`);

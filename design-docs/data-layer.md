@@ -16,6 +16,7 @@ This is not a second architecture document. `architecture.md` explains where mod
 | Reopen a folder | Old derived Markdown may exist from a partial or legacy conversion. | Completion must be verified, not inferred from file existence alone. |
 | Import or copy in a large PDF | Some PDF batches may finish before the app exits or the extractor is killed. | Batch scratch can be reused, but the final PDF note is complete only with the completion marker. |
 | Import several PDFs, including scans | Scanned PDFs can monopolize conversion time because OCR is slow. | PDF scheduling probes for a text layer and runs text-layer PDFs before scanned PDFs. |
+| OCR a scanned PDF or image | OCR libraries may use many native threads and make the desktop UI feel stuck even though work is in a child process. | Extractor work runs through a bounded global slot, with conservative native-thread limits and lower OS priority; OCR may take longer, but UI responsiveness has priority. |
 | Run without optional native helpers | A packaged build may be missing the PDF/OCR extractor, or a native status-store dependency may fail to load. | Optional preparation/status layers must degrade to warnings or failed preparation records; opening folders and browsing source files must keep working. |
 | Import an image | OCR may fail or produce empty text. | Empty OCR text is a preparation failure for search; the source image remains viewable. |
 | Search immediately after import | Conversion completion and semantic indexing completion are different clocks. | Keyword search can use completed derived text; semantic search depends on daemon index status only when embeddings are enabled. |
@@ -24,10 +25,11 @@ This is not a second architecture document. `architecture.md` explains where mod
 | Edit or replace a source file externally | Existing index rows or derived notes may describe old content. | Reconcile compares source identity and content state; stale derived/index state must not be treated as current. |
 | Rename or move a file | Old source identity may leave derived artifacts, failure rows, or index rows behind. | Source identity is absolute path; rename/move must remap or clean old app-owned state. |
 | Delete a source file | Derived text, failure rows, and index rows may become orphaned. | Cleanup must remove app-owned state for the deleted source. |
-| Remove a folder from the library | User files must remain, but app state for that subtree must disappear. | Clear index rows, derived artifacts, preparation rows, sidebar order, runtime bindings, and library membership. |
+| Remove a folder from the library | User files must remain, but app state for that subtree must disappear. | Cancel queued/running conversions, then clear index rows, derived artifacts, preparation rows, sidebar order, runtime bindings, and library membership. |
 | Delete a folder inside the active tree | The user intends a real filesystem delete, but app-owned state can become orphaned. | Delete the folder on disk only through the explicit file-tree delete path, then clean derived state, preparation rows, file order, and index rows for that subtree. |
 | App restart | Process-memory in-flight state is gone. | Persisted failures survive; incomplete work is rediscovered by reconcile. |
 | MCP `reindex` on an unopened folder | There may be no active UI folder context. | Reindex/status must be folder-explicit and must not depend on the current window. |
+| Sync after PDF/image conversion | The daemon's direct text-file scan may report a converted source row as deleted because the raw source is not directly indexable. | If the source PDF/image still exists under the synced folder, sync must preserve the converted index row and its derived artifacts. |
 
 ---
 
@@ -160,12 +162,15 @@ User files belong to the user. Library removal removes only app-owned state.
 Removing a folder from the library:
 
 - removes it from `~/.stashbase/config.json` `recentFolders`
+- cancels queued/running conversions under that folder path
 - clears semantic index rows under that folder path
 - deletes AppData-derived text/assets for sources under that folder
 - clears preparation records under that path prefix
 - removes AppData sidebar ordering for that folder
 - unbinds the folder from the daemon
 - never deletes the folder on disk
+
+Library removal returns after membership and UI-visible app state are cleared. Conversion cancellation, derived cleanup, index-row deletion, daemon unbind, and runtime-state cleanup continue as background app-owned cleanup so the Welcome screen does not wait on long-running PDF work.
 
 Deleting a folder from inside an opened folder is a separate filesystem operation. It deletes the user folder on disk after confirmation, then removes derived artifacts, preparation rows, file-order state, and index rows for that subtree.
 

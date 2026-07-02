@@ -18,8 +18,7 @@ import {
   detectFormat,
   fileVersion,
   getCurrentFolderBasename,
-  listFiles,
-  listFolders,
+  listFilesAndFolders,
   pathExists,
   readText,
   renameOnDisk,
@@ -203,10 +202,11 @@ export function mount(app: express.Express): void {
   // ----- list -----
   app.get('/api/files', (_req, res) => {
     try {
+      const listing = listFilesAndFolders();
       res.json({
         folder: getCurrentFolderLabel() ?? getCurrentFolderBasename(),
-        files: listFiles(),
-        folders: listFolders(),
+        files: listing.files,
+        folders: listing.folders,
       });
     } catch (err: unknown) {
       sendError(res, err);

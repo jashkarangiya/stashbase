@@ -111,6 +111,19 @@ class PdfExtractTests(unittest.TestCase):
             self.assertIn("second page text", text)
             self.assertNotIn("third page text", text)
 
+    def test_rich_fallback_reason_hides_internal_image_paths(self) -> None:
+        reason = pdf_extract._rich_fallback_reason(
+            RuntimeError(
+                "code=2: cannot open file "
+                "'/Users/me/Library/Application_Support/StashBase/derived.nosync/x.md.batches/work/file.png': "
+                "No such file or directory",
+            ),
+        )
+
+        self.assertEqual(reason, "layout image extraction failed")
+        self.assertNotIn("Library", reason)
+        self.assertNotIn(".png", reason)
+
     def test_pymupdf_converter_processes_pages_in_batches(self) -> None:
         rich = types.ModuleType("pymupdf4llm")
         seen_batches: list[list[int]] = []

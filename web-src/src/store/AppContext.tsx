@@ -43,7 +43,6 @@ import {
   filterGuiSemanticHits,
   isFolderFileTab,
   keywordFindCaseSensitive,
-  pickInitialFile,
   shallowEqualPreparationFailures,
   shallowEqualConversionProgress,
   shallowEqualIndexWarning,
@@ -1733,28 +1732,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
     // Load files BEFORE hiding the welcome overlay so the sidebar doesn't
     // briefly flash "NOTES" with an empty tree behind the overlay's fade.
-    // Also wait for the first index-status response so per-file failure
-    // markers are available when the tree first appears, instead of
-    // popping in a few seconds later on the poll.
+    // Do not block the first paint on index/preparation status: large
+    // folders can make that status call noticeably slower, while failure
+    // markers and search readiness are auxiliary and can arrive on the
+    // first background poll after the folder is visible.
     const [files] = await Promise.all([
       loadFiles(expectedFolderPath),
       loadFileOrder(expectedFolderPath),
-      refreshIndexState(expectedFolderPath),
     ]);
     if (generation !== openGen.current || stateRef.current.folderPath !== expectedFolderPath) return;
     if (opts.optimisticPendingOnOpen && stateRef.current.embedderHasKey !== false) {
       await markVisibleFilesPendingForSearch(files);
     }
     dispatch({ type: 'WELCOME_HIDE' });
-    // Land on a Welcome/README note when present, otherwise open the first
-    // file so a completed folder switch does not leave the main pane blank.
-    // `finishOpenFolder` is the fresh-entry path (it just reset tabs above),
-    // so no need to guard on tab count — and we use the files loadFiles just
-    // returned rather than reading `stateRef`, which may not yet reflect the
-    // FILES_LOADED dispatch.
-    const landing = pickInitialFile(files);
-    if (landing) void selectFile(landing);
-  }, [loadFiles, loadFileOrder, markVisibleFilesPendingForSearch, refreshIndexState, resetFolderScopedState, selectFile]);
+    setTimeout(() => {
+      if (generation !== openGen.current || stateRef.current.folderPath !== expectedFolderPath) return;
+      void refreshIndexState(expectedFolderPath);
+    }, 500);
+  }, [loadFiles, loadFileOrder, markVisibleFilesPendingForSearch, refreshIndexState, resetFolderScopedState]);
 
   const refreshRecent = useCallback(async () => {
     const j = await api.getFolder();

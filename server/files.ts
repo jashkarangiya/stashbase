@@ -493,6 +493,11 @@ interface FolderEntry {
   path: string;
 }
 
+export interface FolderListing {
+  files: FileEntry[];
+  folders: FolderEntry[];
+}
+
 /** Per-file preview cache keyed by absolute path. Avoids re-reading
  *  every file on every `GET /api/files`. Invalidated by mtime: if the
  *  file's mtime hasn't moved, reuse the cached preview. Survives the
@@ -511,16 +516,20 @@ const previewCache = new Map<string, PreviewCacheEntry>();
 // visits in a session. Registered at module load.
 onSwitch(() => previewCache.clear());
 
-/** Recursive walk of the folder. Returns every recognised note file with
- *  its relative path, format, first-heading preview, and disk mtime.
- *  Sorted by full path so the tree renders in a stable order.
- *  Per-file preview is cached by mtime so large folders don't pay
- *  N × readFile on every sidebar refresh. */
-export function listFiles(): FileEntry[] {
+/** Recursive walk of the folder. Returns every visible subfolder plus every
+ *  recognised note/viewer file. Kept as one pass so `/api/files` doesn't
+ *  scan large folder trees twice on first open. Per-file preview is cached
+ *  by mtime so large folders don't pay N × readFile on every refresh. */
+export function listFilesAndFolders(): FolderListing {
   const root = folderRoot();
-  const out: FileEntry[] = [];
+  const files: FileEntry[] = [];
+  const folders: FolderEntry[] = [];
   const seen = new Set<string>();
   walk(root, '', (rel, full, ent) => {
+    if (ent.isDirectory()) {
+      folders.push({ path: rel });
+      return;
+    }
     if (!ent.isFile()) return;
     if (ent.name.endsWith('.tmp')) return;
     const format = detectViewerFormat(ent.name);
@@ -549,15 +558,23 @@ export function listFiles(): FileEntry[] {
       previewCache.set(full, { mtimeMs: st.mtimeMs, heading, snippet, imported_at });
       entry = { heading, snippet, imported_at };
     }
-    out.push({ name: rel, format, size: st.size, ...entry });
+    files.push({ name: rel, format, size: st.size, ...entry });
   });
   // Evict cache entries for files that no longer exist on disk —
   // otherwise renamed/deleted files accumulate forever.
   for (const key of previewCache.keys()) {
     if (!seen.has(key)) previewCache.delete(key);
   }
-  out.sort((a, b) => (a.name < b.name ? -1 : 1));
-  return out;
+  files.sort((a, b) => (a.name < b.name ? -1 : 1));
+  folders.sort((a, b) => (a.path < b.path ? -1 : 1));
+  return { files, folders };
+}
+
+/** Recursive walk of the folder. Returns every recognised note file with
+ *  its relative path, format, first-heading preview, and disk mtime.
+ *  Sorted by full path so the tree renders in a stable order. */
+export function listFiles(): FileEntry[] {
+  return listFilesAndFolders().files;
 }
 
 /** Every subfolder (recursive). Empty folders, intermediate folders,
@@ -565,13 +582,7 @@ export function listFiles(): FileEntry[] {
  *  (`<stem>_files/` next to `<stem>.{md,html}`) are filtered out at
  *  the `walk` level, so they don't surface here either. */
 export function listFolders(): FolderEntry[] {
-  const root = folderRoot();
-  const out: FolderEntry[] = [];
-  walk(root, '', (rel, _full, ent) => {
-    if (ent.isDirectory()) out.push({ path: rel });
-  });
-  out.sort((a, b) => (a.path < b.path ? -1 : 1));
-  return out;
+  return listFilesAndFolders().folders;
 }
 
 /** Text files that should be carried through a folder-level index rename.

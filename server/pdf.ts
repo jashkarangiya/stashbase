@@ -20,7 +20,7 @@ import { relInFolder, toPosixAbs } from './folder.ts';
 import { derivedNoteFor, derivedBundleFor, derivedBatchesFor, derivedDir } from './derived-store.ts';
 import { extractorSpawn } from './python-host.ts';
 import { discoverNewSources, indexFreshDerived, maybeConvert, TransientConversionError, type ConversionSpec } from './conversion.ts';
-import { spawnOptionsForExtractor, terminateExtractorTree } from './extractor-process.ts';
+import { lowerExtractorPriority, spawnOptionsForExtractor, terminateExtractorTree } from './extractor-process.ts';
 import type { ConversionProgress } from './conversion-status.ts';
 import { logger } from './log.ts';
 
@@ -115,7 +115,7 @@ async function drainPdfQueue(): Promise<void> {
         (a.priority ?? 0) - (b.priority ?? 0)
         || a.absPath.localeCompare(b.absPath),
       );
-      const next = items[0];
+      const next = items.find((item) => queuedPdfs.has(pdfQueueKey(item.absPath)));
       if (!next) break;
       queuedPdfs.delete(pdfQueueKey(next.absPath));
       const run = maybeConvert(next.absPath, PDF_SPEC);
@@ -125,6 +125,18 @@ async function drainPdfQueue(): Promise<void> {
     pdfQueueRunning = false;
     if (queuedPdfs.size > 0) schedulePdfQueueDrain();
   }
+}
+
+export function cancelQueuedPdfsUnder(folderAbs: string): string[] {
+  const root = toPosixAbs(folderAbs).replace(/\/+$/, '');
+  const removed: string[] = [];
+  for (const item of queuedPdfs.values()) {
+    const abs = toPosixAbs(item.absPath);
+    if (abs !== root && !abs.startsWith(`${root}/`)) continue;
+    queuedPdfs.delete(pdfQueueKey(abs));
+    removed.push(abs);
+  }
+  return removed;
 }
 
 async function resolvePdfPriorities(items: QueuedPdf[]): Promise<void> {
@@ -170,6 +182,7 @@ function probePdfTextLayer(pdfAbsPath: string): Promise<boolean> {
       return;
     }
     const proc = spawn(cmd, args, spawnOptionsForExtractor());
+    lowerExtractorPriority(proc);
     let settled = false;
     let timer: ReturnType<typeof setTimeout>;
     const done = (value: boolean) => {
@@ -290,6 +303,7 @@ function convertPdf(
       pdfAbsPath, notePath, bundleDir,
     ]);
     const proc = spawn(cmd, args, spawnOptionsForExtractor());
+    lowerExtractorPriority(proc);
     let stderr = '';
     let stderrLineBuffer = '';
     let cancelled = false;

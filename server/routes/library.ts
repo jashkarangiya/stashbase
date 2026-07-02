@@ -28,9 +28,11 @@ import {
 import { errorMessage, logger } from '../log.ts';
 import { deleteFolderRuntimeState, indexer } from '../state.ts';
 import { clearRecordsUnder } from '../conversion-status.ts';
+import { cancelConversionsUnder } from '../conversion.ts';
 import { noteTreeChanged } from '../watcher.ts';
 import { deleteDerivedForSource, deleteDerivedUnderFolder, type DerivedCleanupStats } from '../derived-store.ts';
 import { deleteFileOrderForRoot } from '../file-order.ts';
+import { cancelQueuedPdfsUnder } from '../pdf.ts';
 
 const log = logger('routes/folder');
 
@@ -52,6 +54,28 @@ async function cleanupDerivedForFolder(folderAbs: string): Promise<DerivedCleanu
     log.info(`derived cleanup: removed ${stats.artifacts} artifact(s) for ${stats.sources} source(s) under ${folderAbs}`);
   }
   return stats;
+}
+
+async function cleanupRemovedLibraryFolder(abs: string, cancelledQueued: number): Promise<void> {
+  const cancelledRunning = await cancelConversionsUnder(abs).catch((err: unknown) => {
+    log.warn(`folder remove: conversion cancel failed for ${abs}: ${errorMessage(err)}`);
+    return [];
+  });
+  if (cancelledQueued || cancelledRunning.length) {
+    log.info(
+      `folder remove: cancelled ${cancelledRunning.length} running and ` +
+      `${cancelledQueued} queued conversion(s) under ${abs}`,
+    );
+  }
+  await cleanupDerivedForFolder(abs);
+  // Clear its index rows + unbind from the daemon. deletePathPrefix is
+  // keyed by the absolute folder root.
+  await indexer.deletePathPrefix(abs);
+  try { await indexer.unbindFolder(abs); }
+  catch (err: unknown) { log.warn(`unbind on remove failed for ${abs}: ${errorMessage(err)}`); }
+  // Best-effort secondary-cache cleanup (conversions / runtime warnings).
+  try { await deleteFolderRuntimeState(abs); }
+  catch (err: unknown) { log.warn(`runtime-state cleanup failed for ${abs}: ${errorMessage(err)}`); }
 }
 
 export function mount(app: express.Express): void {
@@ -138,22 +162,18 @@ export function mount(app: express.Express): void {
       // Tear down any live window bound to it FIRST (kills terminal sessions
       // whose cwd is inside this folder).
       clearFolderPath(abs);
-      await cleanupDerivedForFolder(abs);
-      // Clear its index rows + unbind from the daemon. deletePathPrefix is
-      // keyed by the absolute folder root.
-      await indexer.deletePathPrefix(abs);
-      try { await indexer.unbindFolder(abs); }
-      catch (err: unknown) { log.warn(`unbind on remove failed for ${abs}: ${errorMessage(err)}`); }
-      // Best-effort secondary-cache cleanup (conversions / runtime warnings).
-      try { await deleteFolderRuntimeState(abs); }
-      catch (err: unknown) { log.warn(`runtime-state cleanup failed for ${abs}: ${errorMessage(err)}`); }
+      const cancelledQueued = cancelQueuedPdfsUnder(abs);
       try { clearRecordsUnder(abs); }
       catch (err: unknown) { log.warn(`conversion-state cleanup failed for ${abs}: ${errorMessage(err)}`); }
       try { deleteFileOrderForRoot(abs); }
       catch (err: unknown) { log.warn(`file-order cleanup failed for ${abs}: ${errorMessage(err)}`); }
       removeRecent(abs);
       noteTreeChanged();
+      const cleanup = cleanupRemovedLibraryFolder(abs, cancelledQueued.length).catch((err: unknown) => {
+        log.warn(`folder remove cleanup failed for ${abs}: ${errorMessage(err)}`);
+      });
       res.json({});
+      void cleanup;
     } catch (err: unknown) {
       sendFolderOperationError(res, err);
     }

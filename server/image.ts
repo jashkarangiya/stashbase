@@ -20,7 +20,7 @@ import { isImageFile } from './format.ts';
 import { derivedNoteFor, derivedDir } from './derived-store.ts';
 import { extractorSpawn } from './python-host.ts';
 import { discoverNewSources, indexFreshDerived, maybeConvert, TransientConversionError, type ConversionSpec } from './conversion.ts';
-import { spawnOptionsForExtractor, terminateExtractorTree } from './extractor-process.ts';
+import { lowerExtractorPriority, spawnOptionsForExtractor, terminateExtractorTree } from './extractor-process.ts';
 
 const OCR_COMPLETE_MARKER = '<!-- stashbase-ocr-conversion: complete -->';
 
@@ -70,6 +70,7 @@ function convertImage(
     }
     const { cmd, args } = extractorSpawn('ocr', 'ocr_extract.py', [imageAbsPath, notePath]);
     const proc = spawn(cmd, args, spawnOptionsForExtractor());
+    lowerExtractorPriority(proc);
     let stderr = '';
     let cancelled = false;
     const onAbort = () => {

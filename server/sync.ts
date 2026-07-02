@@ -132,6 +132,11 @@ function syncIndexCandidates(root: string, paths: string[]): string[] {
   });
 }
 
+function isLiveConvertedIndexRow(root: string, sourcePath: string): boolean {
+  const folderRel = folderRelOf(root, sourcePath);
+  return folderRel != null && isConvertibleSource(folderRel) && fs.existsSync(sourcePath);
+}
+
 async function deleteStaleRenameSource(
   indexer: Indexer,
   oldPath: string,
@@ -213,9 +218,11 @@ export async function syncIndex(indexer: Indexer, root: string, opts: SyncOption
   const excludedRemoved = await removeExcludedIndexedFiles(indexer, root, failed);
   cleanupMissingConvertedSources(root);
 
+  const deletedCandidates = diff.deleted.filter((sourcePath) => !isLiveConvertedIndexRow(root, sourcePath));
+
   if (
     diff.added.length === 0 && diff.modified.length === 0 &&
-    diff.deleted.length === 0 && diff.renamed.length === 0 && excludedRemoved.length === 0
+    deletedCandidates.length === 0 && diff.renamed.length === 0 && excludedRemoved.length === 0
   ) {
     discoverConvertedSources(root);
     log.debug('index up to date');
@@ -273,9 +280,9 @@ export async function syncIndex(indexer: Indexer, root: string, opts: SyncOption
   }
 
   const removedDone: string[] = [...excludedRemoved];
-  if (diff.deleted.length) {
-    log.info(`removing ${diff.deleted.length} stale file(s) from index`);
-    for (const sourcePath of diff.deleted) {
+  if (deletedCandidates.length) {
+    log.info(`removing ${deletedCandidates.length} stale file(s) from index`);
+    for (const sourcePath of deletedCandidates) {
       if (shouldStop(opts)) {
         return {
           added: [],
@@ -368,7 +375,7 @@ export async function syncIndex(indexer: Indexer, root: string, opts: SyncOption
     `done. added=${addedDone.length}/${addedCandidates.length} ` +
       `modified=${modifiedDone.length}/${modifiedCandidates.length} ` +
       `renamed=${renamedDone.length}/${diff.renamed.length} ` +
-      `removed=${removedDone.length}/${diff.deleted.length + excludedRemoved.length} failed=${failed.length}`,
+      `removed=${removedDone.length}/${deletedCandidates.length + excludedRemoved.length} failed=${failed.length}`,
   );
   await assertSyncConverged(indexer, root, [...addedDone, ...modifiedDone, ...renamedDone]);
   return {

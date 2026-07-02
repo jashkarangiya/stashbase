@@ -394,6 +394,16 @@ def _markdown_from_page_chunks(value: object, fallback_pages: list[int]) -> tupl
     return "\n\n".join(parts), has_text
 
 
+def _rich_fallback_reason(err: object) -> str:
+    raw = str(err).strip()
+    lower = raw.lower()
+    if "cannot open file" in lower and ".png" in lower:
+        return "layout image extraction failed"
+    if "nonetype" in lower and "not iterable" in lower:
+        return "rich layout parser returned no content"
+    return raw or err.__class__.__name__
+
+
 def _convert_batch_worker(args: tuple[str, list[int], int, int, str, str, float]) -> tuple[int, str, str, bool]:
     pdf_path_raw, page_batch, batch_index, batch_count, bundle_name, tmp_parent_raw, ocr_max_mpix = args
     pdf_path = Path(pdf_path_raw)
@@ -449,7 +459,8 @@ def _convert_batch_worker(args: tuple[str, list[int], int, int, str, str, float]
             ))
             print(
                 f"[pdf_extract] pymupdf4llm rich extraction unavailable for pages "
-                f"{page_batch[0] + 1}-{page_batch[-1] + 1}; using plain text fallback: {err}",
+                f"{page_batch[0] + 1}-{page_batch[-1] + 1}; using text-only fallback "
+                f"({_rich_fallback_reason(err)})",
                 file=sys.stderr,
                 flush=True,
             )
@@ -504,7 +515,7 @@ def _convert_batch_plain_text_worker(
     batch_note = Path(batch_note_name)
     print(
         f"[pdf_extract] pymupdf4llm rich extraction unavailable for pages "
-        f"{page_batch[0] + 1}-{page_batch[-1] + 1}; using plain text fallback: {reason}",
+        f"{page_batch[0] + 1}-{page_batch[-1] + 1}; using text-only fallback ({reason})",
         file=sys.stderr,
         flush=True,
     )

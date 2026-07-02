@@ -88,13 +88,3 @@ export function keywordFindCaseSensitive(query: string, caseStrict: boolean): bo
 export function isFolderFileTab(t: { file: State['tabs'][number]['file'] }, name: string): boolean {
   return t.file?.name === name;
 }
-
-const LANDING_FILES = ['welcome.html', 'readme.md', 'readme.html', 'index.html'];
-
-export function pickInitialFile(files: Array<{ name: string }>): string | null {
-  for (const target of LANDING_FILES) {
-    const hit = files.find((f) => f.name.toLowerCase() === target);
-    if (hit) return hit.name;
-  }
-  return files[0]?.name ?? null;
-}
