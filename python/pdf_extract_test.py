@@ -68,7 +68,9 @@ class PdfExtractTests(unittest.TestCase):
             out = root / ".Broken Layout.pdf.md"
             bundle = root / ".Broken Layout.pdf_files"
 
-            pdf_extract.convert_with_pymupdf(pdf, out, bundle)
+            # Keep this in-process: Windows spawn workers do not inherit
+            # sys.modules fakes, and this test is about fallback behavior.
+            pdf_extract.convert_with_pymupdf(pdf, out, bundle, batch_timeout_s=0)
 
             text = out.read_text(encoding="utf-8")
             self.assertIn("# Broken Layout", text)
