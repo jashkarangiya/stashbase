@@ -234,12 +234,12 @@ class MfsDaemon extends EventEmitter {
           max_indexable_bytes: MAX_INDEXABLE_BYTES,
           include_extensions: [
             ...NOTE_EXTS.map((e) => `.${e}`),
-            // Convertible sources (PDF/image) are TRACKED by the disk walk so
+            // Convertible sources (PDF/image/DOCX) are TRACKED by the disk walk so
             // their index entry — whose content is the app-data derived note,
             // indexed under the source path — isn't orphan-deleted, and so
             // scan_diff detects source changes. The daemon only lists/hashes
             // them; the markdown content is pushed by the conversion path.
-            '.pdf', '.png', '.jpg', '.jpeg', '.webp',
+            '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.docx',
           ],
         }).catch((err) => log.warn(
           `set_rules failed — daemon binary may predate rule push, indexing rules can drift ` +

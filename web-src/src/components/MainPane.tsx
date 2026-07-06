@@ -56,6 +56,9 @@ export function MainPane() {
         {cur && !editMode && cur.format === 'html' && (
           <HtmlPreview name={cur.name} />
         )}
+        {cur && cur.format === 'docx' && (
+          <HtmlPreview name={cur.name} derived />
+        )}
         {cur && cur.format === 'pdf' && (
           // PDFs have no edit mode — the source is a binary file. Only
           // the original PDF is shown: the extracted `.md` is a hidden
@@ -69,7 +72,7 @@ export function MainPane() {
           <ImagePreview name={cur.name} />
         )}
         {cur && editMode && cur.format === 'md' && (
-          // Markdown is the only editable format — HTML/PDF/image are
+          // Markdown is the only editable format — HTML/PDF/image/DOCX are
           // read-only viewers. The editor is a single CodeMirror pane
           // (no source+preview split); save is scheduled on every edit.
           <div className="md-editor">

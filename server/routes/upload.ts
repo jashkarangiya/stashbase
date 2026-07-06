@@ -21,7 +21,7 @@ import {
   pathExists,
   sanitizeFilename,
 } from '../files.ts';
-import { isImageFile, isNoteName } from '../format.ts';
+import { isDocxFile, isImageFile, isNoteName } from '../format.ts';
 import { getApiKey } from '../app-config.ts';
 import { isCloudPlaceholderName, isIndexExcludedDirName } from '../indexable.ts';
 import { errorMessage, logger } from '../log.ts';
@@ -35,6 +35,7 @@ import {
 } from '../folder.ts';
 import { maybeConvertImage } from '../image.ts';
 import { maybeConvertPdf } from '../pdf.ts';
+import { maybeConvertDocx } from '../docx.ts';
 import { indexer } from '../state.ts';
 import { noteTreeChanged } from '../watcher.ts';
 
@@ -215,6 +216,7 @@ async function handleUpload(req: express.Request, res: express.Response): Promis
   const toIndex: { name: string; sourcePath: string; text: string }[] = [];
   const toConvertPdf: { abs: string; rel: string }[] = [];
   const toOcrImage: { abs: string; rel: string }[] = [];
+  const toConvertDocx: { abs: string; rel: string }[] = [];
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
     const name = finalNames[i];
@@ -245,6 +247,10 @@ async function handleUpload(req: express.Request, res: express.Response): Promis
         // Images run through RapidOCR so any text in a screenshot /
         // photo becomes AppData-derived OCR Markdown for search.
         toOcrImage.push({ abs: path.join(folderAbs, name), rel: name });
+      } else if (folderAbs && isDocxFile(name)) {
+        // DOCX is converted to AppData-derived semantic HTML for preview,
+        // search, and Agent reads. The source .docx stays unchanged.
+        toConvertDocx.push({ abs: path.join(folderAbs, name), rel: name });
       }
     } catch (err: unknown) {
       log.warn(`upload: save failed for ${name}: ${errorMessage(err)}`);
@@ -276,6 +282,9 @@ async function handleUpload(req: express.Request, res: express.Response): Promis
   }
   for (const { abs, rel } of toOcrImage) {
     try { maybeConvertImage(abs); } catch (err: unknown) { log.warn(`upload: image OCR kickoff failed for ${rel}: ${errorMessage(err)}`); }
+  }
+  for (const { abs, rel } of toConvertDocx) {
+    try { maybeConvertDocx(abs); } catch (err: unknown) { log.warn(`upload: docx convert kickoff failed for ${rel}: ${errorMessage(err)}`); }
   }
 }
 

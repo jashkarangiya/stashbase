@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { versionedAssetUrl } from '../api';
+import { versionedAssetUrl, versionedDerivedAssetUrl } from '../api';
 import { useApp, type MatchInfo } from '../store/AppContext';
 import { useIframeDropForward } from '../hooks/useIframeDropForward';
 import { isTrustedFrameSource } from '../lib/previewMessages';
@@ -27,7 +27,7 @@ import { isTrustedFrameSource } from '../lib/previewMessages';
  * stuck on whatever the asset route served first. See the `src`
  * computation below.
  */
-export function HtmlPreview({ name }: { name: string }) {
+export function HtmlPreview({ name, derived = false }: { name: string; derived?: boolean }) {
   const { state, actions, activeTab } = useApp();
   const pendingAnchor = activeTab?.pendingAnchor ?? null;
   const pendingHighlight = activeTab?.pendingHighlight ?? null;
@@ -51,14 +51,20 @@ export function HtmlPreview({ name }: { name: string }) {
   // re-reads from disk on every request — without a query-string
   // change React keeps the same `src`, so the iframe never refetches).
   // djb2 over the whole content; usable as a 32-bit base36 token.
+  const derivedStateToken = derived
+    ? `${state.pendingConversions.includes(name) ? 'pending' : 'settled'}:${state.preparationFailures.some((f) => f.path === name) ? 'failed' : 'ok'}`
+    : '';
   const fingerprint = useMemo(() => {
     let h = 5381;
-    for (let i = 0; i < content.length; i++) {
-      h = ((h << 5) + h + content.charCodeAt(i)) | 0;
+    const seed = derived ? `${content}:${derivedStateToken}` : content;
+    for (let i = 0; i < seed.length; i++) {
+      h = ((h << 5) + h + seed.charCodeAt(i)) | 0;
     }
     return (h >>> 0).toString(36);
-  }, [content]);
-  const src = versionedAssetUrl(name, fingerprint);
+  }, [content, derived, derivedStateToken]);
+  const src = derived
+    ? versionedDerivedAssetUrl(name, fingerprint)
+    : versionedAssetUrl(name, fingerprint);
 
   function postScroll() {
     if (!pendingAnchor) return;

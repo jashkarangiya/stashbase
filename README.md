@@ -12,8 +12,9 @@
 📂 Open a folder in StashBase to make it searchable by Agents:
 
 - 📄 Turn PDFs, including scans, into Markdown.
+- 📝 Convert DOCX files into derived HTML for preview and Agent reading.
 - 🖼️ Pull searchable text out of images with OCR.
-- 🔎 Index Markdown, HTML, PDFs, and images for semantic and keyword search.
+- 🔎 Index Markdown, HTML, PDFs, DOCX files, and images for semantic and keyword search.
 - 🤖 Let Claude, Codex, and other MCP clients search the same local library.
 
 Your folders remain the source of truth; StashBase adds a rebuildable retrieval layer on top.
@@ -74,9 +75,10 @@ Some local formats are awkward for Agents to read directly. StashBase keeps the 
 | Markdown | Read directly | Indexed directly |
 | HTML | Read as original HTML | Clean text extracted for indexing |
 | PDF | Original PDF stays on disk | Converted to derived Markdown |
+| DOCX | Original DOCX stays on disk | Converted to derived HTML |
 | Images | Original image stays on disk | OCR text extracted for search |
 
-PDFs are different from HTML and images: for text reading, Agents use the derived Markdown. For HTML and images, the original file remains the primary reading object; the derived text is mainly for search.
+PDFs and DOCX files are different from HTML and images: for text reading, Agents use the derived Markdown or HTML. For HTML and images, the original file remains the primary reading object; the derived text is mainly for search.
 
 ### Index
 
@@ -84,6 +86,7 @@ StashBase builds semantic and keyword search over:
 
 - Markdown and HTML text
 - PDF-derived Markdown
+- DOCX-derived HTML
 - OCR text from images
 
 Search results point back to the user-visible source file, not hidden app data.

@@ -61,13 +61,13 @@ const log = logger('server');
 // (not inside conversion.ts) to avoid a conversion ↔ state module cycle.
 setDerivedNoteIndexer(async (sourceAbs, derivedAbs) => {
   if (!getApiKey()) return;
-  // The derived markdown lives in app data; index it UNDER the source
-  // PDF/image path so folder-scoped search finds it. Stamp the SOURCE's
+  // Derived text lives in app data; index it UNDER the source
+  // PDF/image/DOCX path so folder-scoped search finds it. Stamp the SOURCE's
   // byte hash so the daemon's scan_diff (which hashes the source file) sees
   // it as unchanged rather than re-converting in a loop.
-  const derivedMd = fs.readFileSync(derivedAbs, 'utf8');
+  const derivedContent = fs.readFileSync(derivedAbs, 'utf8');
   const sourceHash = bytesToHex(blake3(fs.readFileSync(sourceAbs)));
-  await indexer.upsertConvertedFile(toPosixAbs(sourceAbs), derivedMd, sourceHash);
+  await indexer.upsertConvertedFile(toPosixAbs(sourceAbs), derivedContent, sourceHash, path.extname(derivedAbs));
   noteTreeChanged();
 });
 

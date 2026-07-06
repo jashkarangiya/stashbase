@@ -1,9 +1,9 @@
 /**
- * App-data home for PDF/image **derived notes** (the extracted markdown,
- * its image bundle, and the PDF resume-batch scratch). These never live in
+ * App-data home for convertible-source derived text (PDF/image markdown,
+ * DOCX HTML, image/PDF bundles, and PDF resume-batch scratch). These never live in
  * the user's opened folder; all generated artifacts are per-machine derived
- * state under app data (see `local-data.ts`). The PDF/image *source* is the user-facing file
- * and is what gets indexed (under its own path, with the derived markdown as
+ * state under app data (see `local-data.ts`). The source file is the user-facing file
+ * and is what gets indexed (under its own path, with the derived text as
  * the content) so folder-scoped search still finds it.
  *
  * Keyed by a hash of the **source's absolute path** (not its content): a
@@ -94,20 +94,33 @@ export function derivedNoteFor(sourceAbs: string): string {
   return path.join(derivedDir(), `${derivedKey(sourceAbs)}.md`);
 }
 
-/** Reverse-map a derived markdown note path back to its source path.
- *  Only manifest-known final notes are accepted; scratch/bundle files and
+/** Absolute path of the derived HTML representation for a source file. */
+export function derivedHtmlFor(sourceAbs: string): string {
+  return path.join(derivedDir(), `${derivedKey(sourceAbs)}.html`);
+}
+
+function derivedTextPathFor(sourceAbs: string, ext: '.md' | '.html'): string {
+  return ext === '.html' ? derivedHtmlFor(sourceAbs) : derivedNoteFor(sourceAbs);
+}
+
+/** Reverse-map a derived text path back to its source path.
+ *  Only manifest-known final text files are accepted; scratch/bundle files and
  *  arbitrary AppData paths are not exposed through MCP file reads. */
-export function sourceForDerivedNote(noteAbs: string): string | null {
+export function sourceForDerivedText(noteAbs: string): string | null {
   const abs = toPosixAbs(noteAbs);
   const dir = toPosixAbs(derivedDir()).replace(/\/+$/, '');
   if (!abs.startsWith(`${dir}/`)) return null;
   const base = path.posix.basename(abs);
-  const match = base.match(/^([0-9a-f]{32})\.md$/i);
+  const match = base.match(/^([0-9a-f]{32})\.(md|html)$/i);
   if (!match) return null;
   const sourceAbs = readManifest()[match[1]];
   if (!sourceAbs) return null;
-  return toPosixAbs(derivedNoteFor(sourceAbs)) === abs ? toPosixAbs(sourceAbs) : null;
+  return toPosixAbs(derivedTextPathFor(sourceAbs, match[2].toLowerCase() === 'html' ? '.html' : '.md')) === abs
+    ? toPosixAbs(sourceAbs)
+    : null;
 }
+
+export const sourceForDerivedNote = sourceForDerivedText;
 
 /** Absolute path of the derived image bundle (`_files/`) for a source. */
 export function derivedBundleFor(sourceAbs: string): string {
@@ -139,11 +152,12 @@ function rmDerivedArtifact(absPath: string): DerivedRemoval {
   }
 }
 
-/** Delete all AppData-derived artifacts for one PDF/image source path. */
+/** Delete all AppData-derived artifacts for one convertible source path. */
 export function deleteDerivedForSource(sourceAbs: string): DerivedCleanupStats {
   if (!isConvertibleSource(sourceAbs)) return { sources: 0, artifacts: 0 };
   const removals = [
     rmDerivedArtifact(derivedNoteFor(sourceAbs)),
+    rmDerivedArtifact(derivedHtmlFor(sourceAbs)),
     rmDerivedArtifact(derivedBundleFor(sourceAbs)),
     rmDerivedArtifact(derivedBatchesFor(sourceAbs)),
   ];

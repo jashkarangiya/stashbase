@@ -964,6 +964,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
       body = { name, format: 'pdf' as const, content: '' };
+    } else if (isDocxName(name)) {
+      // DOCX previews use AppData-derived HTML. The source .docx stays
+      // untouched and is not fetched as text through /api/files.
+      try {
+        await api.statFile(name);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        dispatch({ type: 'SAVE_STATUS', status: { text: msg, cls: 'error' } });
+        return;
+      }
+      body = { name, format: 'docx' as const, content: '' };
     } else if (/\.(png|jpe?g|webp)$/i.test(name)) {
       // Images, same story as PDFs — ImagePreview loads the binary from
       // `/asset/*`. The searchable text lives in the hidden `.<stem>.md`
@@ -1962,6 +1973,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(() => ({ state, actions, dispatch }), [state, actions]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+}
+
+function isDocxName(name: string): boolean {
+  const base = name.replace(/\\/g, '/').split('/').pop() ?? name;
+  return /\.docx$/i.test(base) && !base.startsWith('~$') && !base.startsWith('.~');
 }
 
 export function useApp() {

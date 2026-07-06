@@ -7,7 +7,7 @@
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import { deleteDerivedForSource, derivedNoteFor, sourceForDerivedNote } from '../derived-store.ts';
+import { deleteDerivedForSource, derivedNoteFor, sourceForDerivedText } from '../derived-store.ts';
 import { errorMessage, logger } from '../log.ts';
 import { getFolderHome, memberFolderRoots, memberRootForAbs, resolveFolderRoot, runWithFolderRoot, toPosixAbs } from '../folder.ts';
 import { indexer, syncFolderNow } from '../state.ts';
@@ -32,6 +32,7 @@ import { cancelConversion } from '../conversion.ts';
 import { applyRenamePlan, planRenameLinks, type RenameEntry } from '../links.ts';
 import { maybeConvertPdf } from '../pdf.ts';
 import { maybeConvertImage } from '../image.ts';
+import { derivedHtmlPathForDocx, maybeConvertDocx } from '../docx.ts';
 import { clearRecord } from '../conversion-status.ts';
 
 const log = logger('routes/library-files');
@@ -166,7 +167,7 @@ export function mount(app: express.Express): void {
   });
 
   // Resolve the best file path to hand to a built-in agent for a visible
-  // source file. PDFs use extracted Markdown for text context. HTML/images
+  // source file. PDF/DOCX use app-data extracted text for reading. HTML/images
   // keep the original source as the read path; their extracted text layers
   // are indexing inputs, not source replacements.
   app.get('/api/library/agent-context-file', async (req, res) => {
@@ -277,8 +278,8 @@ export interface AgentContextFile {
   folder: string;
   /** Folder-relative visible source path (`paper.pdf`). */
   sourcePath: string;
-  /** Path the agent should read first (folder-relative for text; an
-   *  absolute app-data path for an extracted PDF/image note). */
+  /** Path the agent should read first (folder-relative for direct text; an
+   *  absolute app-data path for extracted PDF/DOCX text). */
   readPath: string;
   kind: 'direct' | 'derived';
   sourceFormat: string;
@@ -362,7 +363,7 @@ export async function agentContextFile(rawPath: unknown): Promise<AgentContextFi
     if (!sourceFormat) throw routeError('unsupported format', 415, 'UNSUPPORTED_FORMAT');
     if (!pathExists(target.folderRel)) throw routeError('not found', 404);
 
-    if (sourceFormat !== 'pdf') {
+    if (sourceFormat !== 'pdf' && sourceFormat !== 'docx') {
       return {
         path: target.abs,
         folder: folderName,
@@ -377,10 +378,12 @@ export async function agentContextFile(rawPath: unknown): Promise<AgentContextFi
       };
     }
 
-    // The extracted Markdown note lives in per-machine app data (never
-    // in the user's folder), so `readPath` here is an ABSOLUTE path the
-    // built-in agent reads via its shell — not a folder-relative one.
-    const derivedAbs = derivedNoteFor(target.abs);
+    // The extracted text lives in per-machine app data (never in the
+    // user's folder), so `readPath` here is an ABSOLUTE path the built-in
+    // agent reads via its shell — not a folder-relative one.
+    const derivedAbs = sourceFormat === 'docx'
+      ? derivedHtmlPathForDocx(target.abs)
+      : derivedNoteFor(target.abs);
     if (!fs.existsSync(derivedAbs)) {
       return {
         path: target.abs,
@@ -390,7 +393,9 @@ export async function agentContextFile(rawPath: unknown): Promise<AgentContextFi
         kind: 'direct',
         sourceFormat,
         available: false,
-        reason: 'No extracted Markdown exists yet for this PDF; retry after conversion if you need text context.',
+        reason: sourceFormat === 'docx'
+          ? 'No extracted HTML exists yet for this DOCX; retry after conversion if you need text context.'
+          : 'No extracted Markdown exists yet for this PDF; retry after conversion if you need text context.',
       };
     }
 
@@ -402,7 +407,9 @@ export async function agentContextFile(rawPath: unknown): Promise<AgentContextFi
       kind: 'derived',
       sourceFormat,
       available: true,
-      reason: 'Read the extracted Markdown note (an absolute app-data path) first for this PDF; use the original only when raw visual or binary detail is needed.',
+      reason: sourceFormat === 'docx'
+        ? 'Read the extracted HTML file (an absolute app-data path) first for this DOCX; the original DOCX stays as the source identity.'
+        : 'Read the extracted Markdown note (an absolute app-data path) first for this PDF; use the original only when raw visual or binary detail is needed.',
     };
   });
 }
@@ -517,6 +524,24 @@ export async function readLibraryFile(rawPath: unknown): Promise<{
           version: fileVersion(target.folderRel) ?? undefined,
         };
       }
+      if (viewerFormat === 'docx') {
+        const derivedAbs = derivedHtmlPathForDocx(target.abs);
+        let content: string;
+        try {
+          content = fs.readFileSync(derivedAbs, 'utf8');
+        } catch {
+          throw routeError('extracted HTML is not available for this DOCX yet; retry conversion or run reindex first', 409, 'CONVERSION_NOT_READY');
+        }
+        return {
+          path: target.abs,
+          format: 'docx-derived-html',
+          sourceFormat: 'docx',
+          readPath: derivedAbs,
+          derived: true,
+          content,
+          version: fileVersion(target.folderRel) ?? undefined,
+        };
+      }
       if (viewerFormat === 'image') {
         throw routeError('read_file cannot return image bytes; image OCR text is used for search evidence, while the image remains the source file', 415, 'UNSUPPORTED_FORMAT');
       }
@@ -540,7 +565,7 @@ function normalizeDerivedReadPath(rawPath: unknown): ReturnType<typeof readDeriv
   } catch {
     return null;
   }
-  const sourceAbs = sourceForDerivedNote(abs);
+  const sourceAbs = sourceForDerivedText(abs);
   if (!sourceAbs) return null;
   const folderRoot = memberRootForAbs(sourceAbs);
   if (!folderRoot) {
@@ -559,20 +584,23 @@ function readDerivedLibraryFile(derivedAbs: string, sourceAbs: string, folderRoo
   derived?: boolean;
 }> {
   const folderRel = sourceAbs.slice(folderRoot.length + 1);
-  if (detectViewerFormat(folderRel) !== 'pdf') {
-    throw routeError('derived Markdown reads are only exposed for PDF text context', 403);
+  const sourceFormat = detectViewerFormat(folderRel);
+  if (sourceFormat !== 'pdf' && sourceFormat !== 'docx') {
+    throw routeError('derived reads are only exposed for PDF/DOCX text context', 403);
   }
   return runWithFolderRoot(folderRoot, async () => {
     let content: string;
     try {
       content = fs.readFileSync(derivedAbs, 'utf8');
     } catch {
-      throw routeError('extracted Markdown is not available for this PDF yet; retry conversion or run reindex first', 409, 'CONVERSION_NOT_READY');
+      throw routeError(sourceFormat === 'docx'
+        ? 'extracted HTML is not available for this DOCX yet; retry conversion or run reindex first'
+        : 'extracted Markdown is not available for this PDF yet; retry conversion or run reindex first', 409, 'CONVERSION_NOT_READY');
     }
     return {
       path: sourceAbs,
-      format: 'pdf-derived-md',
-      sourceFormat: 'pdf',
+      format: sourceFormat === 'docx' ? 'docx-derived-html' : 'pdf-derived-md',
+      sourceFormat,
       readPath: derivedAbs,
       derived: true,
       content,
@@ -603,7 +631,7 @@ export async function editLibraryFile(
   if (!oldText) throw routeError('old_text must not be empty', 400);
   const current = await readLibraryFile(rawPath);
   if (current.derived) {
-    throw routeError('edit_file cannot edit derived PDF text; create or edit a Markdown/HTML source file instead', 415, 'UNSUPPORTED_FORMAT');
+    throw routeError('edit_file cannot edit derived PDF/DOCX text; create or edit a Markdown/HTML source file instead', 415, 'UNSUPPORTED_FORMAT');
   }
   const count = countOccurrences(current.content, oldText);
   if (count === 0) throw routeError('old_text not found', 409, 'EDIT_MISMATCH');
@@ -649,7 +677,7 @@ export async function moveLibraryFile(
     }
     const inFlightError = inFlightFileOperationError(oldTarget.folderRel, 'rename');
     if (inFlightError) throw routeError(inFlightError.body.error, inFlightError.status, inFlightError.body.code);
-    const viewerOnly = !oldStructuredFormat && (oldFormat === 'pdf' || oldFormat === 'image');
+    const viewerOnly = !oldStructuredFormat && (oldFormat === 'pdf' || oldFormat === 'image' || oldFormat === 'docx');
     const content = viewerOnly ? null : readText(oldTarget.folderRel);
     if (!viewerOnly && content == null) throw routeError('not found', 404);
     if (viewerOnly && !pathExists(oldTarget.folderRel)) throw routeError('not found', 404);
@@ -689,6 +717,7 @@ export async function moveLibraryFile(
         try {
           if (oldFormat === 'pdf') maybeConvertPdf(newTarget.abs);
           else if (isImageFile(newTarget.folderRel)) maybeConvertImage(newTarget.abs);
+          else if (oldFormat === 'docx') maybeConvertDocx(newTarget.abs);
         } catch (err: unknown) {
           log.warn(`library move: conversion kickoff failed for ${newTarget.abs}: ${errorMessage(err)}`);
         }

@@ -353,7 +353,7 @@ function FileRow({
   siblings,
 }: {
   path: string;
-  format: 'md' | 'html' | 'pdf' | 'image';
+  format: 'md' | 'html' | 'pdf' | 'image' | 'docx';
   paddingLeft: number;
   parent: string;
   siblings: string[];
@@ -604,7 +604,7 @@ function NewFolderInput({ parentPath, depth }: { parentPath: string; depth: numb
 // 6px "PDF"/"MD" label did not. Each SVG keeps its native viewBox and
 // hard-coded brand fill, so the `.format-*` CSS colour rules no longer
 // apply to them (they targeted `currentColor`).
-function FileTypeIcon({ format }: { format: 'md' | 'html' | 'pdf' | 'image' }) {
+function FileTypeIcon({ format }: { format: 'md' | 'html' | 'pdf' | 'image' | 'docx' }) {
   if (format === 'image') {
     return (
       <svg viewBox="0 0 16 16">
@@ -623,6 +623,15 @@ function FileTypeIcon({ format }: { format: 'md' | 'html' | 'pdf' | 'image' }) {
     return (
       <svg viewBox="0 0 32 32">
         <path fill="#e65100" d="m4 4 2 22 10 2 10-2 2-22Zm19.72 7H11.28l.29 3h11.86l-.802 9.335L15.99 25l-6.635-1.646L8.93 19h3.02l.19 2 3.86.77 3.84-.77.29-4H8.84L8 8h16Z" />
+      </svg>
+    );
+  }
+  if (format === 'docx') {
+    return (
+      <svg viewBox="0 0 32 32">
+        <path fill="#2b579a" d="M6 3h13l7 7v19H6z" />
+        <path fill="#fff" opacity=".9" d="M19 3v7h7z" />
+        <path fill="#fff" d="M9 14h2.1l1 6 1.2-6H15l1.2 6 1-6H19l-1.7 9h-2l-1.1-5.7L13 23h-2z" />
       </svg>
     );
   }

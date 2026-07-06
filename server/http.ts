@@ -59,7 +59,8 @@ export const withWindowContext: express.RequestHandler = (req, _res, next) => {
   // The header is the primary channel — every fetch via `api.ts` sets
   // it. Browser-loaded URLs (`<img src="/asset/…">`, iframe src) can't
   // attach custom headers, so assets carry either a legacy `?windowId=`
-  // query or the path form `/asset/__window/<id>/...`. The path form is
+  // query or the path form `/asset/__window/<id>/...` /
+  // `/asset-derived/__window/<id>/...`. The path form is
   // required for iframe `<base href>` because relative image/css/font
   // URLs inherit the base path, but not its query string.
   const header = req.header(WINDOW_ID_HEADER);
@@ -69,8 +70,12 @@ export const withWindowContext: express.RequestHandler = (req, _res, next) => {
 };
 
 function assetWindowIdFromPath(reqPath: string): string | undefined {
-  const prefix = '/asset/__window/';
-  if (!reqPath.startsWith(prefix)) return undefined;
+  const prefix = reqPath.startsWith('/asset-derived/__window/')
+    ? '/asset-derived/__window/'
+    : reqPath.startsWith('/asset/__window/')
+      ? '/asset/__window/'
+      : null;
+  if (!prefix) return undefined;
   const rest = reqPath.slice(prefix.length);
   const slash = rest.indexOf('/');
   if (slash <= 0) return undefined;

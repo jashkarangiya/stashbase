@@ -51,7 +51,7 @@ export interface ChatTab {
 
 export interface OpenFile {
   name: string;
-  format: 'md' | 'html' | 'pdf' | 'image';
+  format: 'md' | 'html' | 'pdf' | 'image' | 'docx';
   /** Last on-disk content — diff target for the autosave path. Empty
    *  string for binary files (PDF / image; the viewer loads them
    *  directly from `/asset/*`). */
@@ -498,7 +498,7 @@ export function getActiveTab(s: State): Tab | null {
  *  temporarily undercounting the backfill. */
 export function optimisticKeyBackfillPaths(files: FileMeta[]): string[] {
   return files
-    .filter((f) => f.format === 'md' || f.format === 'html' || f.format === 'pdf' || f.format === 'image')
+    .filter((f) => f.format === 'md' || f.format === 'html' || f.format === 'pdf' || f.format === 'image' || f.format === 'docx')
     .map((f) => f.name)
     .filter((name) => !name.split('/').some((seg) => seg.startsWith('.')))
     .sort();

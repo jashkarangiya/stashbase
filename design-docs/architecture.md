@@ -121,7 +121,7 @@ MCP client configuration is not stored in StashBase config. The Settings UI call
 
 # 4. Format Handling
 
-Different formats have different read and search paths. The product rule is: keep the source file as the user-facing file, and introduce derived Markdown only when search or Agent reading needs a better text representation.
+Different formats have different read and search paths. The product rule is: keep the source file as the user-facing file, and introduce derived representations only when search or Agent reading needs a better text form.
 
 ## 4.1 Read Path vs Index Path
 
@@ -131,6 +131,7 @@ Different formats have different read and search paths. The product rule is: kee
 | HTML | Source HTML | Extracted clean text / Markdown representation |
 | Image | Source image | OCR-derived Markdown |
 | PDF | Derived Markdown | Derived Markdown |
+| DOCX | Derived HTML | Extracted clean text from derived HTML |
 
 Markdown is edited, read, and indexed directly.
 
@@ -140,18 +141,23 @@ Images stay as source images for viewing and Agent reading. OCR-derived Markdown
 
 PDFs are different: StashBase converts the document into derived Markdown, and that derived Markdown is used both for search and for Agent text reading.
 
-## 4.2 Derived Markdown
+DOCX is also different, but not in the same way as PDF. Browsers and Electron do not provide a reliable native DOCX viewer, so StashBase converts DOCX into AppData-derived HTML. The original `.docx` remains the source file; preview, Agent reading, and indexing use the derived HTML/text representation.
 
-PDFs and images produce derived Markdown stored under AppData:
+## 4.2 Derived Representations
+
+PDFs, images, and DOCX produce derived representations stored under AppData:
 
 ```text
 paper.pdf  -> <appData>/derived.nosync/<source-path-hash>.md
 shot.png   -> <appData>/derived.nosync/<source-path-hash>.md
+brief.docx -> <appData>/derived.nosync/<source-path-hash>.html
 ```
 
-Derived Markdown is stored under AppData, but indexed under the original source path when semantic indexing is available. Keyword search can also read the AppData-derived text directly. Search results still point back to the visible source file.
+Derived content is stored under AppData, but indexed under the original source path when semantic indexing is available. Keyword search can also read the AppData-derived text directly. Search results still point back to the visible source file.
 
 PDF conversion extracts text and layout into Markdown. Image conversion uses OCR. If conversion fails, the original file remains available, but the file is not searchable until conversion succeeds. The failure is visible to the user and can be retried manually.
+
+DOCX conversion uses Mammoth to extract semantic HTML. It is not a pixel-perfect Word renderer, and it does not create a visible `.html` or `.md` file next to the source document. The derived HTML is app-owned data and can be rebuilt.
 
 PDF conversion is queued. Before a queued PDF starts, StashBase runs a cheap text-layer probe that does not OCR. PDFs with an extractable text layer run before scanned PDFs, because scanned PDFs usually take the slow OCR path. This scheduling only affects work order; completion is still defined by the derived Markdown and its completion marker.
 
@@ -209,7 +215,7 @@ Retrieval is how Agents and the UI find relevant local context.
 StashBase supports two retrieval paths:
 
 - **Semantic search**: dense vector retrieval, combined with keyword signal through MFS/Milvus.
-- **Keyword search**: literal search over source text plus AppData-derived PDF/OCR text, useful when embeddings are unavailable or exact matching is needed.
+- **Keyword search**: literal search over source text plus AppData-derived PDF/OCR/DOCX text, useful when embeddings are unavailable or exact matching is needed.
 
 ## 6.2 Scope
 
@@ -226,6 +232,7 @@ Search results always use the visible source file as the identity and open targe
 - **Markdown / HTML**: hits come from the source file text and point to the source file.
 - **PDF**: hits come from AppData-derived Markdown. The result points to the original PDF path, but Agent text context should use the derived Markdown.
 - **Image**: hits come from AppData OCR Markdown. The result points to the original image path; the OCR text is search evidence, while the image remains the read/view source.
+- **DOCX**: hits come from AppData-derived HTML/text. The result points to the original DOCX path, but Agent text context should use the derived HTML.
 
 ---
 
@@ -252,7 +259,7 @@ StashBase also exposes bounded file helpers:
 - **`move_file(path, new_path, cascade?)`**
 - **`delete_file(path)`**
 
-These helpers are not a second general-purpose filesystem. They exist because many local Agent clients run in sandboxes where the host user's files are not directly readable or writable. The helpers accept absolute paths under opened folders, hide app-maintained derived artifacts, map PDF reads to AppData-derived Markdown, and update the semantic index when possible. The only AppData path `read_file` accepts is a manifest-known PDF derived Markdown note whose source PDF still belongs to an opened folder.
+These helpers are not a second general-purpose filesystem. They exist because many local Agent clients run in sandboxes where the host user's files are not directly readable or writable. The helpers accept absolute paths under opened folders, hide app-maintained derived artifacts, map PDF/DOCX reads to AppData-derived text, and update the semantic index when possible. The only AppData paths `read_file` accepts are manifest-known derived text files whose source PDF or DOCX still belongs to an opened folder.
 
 One-click MCP setup is available only for clients with stable local config files: Claude Code, Codex CLI, and Claude Desktop on macOS. Other MCP-capable clients use the standard JSON config shown in Settings. Codex is configured with prompting as the default approval mode, while low-risk read/search tools (`library_info`, `list_directory`, `read_file`, `search_library`) are auto-approved.
 

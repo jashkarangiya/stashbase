@@ -14,7 +14,7 @@ This is not a second architecture document. `architecture.md` explains where mod
 | Land on Welcome | The user may not open any specific folder, but previous library work may still be incomplete. | Welcome triggers folder-explicit reconcile in the background with a cooldown when idle; status polling alone is not recovery. |
 | Go Home / close the active folder | Conversion may still be running, while the UI leaves the folder view. | In-flight work is process-owned. The renderer returns to Welcome immediately; server-side folder close runs in the background and must not block navigation. Welcome may keep a display snapshot, but it is not data truth. |
 | Open a library folder from Welcome | Folder opening can fail or hang at the transport/action boundary before the folder view appears. | The Welcome opening overlay is only a UI guard: it does not block library clicks, follows the latest click, clears when the latest open action settles, and has a 20s watchdog so it cannot permanently cover the app. |
-| Reopen a folder | Old derived Markdown may exist from a partial or legacy conversion. | Completion must be verified, not inferred from file existence alone. |
+| Reopen a folder | Old derived text may exist from a partial or legacy conversion. | Completion must be verified, not inferred from file existence alone. |
 | Import or copy in a large PDF | Some PDF batches may finish before the app exits or the extractor is killed. | Batch scratch can be reused, but the final PDF note is complete only with the completion marker. |
 | Import several PDFs, including scans | Scanned PDFs can monopolize conversion time because OCR is slow. | PDF scheduling probes for a text layer and runs text-layer PDFs before scanned PDFs. |
 | Open a folder while other library PDFs are queued | Background library conversion can delay the folder the user is actively trying to search/read. | PDF scheduling prefers queued work in the current folder, then text-layer PDFs, then original enqueue order. Already-running conversions are not preempted. |
@@ -22,7 +22,7 @@ This is not a second architecture document. `architecture.md` explains where mod
 | Run without optional native helpers | A packaged build may be missing the PDF/OCR extractor, or a native status-store dependency may fail to load. | Optional preparation/status layers must degrade to warnings or failed preparation records; opening folders and browsing source files must keep working. |
 | Import an image | OCR may fail or produce empty text. | Empty OCR text is a preparation failure for search; the source image remains viewable. |
 | Search immediately after import | Conversion completion and semantic indexing completion are different clocks. | Keyword search can use completed derived text; semantic search depends on daemon index status only when embeddings are enabled. |
-| Reprocess a failed file | Stale derived artifacts or stale failure rows may poison the next attempt. | Reprocess clears the failure row. PDF/image sources clear stale final artifacts and queue extraction; directly readable files trigger reconcile/index from source. |
+| Reprocess a failed file | Stale derived artifacts or stale failure rows may poison the next attempt. | Reprocess clears the failure row. PDF/image/DOCX sources clear stale final artifacts and queue extraction; directly readable files trigger reconcile/index from source. |
 | Add or remove the OpenAI API key | Folder bindings or semantic readiness may reflect stale daemon runtime config. | Reset/rebind the daemon runtime and reconcile library folders after key changes; without a key, semantic search is disabled, not pending. |
 | Edit or replace a source file externally | Existing index rows or derived notes may describe old content. | Reconcile compares source identity and content state; stale derived/index state must not be treated as current. |
 | Rename or move a file | Old source identity may leave derived artifacts, failure rows, or index rows behind. | Source identity is absolute path; rename/move must remap or clean old app-owned state. |
@@ -31,7 +31,7 @@ This is not a second architecture document. `architecture.md` explains where mod
 | Delete a folder inside the active tree | The user intends a real filesystem delete, but app-owned state can become orphaned. | Delete the folder on disk only through the explicit file-tree delete path, then clean derived state, preparation rows, file order, and index rows for that subtree. |
 | App restart | Process-memory in-flight state is gone. | Persisted failures survive; incomplete work is rediscovered by reconcile. |
 | MCP `reindex` on an unopened folder | There may be no active UI folder context. | Reindex/status must be folder-explicit and must not depend on the current window. |
-| Sync after PDF/image conversion | The daemon's direct text-file scan may report a converted source row as deleted because the raw source is not directly indexable. | If the source PDF/image still exists under the synced folder, sync must preserve the converted index row and its derived artifacts. |
+| Sync after PDF/image/DOCX conversion | The daemon's direct text-file scan may report a converted source row as deleted because the raw source is not directly indexable. | If the source PDF/image/DOCX still exists under the synced folder, sync must preserve the converted index row and its derived artifacts. |
 
 ---
 
@@ -65,6 +65,19 @@ A PDF conversion is complete only when:
 
 PDF batch scratch is not completion. A marker-less PDF derived note is treated as incomplete and is rediscovered.
 
+## DOCX
+
+DOCX files remain the source files, but StashBase reads them through derived HTML because the app does not provide a native Word renderer.
+
+A DOCX conversion is complete only when:
+
+- the derived HTML exists under `<appData>/derived.nosync/`
+- it is current for the source DOCX
+- it includes the StashBase DOCX completion marker
+- it contains extractable text
+
+The derived HTML is used for preview, Agent text reading, keyword search, and semantic indexing. Search results still point to the source `.docx`.
+
 ## Semantic Index
 
 Conversion completion is not semantic indexing completion.
@@ -97,7 +110,7 @@ Preparation status is auxiliary. If the status store cannot load, StashBase may 
 Reprocess does this:
 
 - clears the failure row
-- for PDF/image sources, removes stale final derived artifacts and queues extraction again
+- for PDF/image/DOCX sources, removes stale final derived artifacts and queues extraction again
 - for directly readable sources, reconciles the folder so the source can be indexed again
 
 For PDFs, reprocess and transient recovery preserve resumable batch scratch when possible, so a large PDF can continue from completed batches instead of starting from page one.
@@ -145,13 +158,13 @@ Reconcile must be folder-explicit. It must not rely on an active window when the
 For each folder, reconcile checks:
 
 - source files added, modified, deleted, or renamed
-- derived Markdown missing, stale, or incomplete
+- derived text missing, stale, or incomplete
 - durable preparation failures that should remain blocked until manual reprocess
 - AppData-derived sources whose original source path no longer exists
 - daemon index rows that need add/update/delete
 - source paths that should no longer surface in search
 
-Only changed content should be embedded. A no-op reconcile should not spend embedding tokens. When no OpenAI key is configured, reconcile still discovers PDF/image work and keeps keyword-searchable derived text fresh; semantic indexing is skipped and reported as disabled.
+Only changed content should be embedded. A no-op reconcile should not spend embedding tokens. When no OpenAI key is configured, reconcile still discovers PDF/image/DOCX work and keeps keyword-searchable derived text fresh; semantic indexing is skipped and reported as disabled.
 
 External writes are not immediately searchable. Editors, Git, cloud sync, terminal commands, and external Agents change the filesystem outside StashBase's write path. They become searchable after reconcile. StashBase-owned file helper writes should schedule or perform index maintenance as part of the write when possible.
 
@@ -176,18 +189,18 @@ Library removal returns after membership and UI-visible app state are cleared. C
 
 Deleting a folder from inside an opened folder is a separate filesystem operation. It deletes the user folder on disk after confirmation, then removes derived artifacts, preparation rows, file-order state, and index rows for that subtree.
 
-Deleting a PDF/image source clears:
+Deleting a PDF/image/DOCX source clears:
 
-- derived Markdown
+- derived Markdown or derived HTML
 - derived bundle
 - PDF batch scratch
 - derived source manifest entries
 - preparation failure/in-flight rows
 - index rows for the source path
 
-Reprocessing a PDF/image clears stale final derived artifacts and failure rows before queueing extraction. Reprocessing a directly readable source clears the failure row and reconciles the folder. It should not leave old output available as if it belonged to the new attempt.
+Reprocessing a PDF/image/DOCX clears stale final derived artifacts and failure rows before queueing extraction. Reprocessing a directly readable source clears the failure row and reconciles the folder. It should not leave old output available as if it belonged to the new attempt.
 
-Renames and moves use absolute source path identity. A file rename request with a basename target stays in the source file's current parent folder; requests with a folder-relative target path are moves. Structured text files can move index rows when the content remains readable. PDF/image moves clear old derived artifacts and old index rows, then queue conversion again under the new absolute source path.
+Renames and moves use absolute source path identity. A file rename request with a basename target stays in the source file's current parent folder; requests with a folder-relative target path are moves. Structured text files can move index rows when the content remains readable. PDF/image/DOCX moves clear old derived artifacts and old index rows, then queue conversion again under the new absolute source path.
 
 ---
 

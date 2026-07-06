@@ -57,14 +57,14 @@ export interface Indexer {
    *  file disappears from the index, returns 0, and no error is raised. */
   upsertFile(path: string, content: string): Promise<number>;
 
-  /** Insert/replace chunks for a **converted source** (PDF/image) whose
-   *  searchable text comes from a separately-stored derived markdown note
-   *  (app data, never in the user's folder). Indexes `derivedMd` UNDER the
+  /** Insert/replace chunks for a **converted source** (PDF/image/DOCX) whose
+   *  searchable text comes from a separately-stored derived text file
+   *  (app data, never in the user's folder). Indexes `derivedContent` UNDER the
    *  source's own path so folder-scoped search + the daemon's source-file
-   *  hash diff line up; forces markdown chunking and stamps the explicit
+   *  hash diff line up; stamps the explicit
    *  `sourceHash` (= hash of the source file's bytes) so reconcile sees the
    *  source as unchanged. */
-  upsertConvertedFile(sourceAbs: string, derivedMd: string, sourceHash: string): Promise<number>;
+  upsertConvertedFile(sourceAbs: string, derivedContent: string, sourceHash: string, derivedExt?: string): Promise<number>;
 
   /** Drop all chunks for one file. Safe to call on a never-indexed file. */
   deleteFile(path: string): Promise<void>;

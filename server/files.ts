@@ -326,9 +326,9 @@ export interface DerivedArtifacts {
   bundles: string[];
 }
 
-/** Legacy sibling-derived artifacts for a PDF/image source. Current derived
- *  Markdown lives in AppData (`derived-store.ts`); these names are kept only
- *  to clean up older on-disk artifacts and stale index rows. */
+/** Legacy sibling-derived artifacts for a PDF/image/DOCX source. Current
+ *  derived text lives in AppData (`derived-store.ts`); these names are kept
+ *  only to clean up older on-disk artifacts and stale index rows. */
 export function derivedArtifactsForSource(relPath: string): DerivedArtifacts {
   const base = path.posix.basename(relPath);
   const parent = path.posix.dirname(relPath);
@@ -542,11 +542,10 @@ export function listFilesAndFolders(): FolderListing {
     let entry: Pick<FileEntry, 'heading' | 'snippet' | 'imported_at'>;
     if (cached && cached.mtimeMs === st.mtimeMs) {
       entry = { heading: cached.heading, snippet: cached.snippet, imported_at: cached.imported_at };
-    } else if (format === 'pdf' || format === 'image') {
-      // No cheap server-side preview for binary files (PDF / image) —
-      // generating a heading/snippet would require running pdfjs / OCR
-      // in the server process (heavy). The sidebar already has the
-      // filename to render; leave heading + snippet empty.
+    } else if (format === 'pdf' || format === 'image' || format === 'docx') {
+      // No cheap server-side preview for converted/viewer-only files
+      // (PDF / image / DOCX) during listing. Conversion owns their text
+      // representation in AppData; the sidebar can render the filename.
       const imported_at = st.mtime.toISOString();
       previewCache.set(full, { mtimeMs: st.mtimeMs, heading: '', snippet: '', imported_at });
       entry = { heading: '', snippet: '', imported_at };
@@ -650,7 +649,7 @@ function walk(
     if (!e.isFile()) continue;
     const m = e.name.match(/^(.+)\.(md|markdown|html|htm|pdf)$/i);
     if (m) noteStems.add(m[1]);
-    const src = e.name.match(/^(.+)\.(pdf|png|jpe?g|webp)$/i);
+    const src = e.name.match(/^(.+)\.(pdf|png|jpe?g|webp|docx)$/i);
     if (src) legacyDerivedStems.add(src[1]);
   }
   for (const e of entries) {
@@ -701,7 +700,7 @@ function isLegacyDerivedNoteName(name: string, sourceStems: Set<string>): boolea
   const m = name.match(/^\.([^/]+)\.(md|markdown|html|htm)$/i);
   if (!m) return false;
   const stem = m[1];
-  if (/\.(pdf|png|jpe?g|webp)$/i.test(stem)) return false;
+  if (/\.(pdf|png|jpe?g|webp|docx)$/i.test(stem)) return false;
   return sourceStems.has(stem);
 }
 

@@ -1,16 +1,15 @@
 /**
- * Shared "unstructured source → extracted structured markdown" plumbing
- * for the two unstructured formats: PDFs (`pdf_extract.py`) and images
- * (`ocr_extract.py`). Each extracts the file's structured content into a
- * AppData-derived Markdown that becomes the text layer for search (and, for
- * PDFs, Agent text reading). Materialized to disk — unlike HTML's in-memory
- * transform — because these conversions are expensive (subprocess) and worth
- * caching.
+ * Shared "unstructured source → extracted structured text" plumbing for
+ * PDFs (`pdf_extract.py`), images (`ocr_extract.py`), and DOCX (`mammoth`).
+ * Each extracts the file's useful text into an AppData-derived representation
+ * that becomes the text layer for search. PDFs/DOCX also use that layer for
+ * Agent text reading. Materialized to disk — unlike HTML's in-memory transform
+ * — because these conversions are expensive and worth caching.
  *
  * The two formats differ in only three things — captured by a
  * `ConversionSpec`:
  *   - `matches`     which filenames are convertible sources
- *   - `derivedNote` the AppData Markdown path a source maps to
+ *   - `derivedNote` the AppData derived-text path a source maps to
  *   - `convert`     the actual extractor spawn (PDF emits an extra bundle)
  *
  * Context-free by design: every sourcePath is the source file's absolute path,
@@ -18,7 +17,7 @@
  * and conversion behave identically from the GUI, a headless server, or
  * a `reindex` on a folder no window has open.
  *
- * On success the derived note is pushed into the index DIRECTLY (via the
+ * On success the derived text is pushed into the index DIRECTLY (via the
  * hook `setDerivedNoteIndexer` wires at boot) — there is no fs-watcher
  * intermediary. Failures persist for reprocess affordances; in-flight
  * state is process memory (see `conversion-status.ts`).
@@ -80,9 +79,9 @@ function isTransientConversionError(err: unknown): boolean {
   return err instanceof TransientConversionError;
 }
 
-/** Wired at boot (`server/index.ts`): index a freshly written derived note
- *  UNDER its source path (the derived markdown lives in app data; the
- *  source PDF/image is the indexed entity). Injected to avoid a module
+/** Wired at boot (`server/index.ts`): index a freshly written derived text
+ *  UNDER its source path (the derived representation lives in app data; the
+ *  source PDF/image/DOCX is the indexed entity). Injected to avoid a module
  *  cycle with `state.ts` — conversion is below the indexer in the import
  *  graph. */
 let indexDerivedNote: ((sourceAbs: string, derivedAbs: string) => Promise<void>) | null = null;
@@ -90,10 +89,10 @@ export function setDerivedNoteIndexer(fn: (sourceAbs: string, derivedAbs: string
   indexDerivedNote = fn;
 }
 
-/** True when a source's derived note exists AND is at least as new as the
+/** True when a source's derived text exists AND is at least as new as the
  *  source (i.e. not stale). A changed source has a newer mtime than its
- *  old derived note → re-convert. This is the change-detection signal now
- *  that the derived note lives in app data (path-hash keyed, so its
+ *  old derived text → re-convert. This is the change-detection signal now
+ *  that the derived text lives in app data (path-hash keyed, so its
  *  location doesn't change when the source content changes). */
 function derivedIsFresh(spec: ConversionSpec, absPath: string): boolean {
   try {
@@ -240,8 +239,8 @@ function runConversion(absPath: string, sourcePath: string | null, spec: Convers
         await settle(() => { if (sourcePath) clearRecord(sourcePath); });
         return;
       }
-      // Try to index the note before flipping the status. Conversion success
-      // is still defined by the derived markdown existing: semantic indexing
+      // Try to index the derived text before flipping the status. Conversion
+      // success is still defined by the derived text existing: semantic indexing
       // can be unavailable (no API key) or fail transiently, while the
       // extracted text remains useful for keyword search and future reindex.
       try {
@@ -261,7 +260,7 @@ function runConversion(absPath: string, sourcePath: string | null, spec: Convers
         await indexDerivedNote?.(absPath, noteAbs);
       } catch (err: unknown) {
         const msg = errorMessage(err);
-        log.warn(`${spec.kind}: derived-note index failed for ${absPath}: ${msg}`);
+        log.warn(`${spec.kind}: derived-text index failed for ${absPath}: ${msg}`);
       }
       await settle(() => { if (sourcePath) markDone(sourcePath); });
     },
@@ -317,7 +316,7 @@ export function maybeConvert(absPath: string, spec: ConversionSpec): Promise<voi
 }
 
 /** Reindex an already-fresh derived note under its source path. Used when a
- *  PDF/image was converted while semantic indexing was unavailable, then a
+ *  PDF/image/DOCX was converted while semantic indexing was unavailable, then a
  *  later reconcile runs after an API key has been configured. */
 export async function indexFreshDerived(absPath: string, spec: ConversionSpec): Promise<boolean> {
   const sourcePath = sourcePathOf(absPath);
@@ -330,7 +329,7 @@ export async function indexFreshDerived(absPath: string, spec: ConversionSpec): 
 
 /** Reconcile hook: walk `folderAbs` for convertible sources and queue any
  *  that need converting. The decision is pure disk + memory truth:
- *  derived note exists → nothing to do; conversion running or failure
+ *  fresh derived text exists → nothing to do; conversion running or failure
  *  recorded → leave it (Retry is a human decision); otherwise queue.
  *  Idempotent across crashes — no persisted in-flight state to reclaim. */
 export function discoverNewSources(

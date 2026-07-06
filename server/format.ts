@@ -7,10 +7,10 @@
  *     the single source of truth and is indexed directly — markdown
  *     as-is; HTML via a cheap in-memory "→ heading markdown" optimization
  *     at MFS-feed time (`analyzeHtml`), NOT materialized to disk.
- *   - **Convertible** (`UNSTRUCTURED_SOURCE_EXTS`: pdf, images): a converter
- *     extracts text into AppData-derived Markdown. That text layer feeds
- *     search; PDFs also use it for Agent text reading, while images remain
- *     the read/view source.
+ *   - **Convertible** (`UNSTRUCTURED_SOURCE_EXTS`: pdf, images, docx): a
+ *     converter extracts text into an AppData-derived representation. That
+ *     text layer feeds search; PDFs/DOCX also use it for Agent text reading,
+ *     while images remain the read/view source.
  * So MFS only ever sees markdown; all format knowledge lives here / in
  * the converters, never in MFS.
  *
@@ -27,10 +27,10 @@ export type FileFormat = 'md' | 'html';
 
 /** Everything the renderer can open in the file tree: the structured
  *  note formats plus the convertible binaries (pdf, image) that are
- *  viewable but searched via AppData-derived Markdown. Kept
+ *  viewable but searched via AppData-derived text. Kept
  *  distinct from `FileFormat` so the indexing pipeline (chunker, daemon
  *  upsert, scan_diff) only ever sees structured `md` / `html`. */
-export type ViewerFormat = FileFormat | 'pdf' | 'image';
+export type ViewerFormat = FileFormat | 'pdf' | 'image' | 'docx';
 
 /** Recognised note extensions and how the rest of the pipeline should
  *  treat them. Adding a format = one line here + a chunker + a viewer —
@@ -46,10 +46,10 @@ const NOTE_FORMATS: Array<{ exts: string[]; format: FileFormat }> = [
  *  Single source for the alternation baked into the regexes below. */
 export const NOTE_EXTS: readonly string[] = NOTE_FORMATS.flatMap((f) => f.exts);
 
-/** Convertible source extensions — PDFs (pdf_extract) and images
- *  (ocr_extract). Current derived Markdown lives in AppData. The hidden
+/** Convertible source extensions — PDFs (pdf_extract), images
+ *  (ocr_extract), and DOCX (Mammoth HTML). Current derived text lives in AppData. The hidden
  *  sibling-note regex below remains for legacy cleanup/remap only. */
-const UNSTRUCTURED_SOURCE_EXTS = ['pdf', 'png', 'jpg', 'jpeg', 'webp'] as const;
+const UNSTRUCTURED_SOURCE_EXTS = ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'docx'] as const;
 
 const NOTE_EXT_ALT = NOTE_EXTS.join('|');
 const SRC_EXT_ALT = UNSTRUCTURED_SOURCE_EXTS.join('|');
@@ -111,13 +111,22 @@ export function isImageFile(name: string): boolean {
   return IMAGE_PATTERN.test(name);
 }
 
+export function isDocxFile(name: string): boolean {
+  const base = pathBasename(name);
+  return /\.docx$/i.test(base) && !base.startsWith('~$') && !base.startsWith('.~');
+}
+
 /** True for an unstructured **convertible source** (PDF or image) — files
  *  whose searchable text comes from an app-data derived note and are
  *  indexed under their own path. They are NOT directly index-readable
  *  (raw bytes would be garbage), so reconcile must not treat them as plain
  *  notes; it lets the conversion path own their index entry. */
 export function isConvertibleSource(name: string): boolean {
-  return /\.pdf$/i.test(name) || isImageFile(name);
+  return /\.pdf$/i.test(name) || isImageFile(name) || isDocxFile(name);
+}
+
+function pathBasename(name: string): string {
+  return name.replace(/\\/g, '/').split('/').pop() ?? name;
 }
 
 const NOTE_FORMAT_RES: Array<{ re: RegExp; format: FileFormat }> = NOTE_FORMATS.map((f) => ({
@@ -132,12 +141,13 @@ export function detectFormat(name: string): FileFormat | null {
   return null;
 }
 
-/** Like `detectFormat` but also recognises viewer-only formats (PDF).
+/** Like `detectFormat` but also recognises viewer-only formats.
  *  Used by the sidebar / file tree which surfaces every viewable file
  *  to the user, even ones that don't go through indexing. */
 export function detectViewerFormat(name: string): ViewerFormat | null {
   const note = detectFormat(name);
   if (note) return note;
+  if (isDocxFile(name)) return 'docx';
   for (const { pattern, format } of VIEWER_ONLY_FORMATS) {
     if (pattern.test(name)) return format;
   }

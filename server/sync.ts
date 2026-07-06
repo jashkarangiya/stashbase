@@ -18,6 +18,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { discoverNewDocx, indexFreshDocx } from './docx.ts';
 import { discoverNewImages, indexFreshImage } from './image.ts';
 import { discoverNewPdfs, indexFreshPdf } from './pdf.ts';
 import { getApiKey } from './app-config.ts';
@@ -153,6 +154,7 @@ async function deleteStaleRenameSource(
 function discoverConvertedSources(root: string): void {
   discoverNewPdfs(root);
   discoverNewImages(root);
+  discoverNewDocx(root);
 }
 
 function cleanupRemovedSource(sourcePath: string): void {
@@ -402,7 +404,9 @@ async function indexFreshConvertedSources(
     try {
       const indexed = /\.pdf$/i.test(folderRel)
         ? await indexFreshPdf(sourcePath)
-        : await indexFreshImage(sourcePath);
+        : /\.docx$/i.test(folderRel)
+          ? await indexFreshDocx(sourcePath)
+          : await indexFreshImage(sourcePath);
       if (indexed) done.push(sourcePath);
     } catch (err: unknown) {
       failed.push({ name: sourcePath, error: errorMessage(err) });

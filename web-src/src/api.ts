@@ -10,10 +10,10 @@
 
 /** Viewer format the renderer uses for tab routing. `md` / `html` are
  *  text formats loaded from `/api/files/*`; `pdf` and `image` are
- *  binary viewers rendered from `/asset/*`. Their searchable text lives
- *  in AppData-derived Markdown, so this type is wider than the server's
- *  editable text format on purpose. */
-export type FileFormat = 'md' | 'html' | 'pdf' | 'image';
+ *  binary viewers rendered from `/asset/*`; `docx` is rendered from
+ *  AppData-derived HTML. Their searchable text lives in AppData-derived
+ *  text, so this type is wider than the server's editable text format on purpose. */
+export type FileFormat = 'md' | 'html' | 'pdf' | 'image' | 'docx';
 
 export interface ApiKeySaveResult {
   hasKey: true;
@@ -574,6 +574,16 @@ export function versionedAssetUrl(name: string, version: string): string {
   return `${url}${sep}v=${encodeURIComponent(version)}`;
 }
 
+export function derivedAssetUrl(name: string): string {
+  return assetWindowPrefix('/asset-derived/') + encodePath(name);
+}
+
+export function versionedDerivedAssetUrl(name: string, version: string): string {
+  const url = derivedAssetUrl(name);
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}v=${encodeURIComponent(version)}`;
+}
+
 /** Base URL for live HTML edit previews. The preview itself is a blob,
  *  but relative image/css/font URLs should still resolve next to the
  *  saved file in the current folder.
@@ -589,6 +599,6 @@ export function assetBaseUrl(name: string): string {
   return assetWindowPrefix() + (dir ? encodePath(dir) + '/' : '');
 }
 
-function assetWindowPrefix(): string {
-  return '/asset/__window/' + encodeURIComponent(getWindowId()) + '/';
+function assetWindowPrefix(base = '/asset/'): string {
+  return base + '__window/' + encodeURIComponent(getWindowId()) + '/';
 }

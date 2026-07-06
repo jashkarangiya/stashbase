@@ -151,18 +151,21 @@ export class MfsIndexer implements Indexer {
     return res.chunks;
   }
 
-  async upsertConvertedFile(sourceAbs: string, derivedMd: string, sourceHash: string): Promise<number> {
-    // PDF/image: the searchable text is the derived markdown (stored in app
-    // data), but we index it UNDER the source's own path so folder-scoped
-    // search finds it and the daemon's source-file hash diff matches. Force
-    // ext='.md' (the content is markdown regardless of the .pdf/.png path)
-    // and stamp the source's byte hash so reconcile sees "unchanged".
-    if (derivedMd.trim().length === 0) {
+  async upsertConvertedFile(sourceAbs: string, derivedContent: string, sourceHash: string, derivedExt = '.md'): Promise<number> {
+    // Convertible sources: the searchable text is stored in AppData, but
+    // indexed UNDER the source's own path so folder-scoped search finds it
+    // and daemon source-file hash diff matches. HTML-derived DOCX content is
+    // flattened with the same transform as source HTML before we feed MFS.
+    const ext = derivedExt.toLowerCase();
+    const content = ext === '.html' || ext === '.htm'
+      ? analyzeHtml(derivedContent).plaintext
+      : derivedContent;
+    if (content.trim().length === 0) {
       await getDaemon().call('delete', { path: toAbs(sourceAbs) });
       return 0;
     }
     const res = await getDaemon().call<{ chunks: number; embed_ms: number; total_ms: number }>(
-      'upsert', { path: toAbs(sourceAbs), content: derivedMd, ext: '.md', file_hash: sourceHash, metadata: {} },
+      'upsert', { path: toAbs(sourceAbs), content, ext: '.md', file_hash: sourceHash, metadata: {} },
     );
     log.info(`upsert(converted) ${sourceAbs}: ${res.chunks} chunks (embed ${fmtMs(res.embed_ms)})`);
     return res.chunks;

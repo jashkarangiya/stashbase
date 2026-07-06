@@ -27,7 +27,7 @@ import {
   sanitizeFilename,
   saveText,
 } from '../files.ts';
-import { detectViewerFormat, isDerivedNoteName, isImageFile, isNoteName } from '../format.ts';
+import { detectViewerFormat, isDerivedNoteName, isDocxFile, isImageFile, isNoteName } from '../format.ts';
 import { readFileOrder, remapFileOrderPath, removeFileOrderPath, setFolderOrder } from '../file-order.ts';
 import { applyRenamePlan, planRenameLinks, type RenameEntry } from '../links.ts';
 import { getCurrentFolder, getCurrentFolderLabel, toSourcePath } from '../folder.ts';
@@ -38,6 +38,7 @@ import { sendError, revealInOsFileManager } from '../http.ts';
 import { bundleRenameEntry, renameWithRollback } from '../rename-helpers.ts';
 import { maybeConvertImage } from '../image.ts';
 import { maybeConvertPdf } from '../pdf.ts';
+import { derivedHtmlPathForDocx, maybeConvertDocx } from '../docx.ts';
 import { cancelConversion } from '../conversion.ts';
 import { noteTreeChanged } from '../watcher.ts';
 import { clearRecord, isInFlight } from '../conversion-status.ts';
@@ -335,7 +336,7 @@ export function mount(app: express.Express): void {
     const inFlightError = inFlightFileOperationError(oldName, 'rename');
     if (inFlightError) return res.status(inFlightError.status).json(inFlightError.body);
     const oldStructuredFormat = detectFormat(oldName);
-    const viewerOnly = !oldStructuredFormat && (oldFormat === 'pdf' || oldFormat === 'image');
+    const viewerOnly = !oldStructuredFormat && (oldFormat === 'pdf' || oldFormat === 'image' || oldFormat === 'docx');
     // Preserve the source file's extension — renaming `foo.html` should
     // not silently produce `foo.html.md`. For binary viewer files, keep
     // the viewer extension too; `detectFormat()` intentionally excludes
@@ -409,6 +410,7 @@ export function mount(app: express.Express): void {
           try {
             if (oldFormat === 'pdf') maybeConvertPdf(newSourceAbs);
             else if (isImageFile(newName)) maybeConvertImage(newSourceAbs);
+            else if (isDocxFile(newName)) maybeConvertDocx(newSourceAbs);
           } catch (err: unknown) {
             log.warn(`rename: conversion kickoff failed for ${newName}: ${errorMessage(err)}`);
           }
@@ -626,6 +628,24 @@ export function mount(app: express.Express): void {
     }
     res.type(MIME[ext] ?? 'application/octet-stream');
     fs.createReadStream(abs).pipe(res);
+  });
+
+  // Serves AppData-derived preview HTML for convertible sources that do not
+  // have a useful native browser preview (currently DOCX). The source path is
+  // still folder-relative; this route only swaps the served bytes.
+  app.get('/asset-derived/*', (req, res) => {
+    const rel = stripAssetWindowPrefix((req.params as any)[0] as string);
+    if (detectViewerFormat(rel) !== 'docx') return res.status(415).end();
+    try {
+      const sourceAbs = resolveExisting(rel);
+      if (!sourceAbs) return res.status(404).end();
+      const htmlAbs = derivedHtmlPathForDocx(sourceAbs);
+      const raw = fs.readFileSync(htmlAbs, 'utf8');
+      const { preparedHtml } = analyzeHtml(raw);
+      res.type('text/html').send(preparedHtml);
+    } catch {
+      res.status(409).type('text/html').send('<!doctype html><meta charset="utf-8"><body>Preparing document preview…</body>');
+    }
   });
 }
 

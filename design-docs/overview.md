@@ -48,12 +48,13 @@ Local files come in formats that Agents do not handle equally well. StashBase ke
 
 - **PDF**: extracts Agent-readable Markdown from files that are awkward for Agents to read directly.
 - **Images**: uses OCR so text inside images can be searched.
+- **DOCX**: extracts semantic HTML so Word documents can be previewed, searched, and read by Agents without changing the source file.
 
 Derived content is app-owned data and can be regenerated.
 
 ## Index: make files searchable
 
-StashBase indexes existing text from Markdown and HTML, PDF-derived Markdown, and OCR text from images. Agents can search by meaning and by keyword instead of relying on file names, paths, or manual folder structure.
+StashBase indexes existing text from Markdown and HTML, PDF-derived Markdown, OCR text from images, and DOCX-derived HTML. Agents can search by meaning and by keyword instead of relying on file names, paths, or manual folder structure.
 
 For the Agent, local files stop being a pile of static documents. They become searchable context.
 

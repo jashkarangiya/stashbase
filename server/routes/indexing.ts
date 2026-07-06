@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { rgPath } from '@vscode/ripgrep';
 import { logger } from '../log.ts';
+import { analyzeHtml } from '../html.ts';
 import {
   relInFolder,
   getCurrentFolder,
@@ -19,8 +20,9 @@ import { getApiKey } from '../app-config.ts';
 import { hasNoExtractableText, isCloudPlaceholderName, isIndexExcludedDirName, shouldIndexFilePath } from '../indexable.ts';
 import { derivedPathsForPdf, displayPathForHit, getQueuedPdfConversions, maybeConvertPdf } from '../pdf.ts';
 import { derivedNotePathForImage, maybeConvertImage } from '../image.ts';
+import { derivedHtmlPathForDocx, maybeConvertDocx } from '../docx.ts';
 import { getInFlightConversions } from '../conversion.ts';
-import { isImageFile } from '../format.ts';
+import { isDocxFile, isImageFile } from '../format.ts';
 import { clearRecord, isInFlight, listFailed, listInFlight, readAll as readConversionStatus, readProgress, type ConversionProgress } from '../conversion-status.ts';
 import { getFsChangeCounter } from '../watcher.ts';
 import { clearIndexWarning, getIndexWarning, indexer, syncFolderNow } from '../state.ts';
@@ -124,7 +126,8 @@ export function reprocessFileInFolder(relPath: string, folderName?: string): 'co
   }
   const isPdf = /\.pdf$/i.test(rel);
   const isImage = isImageFile(rel);
-  if (isInFlight(sourcePath)) return isPdf || isImage ? 'conversion' : 'index';
+  const isDocx = isDocxFile(rel);
+  if (isInFlight(sourcePath)) return isPdf || isImage || isDocx ? 'conversion' : 'index';
 
   clearRecord(sourcePath);
   if (isPdf) {
@@ -137,6 +140,11 @@ export function reprocessFileInFolder(relPath: string, folderName?: string): 'co
   if (isImage) {
     try { fs.rmSync(derivedNotePathForImage(abs), { force: true }); } catch { /* no stale */ }
     maybeConvertImage(abs);
+    return 'conversion';
+  }
+  if (isDocx) {
+    try { fs.rmSync(derivedHtmlPathForDocx(abs), { force: true }); } catch { /* no stale */ }
+    maybeConvertDocx(abs);
     return 'conversion';
   }
 
@@ -280,7 +288,7 @@ export function mount(app: express.Express): void {
       // File preparation status: folder-scoped. `pendingConversions`
       // feeds search-readiness accounting, while `preparationFailures`
       // surfaces durable preparation failures. `/api/files/reprocess`
-      // dispatches by extension: PDF/image sources re-run extraction,
+      // dispatches by extension: PDF/image/DOCX sources re-run extraction,
       // other files clear the failure row and reconcile the folder.
       const preparationFailures = preparationFailuresForFolder(curRoot);
       const pendingConversions = [
@@ -331,7 +339,7 @@ export function mount(app: express.Express): void {
   });
 
   // File reprocess: take a folder-relative path and clear its durable
-  // failure row. PDF/image sources also clear stale final derived
+  // failure row. PDF/image/DOCX sources also clear stale final derived
   // artifacts and re-run extraction; directly readable files schedule a
   // reconcile so the index is rebuilt from source.
   app.post('/api/files/reprocess', (req, res) => {
@@ -492,8 +500,8 @@ function searchDerivedMarkdown(query: string, folderRoot: string, opts: RipgrepO
       truncated = true;
       return;
     }
-    let text: string;
-    try { text = fs.readFileSync(derivedNoteFor(abs), 'utf8'); } catch { return; }
+    const text = readDerivedSearchText(rel, abs);
+    if (text == null) return;
     const lines = text.split(/\r?\n/);
     const matches: KeywordMatch[] = [];
     let fileMatches = 0;
@@ -524,6 +532,18 @@ function searchDerivedMarkdown(query: string, folderRoot: string, opts: RipgrepO
   return { files, totalMatches: total, truncated };
 }
 
+function readDerivedSearchText(rel: string, abs: string): string | null {
+  try {
+    if (isDocxFile(rel)) {
+      const raw = fs.readFileSync(derivedHtmlPathForDocx(abs), 'utf8');
+      return analyzeHtml(raw).plaintext;
+    }
+    return fs.readFileSync(derivedNoteFor(abs), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 function walkConvertibleSources(
   dir: string,
   prefix: string,
@@ -540,7 +560,7 @@ function walkConvertibleSources(
     const abs = path.join(dir, ent.name);
     if (ent.isDirectory()) {
       walkConvertibleSources(abs, rel, fn);
-    } else if (ent.isFile() && (/\.pdf$/i.test(ent.name) || isImageFile(ent.name))) {
+    } else if (ent.isFile() && (/\.pdf$/i.test(ent.name) || isImageFile(ent.name) || isDocxFile(ent.name))) {
       fn(rel, abs);
     }
   }
