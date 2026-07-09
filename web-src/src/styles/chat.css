@@ -518,8 +518,12 @@
       position: relative;
       top: auto;
     }
+    .agent-turn-head.has-actions {
+      margin-bottom: 20px;
+    }
     .agent-turn-head.queued {
       color: var(--muted);
+      padding-bottom: 9px;
     }
     .agent-turn-attach {
       display: flex;
@@ -542,16 +546,89 @@
       color: var(--muted);
     }
     .agent-turn-expand {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      width: max-content;
+      margin-top: 10px;
       border: 0;
       background: transparent;
       color: var(--muted);
-      font-size: 12px;
-      font-weight: 600;
-      padding: 0 0 0 8px;
+      font-size: 13px;
+      font-weight: 400;
+      padding: 0;
       cursor: pointer;
     }
     .agent-turn-expand:hover {
       color: var(--accent);
+    }
+    .agent-turn-expand-icon {
+      width: 13px;
+      height: 13px;
+      transition: transform .12s ease;
+    }
+    .agent-turn-expand-icon.open {
+      transform: rotate(180deg);
+    }
+    .agent-turn-user-actions {
+      position: absolute;
+      right: 10px;
+      top: calc(100% + 8px);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      opacity: 0.78;
+    }
+    .agent-turn-user-actions button {
+      width: 22px;
+      height: 22px;
+      display: inline-grid;
+      place-items: center;
+      padding: 0;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+    }
+    .agent-turn-user-actions button:hover {
+      background: var(--hover);
+      color: var(--fg);
+    }
+    .agent-turn-user-actions svg {
+      width: 16px;
+      height: 16px;
+    }
+    .agent-turn-edit {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .agent-turn-edit textarea {
+      width: 100%;
+      min-height: 76px;
+      max-height: 320px;
+      box-sizing: border-box;
+      resize: none;
+      overflow-y: auto;
+      border: 0;
+      outline: none;
+      background: transparent;
+      color: var(--fg);
+      font: inherit;
+      line-height: inherit;
+      white-space: pre-wrap;
+    }
+    .agent-turn-edit-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .agent-turn-edit-actions .agent-btn {
+      font-size: 13px;
+      padding: 6px 14px;
+      border-radius: 8px;
     }
     .agent-turn-actions {
       display: inline-flex;
@@ -579,7 +656,6 @@
     .agent-turn-steer:hover {
       color: var(--accent);
     }
-
     /* Assistant messages */
     .agent-msg { display: flex; }
     .agent-msg.assistant { display: block; }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type RefObject } from 'react';
 import { renderMarkdownInline } from '../../markdown';
-import { ChevronDownIcon, FileGenericIcon } from '../../icons';
+import { ChevronDownIcon, CopyIcon, EditIcon, FileGenericIcon } from '../../icons';
 import type { Attachment, Block, ToolBlock, ToolStatus } from './types';
 
 export interface QueuedTurnPreview {
@@ -12,7 +12,7 @@ export interface QueuedTurnPreview {
 }
 
 export function MessageList({
-  blocks, queuedTurns, turnActive, phase, fatal, agentName, agentShortName, Icon, onPermission, onSteerQueued, onRetry,
+  blocks, queuedTurns, turnActive, phase, fatal, agentName, agentShortName, Icon, editableUserMessageIds, onPermission, onSteerQueued, onCopyUserMessage, onResendUserMessage, onRetry,
 }: {
   blocks: Block[];
   queuedTurns: QueuedTurnPreview[];
@@ -22,8 +22,11 @@ export function MessageList({
   agentName: string;
   agentShortName: string;
   Icon: ComponentType<{ className?: string }>;
+  editableUserMessageIds: Set<string>;
   onPermission: (toolBlockId: string, permId: string, allow: boolean) => void;
   onSteerQueued: (id: string) => void;
+  onCopyUserMessage: (text: string) => void;
+  onResendUserMessage: (text: string) => void;
   onRetry: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -50,11 +53,26 @@ export function MessageList({
       )}
       {turns.map((turn) => (
         <div className="agent-turn" key={turn.key}>
-          {turn.head && <UserTurnHead block={turn.head} scrollRef={ref} sticky={queuedTurns.length === 0} />}
+          {turn.head && (
+            <UserTurnHead
+              block={turn.head}
+              scrollRef={ref}
+              sticky={queuedTurns.length === 0}
+              canEdit={editableUserMessageIds.has(turn.head.id)}
+              onCopy={onCopyUserMessage}
+              onSendEdit={onResendUserMessage}
+            />
+          )}
           {turn.body.map((b) => <BlockView key={b.id} block={b} onPermission={onPermission} />)}
         </div>
       ))}
-      {queuedTurns.map((turn) => <QueuedTurn key={turn.id} turn={turn} onSteer={onSteerQueued} />)}
+      {queuedTurns.map((turn) => (
+        <QueuedTurn
+          key={turn.id}
+          turn={turn}
+          onSteer={onSteerQueued}
+        />
+      ))}
       {blocks.length > 0 && phase === 'closed' && fatal && (
         <FatalInline fatal={fatal} agentShortName={agentShortName} onRetry={onRetry} />
       )}
@@ -81,13 +99,18 @@ function groupTurns(blocks: Block[]): Turn[] {
 }
 
 function UserTurnHead({
-  block, scrollRef, sticky = true,
+  block, scrollRef, sticky = true, canEdit, onCopy, onSendEdit,
 }: {
   block: Extract<Block, { kind: 'user' }>;
   scrollRef?: RefObject<HTMLDivElement | null>;
   sticky?: boolean;
+  canEdit: boolean;
+  onCopy: (text: string) => void;
+  onSendEdit: (text: string) => void;
 }) {
   const [stuck, setStuck] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(block.text);
   const sentinelRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
@@ -106,10 +129,14 @@ function UserTurnHead({
     return () => io.disconnect();
   }, [scrollRef, sticky]);
 
+  useEffect(() => {
+    if (!editing) setDraft(block.text);
+  }, [block.text, editing]);
+
   return (
     <>
       {sticky && <span ref={sentinelRef} className="agent-turn-sentinel" aria-hidden="true" />}
-      <div className={'agent-turn-head' + (sticky ? '' : ' static') + (stuck ? ' stuck' : '')}>
+      <div className={'agent-turn-head' + (block.text && !editing ? ' has-actions' : '') + (sticky ? '' : ' static') + (stuck ? ' stuck' : '')}>
         {block.attachments && block.attachments.length > 0 && (
           <div className="agent-turn-attach">
             {block.attachments.map((a) => (
@@ -121,13 +148,46 @@ function UserTurnHead({
             ))}
           </div>
         )}
-        {block.text && <UserMessageText text={block.text} />}
+        {editing ? (
+          <InlineUserMessageEditor
+            text={draft}
+            saveLabel="Send"
+            onChange={setDraft}
+            onCancel={() => {
+              setDraft(block.text);
+              setEditing(false);
+            }}
+            onSave={() => {
+              const text = draft.trim();
+              if (!text) return;
+              setEditing(false);
+              onSendEdit(text);
+            }}
+          />
+        ) : (
+          <>
+            {block.text && <UserMessageText text={block.text} />}
+            {block.text && (
+              <UserMessageActions
+                text={block.text}
+                canEdit={canEdit}
+                onCopy={onCopy}
+                onEdit={() => setEditing(true)}
+              />
+            )}
+          </>
+        )}
       </div>
     </>
   );
 }
 
-function QueuedTurn({ turn, onSteer }: { turn: QueuedTurnPreview; onSteer: (id: string) => void }) {
+function QueuedTurn({
+  turn, onSteer,
+}: {
+  turn: QueuedTurnPreview;
+  onSteer: (id: string) => void;
+}) {
   const label = turn.status === 'steered' ? 'Steered' : turn.status === 'steering' ? 'Steering' : 'Waiting';
   return (
     <div className="agent-turn queued">
@@ -162,8 +222,57 @@ function QueuedTurn({ turn, onSteer }: { turn: QueuedTurnPreview; onSteer: (id: 
   );
 }
 
-const USER_TEXT_CHAR_LIMIT = 600;
-const USER_TEXT_LINE_LIMIT = 8;
+function InlineUserMessageEditor({
+  text, saveLabel = 'Save', onChange, onCancel, onSave,
+}: {
+  text: string;
+  saveLabel?: string;
+  onChange: (text: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+      ta.style.height = 'auto';
+      ta.style.height = `${ta.scrollHeight}px`;
+    });
+  }, []);
+  return (
+    <div className="agent-turn-edit">
+      <textarea
+        ref={textareaRef}
+        value={text}
+        onChange={(e) => {
+          onChange(e.target.value);
+          e.currentTarget.style.height = 'auto';
+          e.currentTarget.style.height = `${e.currentTarget.scrollHeight}px`;
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            onSave();
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+      />
+      <div className="agent-turn-edit-actions">
+        <button type="button" className="agent-btn" onClick={onCancel}>Cancel</button>
+        <button type="button" className="agent-btn primary" onClick={onSave}>{saveLabel}</button>
+      </div>
+    </div>
+  );
+}
+
+const USER_TEXT_CHAR_LIMIT = 300;
+const USER_TEXT_LINE_LIMIT = 4;
 
 function UserMessageText({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
@@ -183,9 +292,32 @@ function UserMessageText({ text }: { text: string }) {
           }}
         >
           {open ? 'Show less' : 'Show more'}
+          <ChevronDownIcon className={'agent-turn-expand-icon' + (open ? ' open' : '')} />
         </button>
       )}
     </span>
+  );
+}
+
+function UserMessageActions({
+  text, canEdit, onCopy, onEdit,
+}: {
+  text: string;
+  canEdit: boolean;
+  onCopy: (text: string) => void;
+  onEdit: () => void;
+}) {
+  return (
+    <div className="agent-turn-user-actions" aria-label="Message actions">
+      <button type="button" title="Copy message" onClick={() => onCopy(text)}>
+        <CopyIcon />
+      </button>
+      {canEdit && (
+        <button type="button" title="Edit and resend" onClick={onEdit}>
+          <EditIcon />
+        </button>
+      )}
+    </div>
   );
 }
 

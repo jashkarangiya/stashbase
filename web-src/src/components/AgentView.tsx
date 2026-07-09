@@ -71,6 +71,7 @@ export function AgentView({
   const mountedRef = useRef(true);
   const uploadCountRef = useRef(0);
   const [blocks, setBlocks] = useState<Block[]>([]);
+  const [editableUserMessageIds, setEditableUserMessageIds] = useState<Set<string>>(() => new Set());
   const [turnActive, setTurnActive] = useState(false);
   const turnActiveRef = useRef(false);
   const queuedPromptsRef = useRef<QueuedPrompt[]>([]);
@@ -168,6 +169,7 @@ export function AgentView({
    *  reopens a folder). */
   function reconnect() {
     setBlocks([]);
+    setEditableUserMessageIds(new Set());
     setFatal(null);
     queuedPromptsRef.current = [];
     setQueuedTurns([]);
@@ -194,6 +196,7 @@ export function AgentView({
       return;
     }
     setBlocks(hist);
+    setEditableUserMessageIds(new Set());
     setFatal(null);
     queuedPromptsRef.current = [];
     setQueuedTurns([]);
@@ -411,6 +414,12 @@ export function AgentView({
     }
   }
 
+  function copyUserMessage(text: string) {
+    void navigator.clipboard.writeText(text)
+      .then(() => actions.toast('Copied.', { level: 'info' }))
+      .catch(() => actions.toast('Could not copy message.', { level: 'error' }));
+  }
+
   async function sendPromptNow({
     text,
     attachments: atts,
@@ -536,6 +545,14 @@ export function AgentView({
   }
 
   function stop() {
+    const lastUser = [...blocks].reverse().find((b) => b.kind === 'user');
+    if (lastUser) {
+      setEditableUserMessageIds((prev) => {
+        const next = new Set(prev);
+        next.add(lastUser.id);
+        return next;
+      });
+    }
     wsRef.current?.send(JSON.stringify({ t: 'interrupt' }));
   }
 
@@ -671,8 +688,11 @@ export function AgentView({
         agentName={meta.name}
         agentShortName={meta.shortName}
         Icon={meta.Icon}
+        editableUserMessageIds={editableUserMessageIds}
         onPermission={replyPermission}
         onSteerQueued={steerQueuedPrompt}
+        onCopyUserMessage={copyUserMessage}
+        onResendUserMessage={send}
         onRetry={reconnect}
       />
       {phase === 'closed' && (
