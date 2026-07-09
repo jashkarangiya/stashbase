@@ -185,6 +185,13 @@ class CodexSession {
         void this.runTurn(body, titleHint);
         break;
       }
+      case 'steer': {
+        const id = typeof msg.id === 'string' ? msg.id : '';
+        const body = typeof msg.text === 'string' ? msg.text : '';
+        if (!id || !body.trim()) return;
+        void this.steerTurn(id, body);
+        break;
+      }
       case 'permission-reply':
         this.onPermissionReply(msg);
         break;
@@ -199,6 +206,23 @@ class CodexSession {
         // thread/turn start time; the current renderer only sends live
         // permission-mode changes for Claude.
         break;
+    }
+  }
+
+  private async steerTurn(clientId: string, prompt: string): Promise<void> {
+    if (!this.busy || !this.threadId || !this.activeTurnId) {
+      this.send({ t: 'steer-result', id: clientId, ok: false, message: 'Codex is not ready to steer this turn.' });
+      return;
+    }
+    try {
+      await this.request('turn/steer', {
+        threadId: this.threadId,
+        expectedTurnId: this.activeTurnId,
+        input: [{ type: 'text', text: prompt, text_elements: [] }],
+      });
+      this.send({ t: 'steer-result', id: clientId, ok: true });
+    } catch (err: unknown) {
+      this.send({ t: 'steer-result', id: clientId, ok: false, message: errorMessage(err) });
     }
   }
 
@@ -942,7 +966,6 @@ export async function listCodexSessions(folder: string | null): Promise<CodexSes
     sortDirection: 'desc',
     archived: false,
     cwd: folder ?? null,
-    sourceKinds: ['appServer'],
   })) as JsonObject;
   const data = Array.isArray(result.data) ? result.data : [];
   return data.map(codexThreadToRow).filter((row): row is CodexSessionRow => !!row);

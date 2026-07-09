@@ -354,3 +354,25 @@ Current contract:
   manifest.
 - If the vector store still fails, the Node server records an index warning; it
   must not turn source-file browsing into a startup crash.
+
+## 9.6 Removed Folder PDF Work Continuing
+
+Folder membership is a source of truth for background preparation. A conversion
+queue snapshot must not outlive the user's library removal.
+
+Representative failure:
+
+- A folder with many PDFs is opened and queues background PDF extraction.
+- The user removes that folder from the library while one PDF is running.
+- Runtime bindings are cleared, so the daemon no longer has a root for that
+  path, but the PDF queue continues to start later PDFs from the removed folder.
+- Extraction logs keep appearing for the removed folder, followed by
+  "no bound root matches path" index warnings.
+
+Current contract:
+
+- Removing a library folder cancels active conversions under that path.
+- It also removes queued PDFs under that path and marks the path as cancelled
+  for the PDF scheduler, so a stale queue snapshot cannot start the next PDF.
+- Reopening the folder clears that scheduler cancellation and allows discovery
+  to queue the folder's PDFs again.

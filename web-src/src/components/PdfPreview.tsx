@@ -296,6 +296,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
   currentRef.current = { folderPath: state.folderPath, name };
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [numPages, setNumPages] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
   const [scale, setScale] = useState(1);
   const [autoFit, setAutoFit] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -327,6 +328,19 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
   // re-fetches the binary instead of the stale 404 / failed body.
   const fileUrl = useMemo(() => assetUrl(name), [name]);
 
+  function scrollToPage(pageNumber: number, behavior: ScrollBehavior = 'smooth') {
+    const root = containerRef.current;
+    if (!root || numPages <= 0) return;
+    const targetPage = Math.max(1, Math.min(numPages, Math.round(pageNumber)));
+    const target = root.querySelector(`[data-page="${targetPage}"]`) as HTMLElement | null;
+    if (!target) return;
+    root.scrollTo({
+      top: Math.max(0, target.offsetTop - root.clientHeight * 0.08),
+      behavior,
+    });
+    setCurrentPage(targetPage);
+  }
+
   function fitScale(): number {
     const viewportWidth = containerRef.current?.clientWidth ?? 0;
     const pageWidth = pageMetrics?.width ?? 0;
@@ -342,6 +356,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
     setError(null);
     setDoc(null);
     setNumPages(0);
+    setCurrentPage(1);
     setPageMetrics(null);
     setScale(1);
     setAutoFit(true);
@@ -372,6 +387,44 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
       if (loadingTask) loadingTask.destroy().catch(() => { /* ignore */ });
     };
   }, [fileUrl, actions]);
+
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root || numPages <= 0) return;
+    let frame = 0;
+    const updateCurrentPage = () => {
+      frame = 0;
+      const rootRect = root.getBoundingClientRect();
+      const markerY = rootRect.top + Math.min(root.clientHeight * 0.35, 160);
+      let bestPage = 1;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      const pages = root.querySelectorAll<HTMLElement>('[data-page]');
+      pages.forEach((pageEl) => {
+        const page = Number(pageEl.dataset.page);
+        if (!Number.isFinite(page)) return;
+        const rect = pageEl.getBoundingClientRect();
+        const topDistance = Math.abs(rect.top - markerY);
+        const insideDistance = rect.top <= markerY && rect.bottom >= markerY ? 0 : topDistance;
+        if (insideDistance < bestDistance) {
+          bestDistance = insideDistance;
+          bestPage = page;
+        }
+      });
+      setCurrentPage((prev) => (prev === bestPage ? prev : bestPage));
+    };
+    const schedule = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(updateCurrentPage);
+    };
+    updateCurrentPage();
+    root.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      root.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+    };
+  }, [doc, numPages, scale]);
 
   useEffect(() => {
     if (!autoFit || !pageMetrics) return;
@@ -435,6 +488,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
             : null;
           if (root && target) {
             setPageHighlight(null);
+            setCurrentPage(fallbackPage);
             root.scrollTo({
               top: Math.max(0, target.offsetTop - root.clientHeight * 0.12),
               behavior: 'smooth',
@@ -447,6 +501,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
       const yRatio = yRatioForIndex(best.fp, best.idx);
       const rects = highlightRectsForMatch(best.fp, best.idx, best.length);
       setPageHighlight(rects.length > 0 ? { page: best.page, rects } : null);
+      setCurrentPage(best.page);
       const root = containerRef.current;
       const target = root?.querySelector(`[data-page="${best.page}"]`) as HTMLElement | null;
       if (root && target) {
@@ -485,6 +540,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
       const rendered = target.offsetHeight;
       const desired = target.offsetTop + m.yRatio * rendered - root.clientHeight * 0.3;
       setPageHighlight(m.rects.length > 0 ? { page: m.page, rects: m.rects } : null);
+      setCurrentPage(m.page);
       root.scrollTo({ top: Math.max(0, desired), behavior: 'smooth' });
     }
     async function rebuild(query: string, wholeWord: boolean, caseSensitive: boolean): Promise<void> {
@@ -588,6 +644,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
       {!error && !doc && <div className="pdf-loading">Loading PDF…</div>}
       <PdfChromePortal
         scale={scale}
+        currentPage={currentPage}
         numPages={numPages}
         status={chromeStatus}
         retryLabel={retryInProgress ? 'Reprocessing…' : 'Reprocess'}
@@ -605,6 +662,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
           setAutoFit(false);
           setScale((s) => Math.min(PDF_MAX_SCALE, s + 0.2));
         }}
+        onJumpToPage={scrollToPage}
       />
       <div className="pdf-pages">
         {doc && Array.from({ length: numPages }, (_, i) => (
@@ -615,6 +673,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
             scale={scale}
             placeholderHeight={pageMetrics ? pageMetrics.height * scale : 800}
             highlight={pageHighlight?.page === i + 1 ? pageHighlight : null}
+            isCurrent={currentPage === i + 1}
           />
         ))}
       </div>
@@ -630,6 +689,7 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
  *  (initial render race). */
 function PdfChromePortal({
   scale,
+  currentPage,
   numPages,
   status,
   retryLabel,
@@ -638,8 +698,10 @@ function PdfChromePortal({
   onFit,
   onZoomOut,
   onZoomIn,
+  onJumpToPage,
 }: {
   scale: number;
+  currentPage: number;
   numPages: number;
   status: { kind: 'error'; text: string } | null;
   retryLabel: string;
@@ -648,8 +710,11 @@ function PdfChromePortal({
   onFit: () => void;
   onZoomOut: () => void;
   onZoomIn: () => void;
+  onJumpToPage: (page: number) => void;
 }) {
   const [slot, setSlot] = useState<HTMLElement | null>(null);
+  const [editingPage, setEditingPage] = useState(false);
+  const [pageInput, setPageInput] = useState('');
   // Resolve the portal target once on mount — MainPane renders the
   // `#pdf-chrome-slot` div alongside this viewer, so it's present by the
   // time this effect runs. (No deps: a per-render getElementById is
@@ -657,6 +722,21 @@ function PdfChromePortal({
   useEffect(() => {
     setSlot(document.getElementById('pdf-chrome-slot'));
   }, []);
+  useEffect(() => {
+    if (!editingPage) setPageInput(String(currentPage));
+  }, [currentPage, editingPage]);
+
+  function submitPageJump() {
+    const page = Number(pageInput.trim());
+    if (!Number.isFinite(page)) {
+      setPageInput(String(currentPage));
+      setEditingPage(false);
+      return;
+    }
+    onJumpToPage(page);
+    setEditingPage(false);
+  }
+
   const chrome = (
     <div className="pdf-chrome">
       <div className={'pdf-search-status' + (status ? ` ${status.kind}` : '')} role={status ? 'status' : undefined}>
@@ -677,7 +757,41 @@ function PdfChromePortal({
         <span className="pdf-zoom">{Math.round(scale * 100)}%</span>
         <button type="button" className="icon-btn" title="Zoom in" onClick={onZoomIn}>+</button>
         <button type="button" className="pdf-fit-btn" title="Fit to width" onClick={onFit}>Fit</button>
-        {numPages > 0 && <span className="pdf-pageinfo">{numPages} pages</span>}
+        {numPages > 0 && (
+          editingPage ? (
+            <span className="pdf-pagejump">
+              <span>Page</span>
+              <input
+                autoFocus
+                value={pageInput}
+                inputMode="numeric"
+                aria-label="PDF page number"
+                onChange={(e) => setPageInput(e.target.value)}
+                onBlur={submitPageJump}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') submitPageJump();
+                  if (e.key === 'Escape') {
+                    setPageInput(String(currentPage));
+                    setEditingPage(false);
+                  }
+                }}
+              />
+              <span>/ {numPages}</span>
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="pdf-pageinfo"
+              title="Jump to page"
+              onClick={() => {
+                setPageInput(String(currentPage));
+                setEditingPage(true);
+              }}
+            >
+              Page {currentPage} / {numPages}
+            </button>
+          )
+        )}
       </div>
     </div>
   );
@@ -693,12 +807,14 @@ function PdfPage({
   scale,
   placeholderHeight,
   highlight,
+  isCurrent,
 }: {
   doc: PDFDocumentProxy;
   pageIndex: number;
   scale: number;
   placeholderHeight: number;
   highlight: PdfPageHighlight | null;
+  isCurrent: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -789,6 +905,9 @@ function PdfPage({
       {visible ? <canvas ref={canvasRef} className="pdf-page-canvas" /> : (
         <div className="pdf-page-placeholder">Page {pageIndex + 1}</div>
       )}
+      <div className={'pdf-page-number' + (isCurrent ? ' current' : '')} aria-hidden="true">
+        p. {pageIndex + 1}
+      </div>
       {visible && renderedSize && highlight && (
         <div className="pdf-page-highlight-layer" aria-hidden="true">
           {highlight.rects.map((rect, i) => (

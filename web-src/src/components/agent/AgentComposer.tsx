@@ -222,7 +222,7 @@ export function AgentComposer({
     : phase === 'closed'
       ? 'Reconnect to continue…'
       : turnActive
-        ? `${agentShortName} is working…`
+        ? 'Ask for follow-up changes'
         : `Message ${agentShortName}…`;
 
   function onChange(v: string, caret: number) {

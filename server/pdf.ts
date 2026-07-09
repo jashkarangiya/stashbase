@@ -39,6 +39,7 @@ interface QueuedPdf {
 }
 
 const queuedPdfs = new Map<string, QueuedPdf>();
+const cancelledPdfRoots = new Set<string>();
 let pdfQueueTimer: ReturnType<typeof setTimeout> | null = null;
 let pdfQueueRunning = false;
 let pdfQueueSeq = 0;
@@ -98,6 +99,31 @@ function pdfQueueKey(pdfAbsPath: string): string {
   return toPosixAbs(path.resolve(pdfAbsPath));
 }
 
+function normalizeRoot(folderAbs: string): string {
+  return toPosixAbs(folderAbs).replace(/\/+$/, '');
+}
+
+function isUnderRoot(absPath: string, root: string): boolean {
+  const abs = toPosixAbs(absPath);
+  return abs === root || abs.startsWith(`${root}/`);
+}
+
+function isCancelledPdfPath(absPath: string): boolean {
+  for (const root of cancelledPdfRoots) {
+    if (isUnderRoot(absPath, root)) return true;
+  }
+  return false;
+}
+
+function allowQueuedPdfsUnder(folderAbs: string): void {
+  const root = normalizeRoot(folderAbs);
+  for (const cancelled of [...cancelledPdfRoots]) {
+    if (cancelled === root || cancelled.startsWith(`${root}/`) || root.startsWith(`${cancelled}/`)) {
+      cancelledPdfRoots.delete(cancelled);
+    }
+  }
+}
+
 function schedulePdfQueueDrain(): void {
   if (pdfQueueTimer || pdfQueueRunning) return;
   pdfQueueTimer = setTimeout(() => {
@@ -121,6 +147,7 @@ async function drainPdfQueue(): Promise<void> {
       const next = items.find((item) => queuedPdfs.has(pdfQueueKey(item.absPath)));
       if (!next) break;
       queuedPdfs.delete(pdfQueueKey(next.absPath));
+      if (isCancelledPdfPath(next.absPath)) continue;
       const run = maybeConvert(next.absPath, PDF_SPEC);
       if (run) await run;
     }
@@ -131,11 +158,12 @@ async function drainPdfQueue(): Promise<void> {
 }
 
 export function cancelQueuedPdfsUnder(folderAbs: string): string[] {
-  const root = toPosixAbs(folderAbs).replace(/\/+$/, '');
+  const root = normalizeRoot(folderAbs);
+  if (root) cancelledPdfRoots.add(root);
   const removed: string[] = [];
   for (const item of queuedPdfs.values()) {
     const abs = toPosixAbs(item.absPath);
-    if (abs !== root && !abs.startsWith(`${root}/`)) continue;
+    if (!isUnderRoot(abs, root)) continue;
     queuedPdfs.delete(pdfQueueKey(abs));
     removed.push(abs);
   }
@@ -216,6 +244,7 @@ function probePdfTextLayer(pdfAbsPath: string): Promise<boolean> {
 }
 
 function enqueuePdf(pdfAbsPath: string, priority?: number): void {
+  if (isCancelledPdfPath(pdfAbsPath)) return;
   const key = pdfQueueKey(pdfAbsPath);
   const current = queuedPdfs.get(key);
   if (current) {
@@ -390,6 +419,7 @@ export function maybeConvertPdf(
 /** Reconcile hook: convert any untracked `.pdf` under the folder (dropped
  *  in via git checkout / external copy / `mv`). */
 export function discoverNewPdfs(folderAbs: string): void {
+  allowQueuedPdfsUnder(folderAbs);
   discoverNewSources(folderAbs, PDF_SPEC, (abs) => maybeConvertPdf(abs));
 }
 

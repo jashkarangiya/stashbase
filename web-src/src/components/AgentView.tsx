@@ -21,7 +21,7 @@ import type { ChatTab } from '../store/state';
 import { NewChatIcon } from '../icons';
 import { AgentComposer } from './agent/AgentComposer';
 import { AgentHistoryMenu } from './agent/AgentHistoryMenu';
-import { MessageList } from './agent/AgentMessages';
+import { MessageList, type QueuedTurnPreview } from './agent/AgentMessages';
 import { baseName, mergeAttachments, readImageDims } from './agent/attachments';
 import type { Attachment, Block, EffortLevel, PermMode, ServerEvent, ToolBlock } from './agent/types';
 
@@ -30,6 +30,22 @@ const nextId = () => `b${++blockSeq}`;
 const ATTACH_MAX_FILES = 50;
 const ATTACH_MAX_BYTES = 64 * 1024 * 1024;
 const ATTACH_TIMEOUT_MS = 60_000;
+
+interface QueuedPrompt {
+  id: string;
+  text: string;
+  attachments: Attachment[];
+  titleHint?: string;
+  status: 'waiting' | 'steering' | 'steered';
+}
+
+interface PromptToSend {
+  text: string;
+  attachments: Attachment[];
+  titleHint?: string;
+  appendBlock: boolean;
+  clearAttachments?: boolean;
+}
 
 /** A chat tab still wearing its auto-generated placeholder name, so we
  *  know it's safe to overwrite with the session's derived title. */
@@ -56,6 +72,9 @@ export function AgentView({
   const uploadCountRef = useRef(0);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [turnActive, setTurnActive] = useState(false);
+  const turnActiveRef = useRef(false);
+  const queuedPromptsRef = useRef<QueuedPrompt[]>([]);
+  const [queuedTurns, setQueuedTurns] = useState<QueuedTurnPreview[]>([]);
   // Composer attachments (context files) — lifted here so a drop anywhere
   // on the panel, the composer `+`, and the send path all share one list.
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -101,6 +120,11 @@ export function AgentView({
     mountedRef.current = false;
   }, []);
 
+  function setTurnBusy(active: boolean) {
+    turnActiveRef.current = active;
+    setTurnActive(active);
+  }
+
   useEffect(() => {
     readyRef.current = false;
     // Consume-and-clear the resume id: it belongs to this one connection,
@@ -121,7 +145,9 @@ export function AgentView({
       handleEvent(ev);
     };
     ws.onclose = () => {
-      setTurnActive(false);
+      queuedPromptsRef.current = [];
+      setQueuedTurns([]);
+      setTurnBusy(false);
       // Closing before the session was ever ready is a startup failure,
       // not a normal end — surface it (with a Retry) rather than a quiet
       // "session ended".
@@ -143,7 +169,9 @@ export function AgentView({
   function reconnect() {
     setBlocks([]);
     setFatal(null);
-    setTurnActive(false);
+    queuedPromptsRef.current = [];
+    setQueuedTurns([]);
+    setTurnBusy(false);
     setCurrentSessionId(null);
     sessionIdRef.current = null;
     toolNamesRef.current.clear();
@@ -167,7 +195,9 @@ export function AgentView({
     }
     setBlocks(hist);
     setFatal(null);
-    setTurnActive(false);
+    queuedPromptsRef.current = [];
+    setQueuedTurns([]);
+    setTurnBusy(false);
     setCurrentSessionId(id);
     sessionIdRef.current = id;
     toolNamesRef.current.clear();
@@ -208,7 +238,7 @@ export function AgentView({
         break;
       case 'turn-start':
         openKind.current = null;
-        setTurnActive(true);
+        setTurnBusy(true);
         break;
       case 'text':
         appendStream('assistant', ev.delta);
@@ -264,9 +294,14 @@ export function AgentView({
           return [...bs, { kind: 'tool', id: ev.toolUseId, name: ev.name, input: ev.input, status: 'awaiting', permId: ev.id, permTitle: ev.title }];
         });
         break;
+      case 'steer-result':
+        setQueuedPromptStatus(ev.id, ev.ok ? 'steered' : 'waiting');
+        if (!ev.ok && ev.message) {
+          setBlocks((bs) => [...bs, { kind: 'error', id: nextId(), text: `Could not steer Codex: ${ev.message}` }]);
+        }
+        break;
       case 'turn-end':
         openKind.current = null;
-        setTurnActive(false);
         // Name the tab from the session's derived title (first prompt /
         // SDK summary) once the first turn lands — keeps it in sync with
         // the History list instead of staying "Untitled".
@@ -283,13 +318,16 @@ export function AgentView({
               if (folderPathRef.current === turnFolder) void actions.refreshIndexState();
             });
         }
+        runNextQueuedPrompt();
         break;
       case 'error':
         openKind.current = null;
         // An error before the session is ready is fatal (e.g. no folder
         // open / not authenticated); mid-session it's just a notice.
         if (!readyRef.current) {
-          setTurnActive(false);
+          queuedPromptsRef.current = [];
+          setQueuedTurns([]);
+          setTurnBusy(false);
           setFatal(ev.message);
           setPhase('closed');
         } else {
@@ -297,7 +335,9 @@ export function AgentView({
         }
         break;
       case 'exit':
-        setTurnActive(false);
+        queuedPromptsRef.current = [];
+        setQueuedTurns([]);
+        setTurnBusy(false);
         setPhase('closed');
         break;
     }
@@ -316,12 +356,78 @@ export function AgentView({
     });
   }
 
-  async function send(text: string) {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  function queuePreview(): QueuedTurnPreview[] {
+    return queuedPromptsRef.current.map((p) => ({
+      id: p.id,
+      text: p.text,
+      attachments: p.attachments.length ? p.attachments : undefined,
+      status: p.status,
+      canSteer: agent === 'codex',
+    }));
+  }
+
+  function setQueuedPromptStatus(id: string, status: QueuedPrompt['status']) {
+    queuedPromptsRef.current = queuedPromptsRef.current.map((p) => (p.id === id ? { ...p, status } : p));
+    setQueuedTurns(queuePreview());
+  }
+
+  function send(text: string) {
     const atts = attachments;
-    setBlocks((bs) => [...bs, { kind: 'user', id: nextId(), text, attachments: atts.length ? atts : undefined }]);
-    setTurnActive(true);
+    const titleHint = agent === 'codex' && isDefaultChatTitle(titleRef.current) ? text : undefined;
+    if (turnActiveRef.current) {
+      const id = nextId();
+      queuedPromptsRef.current.push({ id, text, attachments: atts, titleHint, status: 'waiting' });
+      setQueuedTurns(queuePreview());
+      setAttachments([]);
+      return;
+    }
+    void sendPromptNow({ text, attachments: atts, titleHint, appendBlock: true, clearAttachments: true });
+  }
+
+  function runNextQueuedPrompt() {
+    queuedPromptsRef.current = queuedPromptsRef.current.filter((p) => p.status === 'waiting');
+    const next = queuedPromptsRef.current.shift();
+    setQueuedTurns(queuePreview());
+    if (!next) {
+      setTurnBusy(false);
+      return;
+    }
+    void sendPromptNow({ ...next, appendBlock: true });
+  }
+
+  async function steerQueuedPrompt(id: string) {
+    if (agent !== 'codex') return;
+    const prompt = queuedPromptsRef.current.find((p) => p.id === id && p.status === 'waiting');
+    const ws = wsRef.current;
+    if (!prompt || !ws || ws.readyState !== WebSocket.OPEN) return;
+    setQueuedPromptStatus(id, 'steering');
+    const ctx = await buildPromptContext(prompt.attachments);
+    const wire = ctx.length ? `${prompt.text}${prompt.text ? '\n\n' : ''}${ctx.join('\n\n')}` : prompt.text;
+    try {
+      ws.send(JSON.stringify({ t: 'steer', id, text: wire }));
+    } catch (err) {
+      setQueuedPromptStatus(id, 'waiting');
+      setBlocks((bs) => [...bs, { kind: 'error', id: nextId(), text: `Could not steer Codex: ${errorText(err)}` }]);
+    }
+  }
+
+  async function sendPromptNow({
+    text,
+    attachments: atts,
+    titleHint,
+    appendBlock,
+    clearAttachments = false,
+  }: PromptToSend) {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setTurnBusy(false);
+      setBlocks((bs) => [...bs, { kind: 'error', id: nextId(), text: `${meta.shortName} is not connected.` }]);
+      return;
+    }
+    if (appendBlock) {
+      setBlocks((bs) => [...bs, { kind: 'user', id: nextId(), text, attachments: atts.length ? atts : undefined }]);
+    }
+    setTurnBusy(true);
     openKind.current = null;
     // Build the wire prompt from explicit context only. The current viewer
     // file is not attached automatically; users drag files in or pick them
@@ -332,11 +438,11 @@ export function AgentView({
       ws.send(JSON.stringify({
         t: 'prompt',
         text: wire,
-        ...(agent === 'codex' && isDefaultChatTitle(titleRef.current) ? { titleHint: text } : {}),
+        ...(titleHint ? { titleHint } : {}),
       }));
-      setAttachments([]);
+      if (clearAttachments) setAttachments([]);
     } catch (err) {
-      setTurnActive(false);
+      setTurnBusy(false);
       setBlocks((bs) => [...bs, { kind: 'error', id: nextId(), text: `Could not send message: ${errorText(err)}` }]);
     }
   }
@@ -558,31 +664,24 @@ export function AgentView({
       </div>
       <MessageList
         blocks={blocks}
+        queuedTurns={queuedTurns}
         turnActive={turnActive}
         phase={phase}
+        fatal={fatal}
         agentName={meta.name}
         agentShortName={meta.shortName}
         Icon={meta.Icon}
         onPermission={replyPermission}
+        onSteerQueued={steerQueuedPrompt}
+        onRetry={reconnect}
       />
       {phase === 'closed' && (
-        fatal
-          ? (
-            <div className="agent-fatal">
-              <span className="agent-fatal-msg">
-                {/No folder open/i.test(fatal)
-                  ? 'No folder is open. Open a folder, then retry.'
-                  : `Couldn't start ${meta.shortName}: ${fatal}`}
-              </span>
-              <button type="button" className="agent-btn" onClick={reconnect}>Retry</button>
-            </div>
-          )
-          : (
-            <div className="agent-ended">
-              <span>Session ended.</span>
-              <button type="button" className="agent-btn" onClick={reconnect}>Reconnect</button>
-            </div>
-          )
+        !fatal && (
+          <div className="agent-ended">
+            <span>Session ended.</span>
+            <button type="button" className="agent-btn" onClick={reconnect}>Reconnect</button>
+          </div>
+        )
       )}
       <AgentComposer
         phase={phase}

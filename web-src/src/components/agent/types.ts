@@ -39,6 +39,7 @@ export type ServerEvent =
   | { t: 'tool-delta'; id: string; delta: string }
   | { t: 'tool-result'; id: string; content: string; isError: boolean }
   | { t: 'permission'; id: string; toolUseId: string; name: string; title: string | null; input: Record<string, unknown> }
+  | { t: 'steer-result'; id: string; ok: boolean; message?: string }
   | { t: 'turn-end'; isError: boolean }
   | { t: 'error'; message: string }
   | { t: 'exit' };

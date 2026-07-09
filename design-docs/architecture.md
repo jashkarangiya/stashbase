@@ -147,6 +147,8 @@ PDFs are different: StashBase converts the document into derived Markdown, and t
 
 DOCX is also different, but not in the same way as PDF. Browsers and Electron do not provide a reliable native DOCX viewer, so StashBase converts DOCX into AppData-derived HTML. The original `.docx` remains the source file; preview, Agent reading, and indexing use the derived HTML/text representation.
 
+PDF preview still shows the original PDF, not the derived Markdown. Because search and Agent answers can carry page references from the derived text, the PDF preview shows the current page, supports direct page jumping, and labels each rendered page with a lightweight page number.
+
 ## 4.2 Derived Representations
 
 PDFs, images, and DOCX produce derived representations stored under AppData:
@@ -308,9 +310,9 @@ Built-in Agent panel -> same MCP server -> same library
 External AI client   -> same MCP server -> same library
 ```
 
-The panel may add UI affordances such as structured messages, tool approvals, history, and attachments, but those are product/UI details rather than separate library infrastructure. Attachments are explicit: the currently open document is not sent as Agent context unless the user adds it by drag/drop, file picker, or mention. Claude and Codex share the same composer controls: Access on the left of the right-side control group, Effort on the right. Access is an action-permission setting and remains available during a chat. Effort is a session-start setting, so the control is editable only before a chat has messages. Claude SDK permission callbacks and Codex app-server approval requests are normalized into the same renderer permission card. Codex MCP tool approval arrives as an MCP elicitation request; the adapter translates tool-call approvals into the same allow/deny flow and cancels non-approval elicitations.
+The panel may add UI affordances such as structured messages, tool approvals, history, and attachments, but those are product/UI details rather than separate library infrastructure. Attachments are explicit: the currently open document is not sent as Agent context unless the user adds it by drag/drop, file picker, or mention. Claude and Codex share the same composer controls: Access on the left of the right-side control group, Effort on the right. Access is an action-permission setting and remains available during a chat. Effort is a session-start setting, so the control is editable only before a chat has messages. A built-in Agent session still runs one turn at a time; if the user submits a follow-up while a turn is active, the renderer queues it visibly. Claude sends queued follow-ups after the active turn ends. Codex can also steer the active turn through app-server `turn/steer`; steered follow-ups are removed from the next-turn queue after app-server accepts them. Claude SDK permission callbacks and Codex app-server approval requests are normalized into the same renderer permission card. Codex MCP tool approval arrives as an MCP elicitation request; the adapter translates tool-call approvals into the same allow/deny flow and cancels non-approval elicitations. Startup or runtime fatal errors render inside the message area with Retry instead of leaving an empty chat surface. Long user prompts and queued follow-ups are collapsible so sticky turn headers do not dominate the viewport.
 
-Claude session titles come from the Claude SDK history metadata. Codex threads are named from the first user prompt when StashBase creates the thread so the tab title and History list do not stay on the placeholder.
+Claude session titles come from the Claude SDK history metadata. Codex threads are listed through Codex app-server's thread APIs and filtered by the current folder `cwd`, not by Codex's internal source kind. Codex threads are named from the first user prompt when StashBase creates the thread so the tab title and History list do not stay on the placeholder.
 
 ---
 

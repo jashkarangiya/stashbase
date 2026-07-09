@@ -1,18 +1,30 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type RefObject } from 'react';
 import { renderMarkdownInline } from '../../markdown';
 import { ChevronDownIcon, FileGenericIcon } from '../../icons';
-import type { Block, ToolBlock, ToolStatus } from './types';
+import type { Attachment, Block, ToolBlock, ToolStatus } from './types';
+
+export interface QueuedTurnPreview {
+  id: string;
+  text: string;
+  attachments?: Attachment[];
+  status: 'waiting' | 'steering' | 'steered';
+  canSteer?: boolean;
+}
 
 export function MessageList({
-  blocks, turnActive, phase, agentName, agentShortName, Icon, onPermission,
+  blocks, queuedTurns, turnActive, phase, fatal, agentName, agentShortName, Icon, onPermission, onSteerQueued, onRetry,
 }: {
   blocks: Block[];
+  queuedTurns: QueuedTurnPreview[];
   turnActive: boolean;
   phase: 'connecting' | 'live' | 'closed';
+  fatal: string | null;
   agentName: string;
   agentShortName: string;
   Icon: ComponentType<{ className?: string }>;
   onPermission: (toolBlockId: string, permId: string, allow: boolean) => void;
+  onSteerQueued: (id: string) => void;
+  onRetry: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -33,12 +45,19 @@ export function MessageList({
     <div className="agent-messages" ref={ref} onScroll={onScroll}>
       {blocks.length === 0 && phase === 'live' && <Hero name={agentName} Icon={Icon} />}
       {phase === 'connecting' && <div className="agent-empty">Connecting to {agentShortName}…</div>}
+      {blocks.length === 0 && phase === 'closed' && fatal && (
+        <FatalState fatal={fatal} agentShortName={agentShortName} onRetry={onRetry} />
+      )}
       {turns.map((turn) => (
         <div className="agent-turn" key={turn.key}>
-          {turn.head && <UserTurnHead block={turn.head} scrollRef={ref} />}
+          {turn.head && <UserTurnHead block={turn.head} scrollRef={ref} sticky={queuedTurns.length === 0} />}
           {turn.body.map((b) => <BlockView key={b.id} block={b} onPermission={onPermission} />)}
         </div>
       ))}
+      {queuedTurns.map((turn) => <QueuedTurn key={turn.id} turn={turn} onSteer={onSteerQueued} />)}
+      {blocks.length > 0 && phase === 'closed' && fatal && (
+        <FatalInline fatal={fatal} agentShortName={agentShortName} onRetry={onRetry} />
+      )}
       {turnActive && <div className="agent-working"><span className="agent-dot" />{agentShortName} is working…</div>}
     </div>
   );
@@ -62,15 +81,20 @@ function groupTurns(blocks: Block[]): Turn[] {
 }
 
 function UserTurnHead({
-  block, scrollRef,
+  block, scrollRef, sticky = true,
 }: {
   block: Extract<Block, { kind: 'user' }>;
   scrollRef?: RefObject<HTMLDivElement | null>;
+  sticky?: boolean;
 }) {
   const [stuck, setStuck] = useState(false);
   const sentinelRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
+    if (!sticky) {
+      setStuck(false);
+      return;
+    }
     const root = scrollRef?.current;
     const sentinel = sentinelRef.current;
     if (!root || !sentinel) return;
@@ -80,12 +104,12 @@ function UserTurnHead({
     );
     io.observe(sentinel);
     return () => io.disconnect();
-  }, [scrollRef]);
+  }, [scrollRef, sticky]);
 
   return (
     <>
-      <span ref={sentinelRef} className="agent-turn-sentinel" aria-hidden="true" />
-      <div className={'agent-turn-head' + (stuck ? ' stuck' : '')}>
+      {sticky && <span ref={sentinelRef} className="agent-turn-sentinel" aria-hidden="true" />}
+      <div className={'agent-turn-head' + (sticky ? '' : ' static') + (stuck ? ' stuck' : '')}>
         {block.attachments && block.attachments.length > 0 && (
           <div className="agent-turn-attach">
             {block.attachments.map((a) => (
@@ -97,9 +121,124 @@ function UserTurnHead({
             ))}
           </div>
         )}
-        {block.text && <span className="agent-turn-text">{block.text}</span>}
+        {block.text && <UserMessageText text={block.text} />}
       </div>
     </>
+  );
+}
+
+function QueuedTurn({ turn, onSteer }: { turn: QueuedTurnPreview; onSteer: (id: string) => void }) {
+  const label = turn.status === 'steered' ? 'Steered' : turn.status === 'steering' ? 'Steering' : 'Waiting';
+  return (
+    <div className="agent-turn queued">
+      <div className="agent-turn-head queued">
+        {turn.attachments && turn.attachments.length > 0 && (
+          <div className="agent-turn-attach">
+            {turn.attachments.map((a) => (
+              <span key={a.path} className="agent-attach-chip" title={a.path}>
+                <FileGenericIcon className="agent-attach-icon" />
+                <span className="agent-attach-name">{a.name}</span>
+                {a.dims && <span className="agent-attach-dims">{a.dims}</span>}
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="agent-turn-line">
+          {turn.text && <UserMessageText text={turn.text} />}
+          <span className="agent-turn-actions">
+            <span className="agent-turn-waiting">
+              <span className="agent-dot" />
+              {label}
+            </span>
+            {turn.canSteer && turn.status === 'waiting' && (
+              <button type="button" className="agent-turn-steer" onClick={() => onSteer(turn.id)}>
+                Steer
+              </button>
+            )}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const USER_TEXT_CHAR_LIMIT = 600;
+const USER_TEXT_LINE_LIMIT = 8;
+
+function UserMessageText({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const preview = userTextPreview(text);
+  const collapsible = preview !== text;
+  return (
+    <span className="agent-turn-text">
+      {open || !collapsible ? text : preview}
+      {collapsible && !open && <span className="agent-turn-ellipsis">…</span>}
+      {collapsible && (
+        <button
+          type="button"
+          className="agent-turn-expand"
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((v) => !v);
+          }}
+        >
+          {open ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </span>
+  );
+}
+
+function userTextPreview(text: string): string {
+  const lines = text.split(/\r?\n/);
+  let out = lines.slice(0, USER_TEXT_LINE_LIMIT).join('\n');
+  if (out.length > USER_TEXT_CHAR_LIMIT) out = out.slice(0, USER_TEXT_CHAR_LIMIT);
+  if (lines.length > USER_TEXT_LINE_LIMIT || text.length > out.length) return out.trimEnd();
+  return text;
+}
+
+function fatalCopy(fatal: string, agentShortName: string): { title: string; detail: string } {
+  if (/No folder open/i.test(fatal)) {
+    return { title: 'No folder open', detail: 'Open a folder, then retry.' };
+  }
+  return { title: `${agentShortName} couldn't continue`, detail: fatal };
+}
+
+function FatalState({
+  fatal, agentShortName, onRetry,
+}: {
+  fatal: string;
+  agentShortName: string;
+  onRetry: () => void;
+}) {
+  const copy = fatalCopy(fatal, agentShortName);
+  return (
+    <div className="agent-fatal-state">
+      <div className="agent-fatal-card">
+        <div className="agent-fatal-title">{copy.title}</div>
+        <div className="agent-fatal-detail">{copy.detail}</div>
+        <button type="button" className="agent-btn" onClick={onRetry}>Retry</button>
+      </div>
+    </div>
+  );
+}
+
+function FatalInline({
+  fatal, agentShortName, onRetry,
+}: {
+  fatal: string;
+  agentShortName: string;
+  onRetry: () => void;
+}) {
+  const copy = fatalCopy(fatal, agentShortName);
+  return (
+    <div className="agent-fatal-inline">
+      <div>
+        <div className="agent-fatal-title">{copy.title}</div>
+        <div className="agent-fatal-detail">{copy.detail}</div>
+      </div>
+      <button type="button" className="agent-btn" onClick={onRetry}>Retry</button>
+    </div>
   );
 }
 

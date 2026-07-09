@@ -26,14 +26,16 @@ export function AgentHistoryMenu({
   const wrapRef = useRef<HTMLDivElement>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [q, setQ] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
 
   async function refresh() {
     setLoading(true);
+    setLoadError(false);
     try { setSessions(await api.listSessions(agent)); }
-    catch { setSessions([]); }
+    catch { setSessions([]); setLoadError(true); }
     finally { setLoading(false); }
   }
 
@@ -97,7 +99,8 @@ export function AgentHistoryMenu({
           </div>
           <div className="agent-history-list">
             {loading && <div className="agent-history-empty">Loading…</div>}
-            {!loading && shown.length === 0 && (
+            {!loading && loadError && <div className="agent-history-empty">Could not load sessions.</div>}
+            {!loading && !loadError && shown.length === 0 && (
               <div className="agent-history-empty">{q ? 'No matches.' : 'No sessions yet.'}</div>
             )}
             {!loading && shown.map((s) => (
