@@ -1,8 +1,7 @@
-    /* Chat panel docked on the right. `--chat-width` is a CSS
-     * var the React layer drives from `state.chatWidth`, so the
-     * drag-resize handle updates the layout directly without re-rendering
-     * the heavy panes. A thin splitter sits in its own grid column so
-     * users have a discrete drag target. */
+    /* Chat panel docked on the right. `--chat-width` normally reflects
+     * `state.chatWidth`; during a drag the splitter updates it directly
+     * so the heavy panes do not re-render until the final width persists.
+     * A thin splitter sits in its own grid column for a discrete target. */
     .app.chat-open {
       grid-template-columns: calc(44px + var(--sidebar-width, 280px)) 1fr 6px var(--chat-width, 480px);
     }

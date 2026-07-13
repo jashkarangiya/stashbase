@@ -178,10 +178,11 @@
       transition: grid-template-columns 220ms ease;
     }
 
-    /* While dragging the sidebar splitter, the column must track the
+    /* While dragging either splitter, the column must track the
      * cursor instantly — the 220ms ease would otherwise lag behind the
      * (instantly-positioned) splitter and open a blank gap. */
-    .app.sidebar-dragging {
+    .app.sidebar-dragging,
+    .app.chat-dragging {
       transition: none;
     }
 
@@ -224,4 +225,3 @@
     .sidebar-splitter:active::after {
       background: var(--accent);
     }
-

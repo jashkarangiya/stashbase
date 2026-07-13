@@ -30,7 +30,12 @@ import { HomeIcon } from './icons';
 import { useHoverTip } from './hooks/useHoverTip';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppProvider, useApp } from './store/AppContext';
-import { SIDEBAR_COLLAPSE_AT, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from './store/state';
+import {
+  clampChatWidth,
+  SIDEBAR_COLLAPSE_AT,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+} from './store/state';
 import { useGlobalDragDrop } from './hooks/useGlobalDragDrop';
 import { getWindowId } from './api';
 import { isTrustedPreviewSource } from './lib/previewMessages';
@@ -376,28 +381,66 @@ function SidebarSplitter() {
 function ChatSplitter() {
   const { state, dispatch } = useApp();
   const startRef = useRef<{ x: number; w: number } | null>(null);
+  const appRef = useRef<HTMLElement | null>(null);
+  const pendingWidthRef = useRef<number | null>(null);
+  const frameRef = useRef<number | null>(null);
+
+  function widthAt(e: ReactPointerEvent<HTMLDivElement>) {
+    const start = startRef.current;
+    return start ? clampChatWidth(start.w - (e.clientX - start.x)) : null;
+  }
+
+  function writePendingWidth() {
+    frameRef.current = null;
+    const width = pendingWidthRef.current;
+    if (width !== null) appRef.current?.style.setProperty('--chat-width', `${width}px`);
+  }
+
+  function queueWidth(width: number) {
+    pendingWidthRef.current = width;
+    if (frameRef.current === null) frameRef.current = requestAnimationFrame(writePendingWidth);
+  }
+
+  useEffect(() => () => {
+    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+    appRef.current?.classList.remove('chat-dragging');
+  }, []);
+
+  function finish(e: ReactPointerEvent<HTMLDivElement>) {
+    const finalWidth = widthAt(e) ?? pendingWidthRef.current;
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+    if (finalWidth !== null) {
+      pendingWidthRef.current = finalWidth;
+      writePendingWidth();
+      dispatch({ type: 'CHAT_WIDTH', width: finalWidth });
+    }
+    startRef.current = null;
+    pendingWidthRef.current = null;
+    appRef.current?.classList.remove('chat-dragging');
+    appRef.current = null;
+  }
 
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     startRef.current = { x: e.clientX, w: state.chatWidth };
+    appRef.current = e.currentTarget.parentElement as HTMLElement | null;
+    appRef.current?.classList.add('chat-dragging');
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
   }
   function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
-    const start = startRef.current;
-    if (!start) return;
-    // Dragging left grows the panel (it sits on the right). The
-    // reducer clamps to [280, 1200] so we don't need to validate here.
-    const next = start.w - (e.clientX - start.x);
-    dispatch({ type: 'CHAT_WIDTH', width: next });
+    const width = widthAt(e);
+    if (width !== null) queueWidth(width);
   }
-  function onPointerUp() { startRef.current = null; }
 
   return (
     <div
       className="chat-splitter"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      onPointerUp={finish}
+      onPointerCancel={finish}
     />
   );
 }
