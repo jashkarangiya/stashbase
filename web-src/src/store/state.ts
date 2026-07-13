@@ -214,12 +214,15 @@ export interface State {
   /** Catalog of available agents from the server, populated on demand. */
   agents: Agent[];
   /** Active chat tabs. Each tab owns its own agent session so switching
-   *  tabs preserves that conversation. Cursor-style — the chrome
-   *  launchers / in-panel `+` spawn new ones. */
+   *  tabs preserves that conversation. The chrome agent icons select or
+   *  toggle an agent's chat; the in-panel `+` creates new tabs. */
   chatTabs: ChatTab[];
   /** Id of the currently-visible tab. `null` only when `chatTabs`
    *  is empty (panel closed or just initialised). */
   activeChatTabId: string | null;
+  /** Per-agent tab activation history, oldest first. The last id is the
+   *  tab that an agent icon selects when reopening that agent. */
+  chatTabRecencyByAgent: Record<string, string[]>;
 
   /** User-visible paths whose semantic-search content is still being
    *  embedded/indexed. Keyword search ignores this state and can search
@@ -345,6 +348,7 @@ export const initialState: State = {
   agents: [],
   chatTabs: [],
   activeChatTabId: null,
+  chatTabRecencyByAgent: {},
   pendingSemanticNames: new Set(),
   pendingConversions: [],
   conversionProgress: {},
@@ -414,6 +418,9 @@ export type Action =
   | { type: 'CHAT_TOGGLE' }
   | { type: 'CHAT_WIDTH'; width: number }
   | { type: 'AGENTS_LOADED'; agents: State['agents'] }
+  /** Select or toggle an agent from a chrome icon. `tab` is supplied only
+   *  when that agent has no open tabs. */
+  | { type: 'CHAT_AGENT_TOGGLE'; agent: string; tab?: ChatTab }
   | { type: 'CHAT_TAB_NEW'; tab: ChatTab }
   | { type: 'CHAT_TAB_CLOSE'; id: string }
   | { type: 'CHAT_TAB_ACTIVATE'; id: string }
@@ -489,6 +496,39 @@ export function makeTab(): Tab {
 export function getActiveTab(s: State): Tab | null {
   if (s.activeTabId == null) return null;
   return s.tabs.find((t) => t.id === s.activeTabId) ?? null;
+}
+
+/** Create a numbered placeholder tab for a new agent conversation. */
+export function makeChatTab(agent: string, tabs: ChatTab[]): ChatTab {
+  const sameAgentTabs = tabs.filter((tab) => tab.agent === agent);
+  const title = sameAgentTabs.length === 0 ? 'Untitled' : `Untitled ${sameAgentTabs.length + 1}`;
+  return { id: crypto.randomUUID(), agent, title };
+}
+
+/** Move a chat tab to the most-recent position for its agent. */
+function rememberChatTab(recency: State['chatTabRecencyByAgent'], tab: ChatTab): State['chatTabRecencyByAgent'] {
+  return {
+    ...recency,
+    [tab.agent]: [...(recency[tab.agent] ?? []).filter((id) => id !== tab.id), tab.id],
+  };
+}
+
+/** Drop a closed tab from its agent's recency list. */
+function forgetChatTab(recency: State['chatTabRecencyByAgent'], tab: ChatTab): State['chatTabRecencyByAgent'] {
+  const ids = (recency[tab.agent] ?? []).filter((id) => id !== tab.id);
+  if (ids.length > 0) return { ...recency, [tab.agent]: ids };
+  const { [tab.agent]: _removed, ...rest } = recency;
+  return rest;
+}
+
+/** Return an agent's most recently active tab that is still open. */
+function mostRecentChatTab(s: State, agent: string): ChatTab | null {
+  const ids = s.chatTabRecencyByAgent[agent] ?? [];
+  for (let i = ids.length - 1; i >= 0; i -= 1) {
+    const tab = s.chatTabs.find((candidate) => candidate.id === ids[i]);
+    if (tab) return tab;
+  }
+  return null;
 }
 
 /** Visible files to mark as pending immediately after the user adds the
@@ -818,15 +858,40 @@ export function reducer(s: State, a: Action): State {
       return { ...s, chatWidth: Math.max(280, Math.min(a.width, 1200)) };
     case 'AGENTS_LOADED':
       return { ...s, agents: a.agents };
+    case 'CHAT_AGENT_TOGGLE': {
+      const activeTab = s.chatTabs.find((tab) => tab.id === s.activeChatTabId);
+      if (s.chatOpen && activeTab?.agent === a.agent) {
+        return { ...s, chatOpen: false };
+      }
+      const existingTab = mostRecentChatTab(s, a.agent);
+      if (existingTab) {
+        return {
+          ...s,
+          chatOpen: true,
+          activeChatTabId: existingTab.id,
+          chatTabRecencyByAgent: rememberChatTab(s.chatTabRecencyByAgent, existingTab),
+        };
+      }
+      if (!a.tab) return s;
+      return {
+        ...s,
+        chatOpen: true,
+        chatTabs: [...s.chatTabs, a.tab],
+        activeChatTabId: a.tab.id,
+        chatTabRecencyByAgent: rememberChatTab(s.chatTabRecencyByAgent, a.tab),
+      };
+    }
     case 'CHAT_TAB_NEW':
       return {
         ...s,
         chatTabs: [...s.chatTabs, a.tab],
         activeChatTabId: a.tab.id,
+        chatTabRecencyByAgent: rememberChatTab(s.chatTabRecencyByAgent, a.tab),
       };
     case 'CHAT_TAB_CLOSE': {
       const idx = s.chatTabs.findIndex((t) => t.id === a.id);
       if (idx < 0) return s;
+      const closedTab = s.chatTabs[idx];
       const nextTabs = s.chatTabs.filter((t) => t.id !== a.id);
       // If we just closed the active tab, jump to a neighbor (prefer
       // the one immediately to the right, fall back to the left).
@@ -834,18 +899,29 @@ export function reducer(s: State, a: Action): State {
       if (s.activeChatTabId === a.id) {
         nextActive = nextTabs[idx]?.id ?? nextTabs[idx - 1]?.id ?? null;
       }
+      const nextActiveTab = nextTabs.find((tab) => tab.id === nextActive);
       return {
         ...s,
         chatTabs: nextTabs,
         activeChatTabId: nextActive,
+        chatTabRecencyByAgent: nextActiveTab
+          ? rememberChatTab(forgetChatTab(s.chatTabRecencyByAgent, closedTab), nextActiveTab)
+          : forgetChatTab(s.chatTabRecencyByAgent, closedTab),
         // Closing the last chat window folds the panel — the launchers
         // are the only way back in, and an empty panel is just dead folder.
         chatOpen: nextTabs.length === 0 ? false : s.chatOpen,
       };
     }
     case 'CHAT_TAB_ACTIVATE':
-      if (!s.chatTabs.some((t) => t.id === a.id)) return s;
-      return { ...s, activeChatTabId: a.id };
+      {
+        const tab = s.chatTabs.find((candidate) => candidate.id === a.id);
+        if (!tab) return s;
+        return {
+          ...s,
+          activeChatTabId: a.id,
+          chatTabRecencyByAgent: rememberChatTab(s.chatTabRecencyByAgent, tab),
+        };
+      }
     case 'CHAT_TAB_RENAME':
       return {
         ...s,
@@ -857,7 +933,7 @@ export function reducer(s: State, a: Action): State {
       // or we'd render panels bound to the old folder). Fold the panel too,
       // mirroring CHAT_TAB_CLOSE: an empty panel is dead folder and the
       // launchers are the only way back in.
-      return { ...s, chatTabs: [], activeChatTabId: null, chatOpen: false };
+      return { ...s, chatTabs: [], activeChatTabId: null, chatTabRecencyByAgent: {}, chatOpen: false };
     case 'ACTIVE_FOLDER':
       // Semantically "make this folder the user's current target" —
       // also moves the visual focus there.

@@ -4,8 +4,8 @@
  * Claude Agent SDK bridge; Codex routes to the Codex app-server bridge.
  * All tabs stay mounted at once so switching preserves each session's
  * state (inactive tabs are absolutely-positioned + `visibility: hidden`).
- * New tabs are spawned from the chrome-row agent launchers (see
- * ChatLaunchButtons) — this panel just renders + switches between them.
+ * Chrome-row agent icons select or toggle existing chats; this panel's
+ * per-agent `+` button is the explicit new-chat control.
  */
 import { AgentView } from './AgentView';
 import { agentMeta, isAgentKind } from '../agentCatalog';

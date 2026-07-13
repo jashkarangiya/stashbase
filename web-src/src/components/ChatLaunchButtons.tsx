@@ -1,10 +1,8 @@
 /**
  * Chrome-row chat launchers — one icon-only button per agent (Claude,
- * Codex), VSCode-style. Each click opens the right-side chat panel and
- * spawns a fresh window (tab) for that agent — clicking repeatedly piles
- * up parallel sessions, the way opening a new editor window does. The
- * panel folds itself back up once the user closes the last tab (handled
- * in the reducer's CHAT_TAB_CLOSE), so there's no separate hide switch.
+ * Codex), VSCode-style. Each icon selects its agent's most recently active
+ * tab, creates a tab only when that agent has none, and toggles the panel
+ * closed when clicked again while active. The in-panel `+` creates new tabs.
  *
  */
 import { useEffect, useRef } from 'react';
@@ -12,7 +10,7 @@ import { api, type AgentsResponse } from '../api';
 import { AGENTS, type AgentMeta } from '../agentCatalog';
 import { useApp } from '../store/AppContext';
 import { useHoverTip } from '../hooks/useHoverTip';
-import type { ChatTab } from '../store/state';
+import { makeChatTab } from '../store/state';
 
 export function ChatLaunchButtons() {
   const { state, dispatch } = useApp();
@@ -31,16 +29,13 @@ export function ChatLaunchButtons() {
 
   const activeTab = state.chatTabs.find((t) => t.id === state.activeChatTabId);
 
-  function launch(agentId: string) {
-    if (!state.chatOpen) dispatch({ type: 'CHAT_TOGGLE' });
-    // Always spawn a fresh window, titled "Untitled" — a real title can
-    // come from the conversation later. Duplicates append " 2", " 3", …
-    // (mirrors the chat panel's `+` button).
-    const base = 'Untitled';
-    const sameAgent = state.chatTabs.filter((t) => t.agent === agentId);
-    const title = sameAgent.length === 0 ? base : `${base} ${sameAgent.length + 1}`;
-    const tab: ChatTab = { id: crypto.randomUUID(), agent: agentId, title };
-    dispatch({ type: 'CHAT_TAB_NEW', tab });
+  function toggleAgent(agentId: string) {
+    const hasOpenTab = state.chatTabs.some((tab) => tab.agent === agentId);
+    dispatch({
+      type: 'CHAT_AGENT_TOGGLE',
+      agent: agentId,
+      tab: hasOpenTab ? undefined : makeChatTab(agentId, state.chatTabs),
+    });
   }
 
   return (
@@ -50,7 +45,7 @@ export function ChatLaunchButtons() {
           key={agent.id}
           agent={agent}
           active={state.chatOpen && activeTab?.agent === agent.id}
-          onClick={() => launch(agent.id)}
+          onClick={() => toggleAgent(agent.id)}
         />
       ))}
     </div>
@@ -70,7 +65,7 @@ function LaunchButton({
   active: boolean;
   onClick: () => void;
 }) {
-  const label = `New ${agent.launcherLabel} chat`;
+  const label = active ? `Hide ${agent.launcherLabel} chat` : `Show ${agent.launcherLabel} chat`;
   const Icon = agent.Icon;
   const { tipProps, tip } = useHoverTip(label, 'bottom');
   return (

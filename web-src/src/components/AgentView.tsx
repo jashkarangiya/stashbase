@@ -17,7 +17,7 @@ import { AGENT_META, type AgentKind } from '../agentCatalog';
 import { FILE_MIME } from '../dragMime';
 import { acceptsAgentContextDrop, dragPayloadKinds } from '../dragRouting';
 import { useApp } from '../store/AppContext';
-import type { ChatTab } from '../store/state';
+import { makeChatTab } from '../store/state';
 import { NewChatIcon } from '../icons';
 import { AgentComposer } from './agent/AgentComposer';
 import { AgentHistoryMenu } from './agent/AgentHistoryMenu';
@@ -594,13 +594,9 @@ export function AgentView({
     } catch { /* leave the placeholder if the lookup fails */ }
   }
 
-  /** Spawn a fresh chat tab for the same agent (the in-panel `+`, mirroring the
-   *  chrome launcher). */
+  /** Spawn a fresh chat tab for the same agent from the in-panel `+`. */
   function newChat() {
-    const same = state.chatTabs.filter((t) => t.agent === agent);
-    const tabTitle = same.length === 0 ? 'Untitled' : `Untitled ${same.length + 1}`;
-    const tab: ChatTab = { id: crypto.randomUUID(), agent, title: tabTitle };
-    dispatch({ type: 'CHAT_TAB_NEW', tab });
+    dispatch({ type: 'CHAT_TAB_NEW', tab: makeChatTab(agent, state.chatTabs) });
   }
 
   const effortLocked = blocks.length > 0 || turnActive;

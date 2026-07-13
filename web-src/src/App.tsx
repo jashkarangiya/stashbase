@@ -60,7 +60,7 @@ function AppBody() {
   const [clipboardOffer, setClipboardOffer] = useState<ClipboardOffer | null>(null);
   const [pendingClipboardOffer, setPendingClipboardOffer] = useState<ClipboardOffer | null>(null);
   // Mount the chat panel lazily on first open and then NEVER
-  // unmount it — collapsing the panel just hides the column via CSS,
+  // unmount it — top-bar agent selectors only hide the column via CSS,
   // the underlying agent WebSocket sessions stay alive. Killing them
   // on every collapse would lose Claude Code's chat history and any
   // in-flight agent run. The in-panel "new chat" `+` is how the user
