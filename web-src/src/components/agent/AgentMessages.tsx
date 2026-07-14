@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode, type RefObject } from 'react';
 import { renderMarkdownInline } from '../../markdown';
 import { ChevronDownIcon, CopyIcon, EditIcon, FileGenericIcon } from '../../icons';
 import type { Attachment, Block, ToolBlock, ToolStatus } from './types';
@@ -331,6 +331,7 @@ function InlineUserMessageEditor({
 
 const USER_TEXT_CHAR_LIMIT = 300;
 const USER_TEXT_LINE_LIMIT = 4;
+const FILE_MENTION_RE = /(^|\s)@([^\n]*?\.(?:md|markdown|html|htm|pdf|docx|png|jpe?g|webp))(?![/.])/gi;
 
 function UserMessageText({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
@@ -338,7 +339,7 @@ function UserMessageText({ text }: { text: string }) {
   const collapsible = preview !== text;
   return (
     <span className="agent-turn-text">
-      {open || !collapsible ? text : preview}
+      {renderUserFileMentions(open || !collapsible ? text : preview)}
       {collapsible && !open && <span className="agent-turn-ellipsis">…</span>}
       {collapsible && (
         <button
@@ -355,6 +356,30 @@ function UserMessageText({ text }: { text: string }) {
       )}
     </span>
   );
+}
+
+/** The composer serializes its atomic @-mention widget as @<path>. Restore
+ * that same compact file chip in the transcript without treating ordinary
+ * inline code or assistant prose as an attachment. */
+function renderUserFileMentions(text: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  FILE_MENTION_RE.lastIndex = 0;
+  while ((match = FILE_MENTION_RE.exec(text))) {
+    const [raw, leading, path] = match;
+    const start = match.index;
+    if (start > cursor) parts.push(text.slice(cursor, start));
+    if (leading) parts.push(leading);
+    parts.push(
+      <span key={`${start}:${path}`} className="agent-file-mention" title={path} aria-label={`File mention: ${path}`}>
+        {baseName(path)}
+      </span>,
+    );
+    cursor = start + raw.length;
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts.length ? parts : [text];
 }
 
 function UserMessageActions({

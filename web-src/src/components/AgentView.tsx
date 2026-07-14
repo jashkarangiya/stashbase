@@ -93,7 +93,7 @@ export function AgentView({
   const [fatal, setFatal] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   // Permission mode for this session — drives the composer's Modes
-  // dropdown. Switching it sends `set-mode` so the SDK applies it live.
+  // dropdown. Switching it sends `set-mode` so the agent applies it live.
   const [mode, setMode] = useState<PermMode>('default');
   const modeRef = useRef<PermMode>('default');
   // Thinking effort — fixed per session (no live SDK setter), so it rides
@@ -234,7 +234,7 @@ export function AgentView({
         // A fresh session always starts at permissionMode 'default'; if the
         // user had picked a non-default mode, re-apply it so a reconnect
         // (Retry / effort change) doesn't silently reset it.
-        if (agent === 'claude' && mode !== 'default') wsRef.current?.send(JSON.stringify({ t: 'set-mode', mode }));
+        if (mode !== 'default') wsRef.current?.send(JSON.stringify({ t: 'set-mode', mode }));
         break;
       case 'session-id':
         setCurrentSessionId(ev.id);
@@ -571,13 +571,11 @@ export function AgentView({
     wsRef.current?.send(JSON.stringify({ t: 'interrupt' }));
   }
 
-  /** Switch permission mode and tell the server to apply it live when
-   *  the selected backend supports it. */
+  /** Switch permission mode and tell the server to apply it live. */
   function changeMode(m: PermMode) {
     setMode(m);
     modeRef.current = m;
-    if (agent === 'claude') wsRef.current?.send(JSON.stringify({ t: 'set-mode', mode: m }));
-    else if (blocks.length === 0) reconnect();
+    wsRef.current?.send(JSON.stringify({ t: 'set-mode', mode: m }));
   }
 
   /** Change thinking effort. The SDK fixes effort at session construction

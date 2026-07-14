@@ -202,9 +202,7 @@ class CodexSession {
         this.dispose();
         break;
       case 'set-mode':
-        // The app-server protocol exposes approval/sandbox changes at
-        // thread/turn start time; the current renderer only sends live
-        // permission-mode changes for Claude.
+        this.accessMode = isPermMode(msg.mode) ? msg.mode : this.accessMode;
         break;
     }
   }
@@ -442,6 +440,10 @@ class CodexSession {
       case 'mcpServer/elicitation/request': {
         const approval = mcpToolApprovalFromElicitation(params);
         if (approval) {
+          if (this.accessMode === 'acceptEdits' && isStashbaseMcpApproval(approval)) {
+            this.respond(id, { action: 'accept', content: {}, _meta: null });
+            break;
+          }
           const approvalId = `codex-${String(id)}`;
           this.pendingApprovals.set(approvalId, { requestId: id, method, params });
           this.send({
@@ -838,6 +840,10 @@ function mcpToolApprovalFromElicitation(params: JsonObject): {
   };
 }
 
+function isStashbaseMcpApproval(approval: { input: JsonObject }): boolean {
+  return stringValue(approval.input.server).toLowerCase() === 'stashbase';
+}
+
 function requestedPermissions(params: JsonObject | undefined): JsonObject {
   const permissions = objectValue(params?.permissions);
   const granted: JsonObject = {};
@@ -893,6 +899,10 @@ function titleFromPrompt(prompt: string): string {
   if (!firstLine) return '';
   const compact = firstLine.replace(/\s+/g, ' ');
   return compact.length > 60 ? `${compact.slice(0, 60).trimEnd()}…` : compact;
+}
+
+function isPermMode(value: unknown): value is 'default' | 'acceptEdits' | 'plan' | 'auto' {
+  return value === 'default' || value === 'acceptEdits' || value === 'plan' || value === 'auto';
 }
 
 function objectValue(value: unknown): JsonObject {
