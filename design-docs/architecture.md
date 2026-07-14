@@ -297,6 +297,8 @@ Hosted or multi-user versions would need a different permission model.
 
 The built-in panel is a convenience client for the same library, not a separate architecture path.
 
+Renderer and visual-design rules for this panel live in [agent-panel.md](agent-panel.md). This architecture section only defines the system boundary and durable state model.
+
 It runs the user's installed Agent CLI in the current folder and relies on the same global MCP configuration used by external clients.
 
 Each opened folder has one root-level `AGENTS.md` file for durable Agent instructions about that folder. Built-in Codex uses it directly through the normal folder context. Built-in Claude uses a root-level `CLAUDE.md` bridge that contains only `@AGENTS.md`; the bridge is created on first Claude launch if missing. Both files are ordinary Markdown source files, so the user can edit or delete them.
