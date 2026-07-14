@@ -809,6 +809,7 @@
       background: color-mix(in srgb, var(--pane) 72%, transparent);
     }
     .agent-activity.active { border-left-color: var(--accent); }
+    .agent-activity.attention { border-left-color: #e45649; }
     .agent-activity-head {
       display: flex;
       align-items: center;

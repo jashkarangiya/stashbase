@@ -71,11 +71,6 @@ export function AgentView({
   const mountedRef = useRef(true);
   const uploadCountRef = useRef(0);
   const [blocks, setBlocks] = useState<Block[]>([]);
-  // Tool calls are present in a resumed transcript but, unlike a live turn,
-  // have no visual arrival sequence to draw attention to them. Keep their ids
-  // so MessageList can reveal restored activity once without expanding new
-  // live tool groups.
-  const [historyToolIds, setHistoryToolIds] = useState<Set<string>>(() => new Set());
   const [editableUserMessageIds, setEditableUserMessageIds] = useState<Set<string>>(() => new Set());
   const [turnActive, setTurnActive] = useState(false);
   const turnActiveRef = useRef(false);
@@ -174,7 +169,6 @@ export function AgentView({
    *  reopens a folder). */
   function reconnect() {
     setBlocks([]);
-    setHistoryToolIds(new Set());
     setEditableUserMessageIds(new Set());
     setFatal(null);
     queuedPromptsRef.current = [];
@@ -202,7 +196,6 @@ export function AgentView({
       return;
     }
     setBlocks(hist);
-    setHistoryToolIds(new Set(hist.flatMap((block) => block.kind === 'tool' ? [block.id] : [])));
     setEditableUserMessageIds(new Set());
     setFatal(null);
     queuedPromptsRef.current = [];
@@ -699,7 +692,6 @@ export function AgentView({
       </div>
       <MessageList
         blocks={blocks}
-        historyToolIds={historyToolIds}
         queuedTurns={queuedTurns}
         turnActive={turnActive}
         phase={phase}

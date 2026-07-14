@@ -11,6 +11,7 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import type { WebSocket } from 'ws';
@@ -683,7 +684,19 @@ function toolStartFromItem(item: ThreadItem): { id: string; name: string; input:
   if (!type || !id) return null;
   switch (type) {
     case 'commandExecution':
-      return { id, name: 'Bash', input: { command: stringValue(item.command), cwd: stringValue(item.cwd) } };
+      return {
+        id,
+        name: 'Bash',
+        input: {
+          command: stringValue(item.command),
+          cwd: stringValue(item.cwd),
+          // Codex's app-server classifies shell work (read/list/search) as
+          // well as carrying the literal command. Preserve that structured
+          // data so the renderer can show an activity trace instead of only
+          // a generic "Bash" status.
+          actions: Array.isArray(item.commandActions) ? item.commandActions : [],
+        },
+      };
     case 'fileChange':
       return { id, name: 'File change', input: { changes: item.changes ?? [] } };
     case 'mcpToolCall':
@@ -991,7 +1004,7 @@ export async function getCodexSessionMessages(threadId: string, folder: string |
   if (folder && path.resolve(stringValue(thread.cwd)) !== path.resolve(folder)) {
     throw httpError(404, 'session not found for current folder');
   }
-  return codexThreadToBlocks(thread);
+  return codexThreadToBlocks(thread, codexRolloutToolsByTurn(stringValue(thread.path)));
 }
 
 export async function renameCodexSession(threadId: string, title: string, folder: string | null): Promise<CodexSessionRow> {
@@ -1196,14 +1209,115 @@ function codexThreadToRow(thread: unknown): CodexSessionRow | null {
   };
 }
 
-function codexThreadToBlocks(thread: JsonObject): CodexSessionBlock[] {
+type RolloutTool = Extract<CodexSessionBlock, { kind: 'tool' }> & { afterAssistantMessages: number };
+type RolloutToolsByTurn = Map<string, RolloutTool[]>;
+
+/**
+ * `thread/read` is authoritative for normal app-server sessions, but Codex
+ * currently omits desktop-hosted tool calls from that response. Those calls
+ * remain in Codex's local rollout file, which the thread metadata points to.
+ * Read only that known local session directory and add the missing calls back
+ * to their original turn.
+ */
+function codexRolloutToolsByTurn(threadPath: string): RolloutToolsByTurn {
+  const byTurn: RolloutToolsByTurn = new Map();
+  const sessionsDir = path.join(os.homedir(), '.codex', 'sessions');
+  if (!threadPath || !isPathInside(threadPath, sessionsDir)) return byTurn;
+
+  let lines: string[];
+  try {
+    lines = fs.readFileSync(threadPath, 'utf8').split(/\r?\n/);
+  } catch {
+    return byTurn;
+  }
+
+  const calls = new Map<string, RolloutTool>();
+  const assistantMessagesByTurn = new Map<string, number>();
+  for (const line of lines) {
+    if (!line) continue;
+    let entry: JsonObject;
+    try { entry = JSON.parse(line) as JsonObject; } catch { continue; }
+    if (stringValue(entry.type) !== 'response_item') continue;
+    const payload = objectValue(entry.payload);
+    const payloadType = stringValue(payload.type);
+    const turnId = stringValue(objectValue(payload.internal_chat_message_metadata_passthrough).turn_id);
+    const callId = stringValue(payload.call_id);
+    if (payloadType === 'message' && stringValue(payload.role) === 'assistant' && turnId) {
+      assistantMessagesByTurn.set(turnId, (assistantMessagesByTurn.get(turnId) ?? 0) + 1);
+      continue;
+    }
+    if ((payloadType === 'function_call' || payloadType === 'custom_tool_call') && callId && turnId) {
+      const tool: RolloutTool = {
+        kind: 'tool',
+        id: `rollout-${stringValue(payload.id) || callId}`,
+        name: rolloutToolName(stringValue(payload.name)),
+        input: rolloutToolInput(payloadType === 'function_call' ? payload.arguments : payload.input),
+        status: stringValue(payload.status) === 'failed' ? 'error' : 'done',
+        afterAssistantMessages: assistantMessagesByTurn.get(turnId) ?? 0,
+      };
+      calls.set(callId, tool);
+      const tools = byTurn.get(turnId) ?? [];
+      tools.push(tool);
+      byTurn.set(turnId, tools);
+      continue;
+    }
+    if ((payloadType === 'function_call_output' || payloadType === 'custom_tool_call_output') && callId) {
+      const tool = calls.get(callId);
+      if (tool) tool.result = stringifyCodexValue(payload.output);
+    }
+  }
+  return byTurn;
+}
+
+function rolloutToolInput(value: unknown): JsonObject {
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as JsonObject;
+    } catch {
+      // Some custom tools use plain-text input rather than JSON.
+    }
+  }
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as JsonObject
+    : { input: stringifyCodexValue(value) };
+}
+
+function isPathInside(candidate: string, parent: string): boolean {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return relative !== '' && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative);
+}
+
+function rolloutToolName(name: string): string {
+  if (name === 'exec' || name === 'exec_command') return 'Ran command';
+  if (name === 'apply_patch') return 'Changed files';
+  return name || 'Tool call';
+}
+
+function codexThreadToBlocks(thread: JsonObject, rolloutTools: RolloutToolsByTurn = new Map()): CodexSessionBlock[] {
   const blocks: CodexSessionBlock[] = [];
   let seq = 0;
   const id = () => `c${seq++}`;
   const turns = Array.isArray(thread.turns) ? thread.turns : [];
   for (const turn of turns) {
-    const items = objectValue(turn).items;
+    const turnObject = objectValue(turn);
+    const items = turnObject.items;
     if (!Array.isArray(items)) continue;
+    // Desktop-hosted threads omit tool calls altogether; normal app-server
+    // threads already contain them. Do not add the rollout copies when the
+    // authoritative response has tool items for this turn.
+    const hasThreadTools = items.some((raw) => !!toolStartFromItem(objectValue(raw)));
+    const tools = hasThreadTools ? [] : rolloutTools.get(stringValue(turnObject.id)) ?? [];
+    let assistantMessages = 0;
+    const appendToolsAfter = (count: number) => {
+      for (const tool of tools) {
+        if (tool.afterAssistantMessages === count) {
+          const { afterAssistantMessages: _position, ...block } = tool;
+          blocks.push(block);
+        }
+      }
+    };
+    appendToolsAfter(0);
     for (const raw of items) {
       const item = objectValue(raw);
       const type = stringValue(item.type);
@@ -1214,7 +1328,11 @@ function codexThreadToBlocks(thread: JsonObject): CodexSessionBlock[] {
       }
       if (type === 'agentMessage') {
         const text = stringValue(item.text);
-        if (text.trim()) blocks.push({ kind: 'assistant', id: id(), text });
+        if (text.trim()) {
+          blocks.push({ kind: 'assistant', id: id(), text });
+          assistantMessages++;
+          appendToolsAfter(assistantMessages);
+        }
         continue;
       }
       if (type === 'reasoning' || type === 'plan') {
@@ -1235,6 +1353,14 @@ function codexThreadToBlocks(thread: JsonObject): CodexSessionBlock[] {
           status: result?.isError ? 'error' : 'done',
           ...(result?.content ? { result: result.content } : {}),
         });
+      }
+    }
+    // A rollout can contain a final tool after the final assistant update.
+    // Keep it in this turn rather than moving it to the end of the thread.
+    for (const tool of tools) {
+      if (tool.afterAssistantMessages > assistantMessages) {
+        const { afterAssistantMessages: _position, ...block } = tool;
+        blocks.push(block);
       }
     }
   }

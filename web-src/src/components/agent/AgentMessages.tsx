@@ -12,10 +12,9 @@ export interface QueuedTurnPreview {
 }
 
 export function MessageList({
-  blocks, historyToolIds, queuedTurns, turnActive, phase, fatal, agentName, agentShortName, Icon, editableUserMessageIds, onPermission, onSteerQueued, onCopyUserMessage, onResendUserMessage, onRetry, onOpenArtifact,
+  blocks, queuedTurns, turnActive, phase, fatal, agentName, agentShortName, Icon, editableUserMessageIds, onPermission, onSteerQueued, onCopyUserMessage, onResendUserMessage, onRetry, onOpenArtifact,
 }: {
   blocks: Block[];
-  historyToolIds: Set<string>;
   queuedTurns: QueuedTurnPreview[];
   turnActive: boolean;
   phase: 'connecting' | 'live' | 'closed';
@@ -72,7 +71,6 @@ export function MessageList({
           )}
           <TurnBody
             blocks={turn.body}
-            historyToolIds={historyToolIds}
             editableUserMessageIds={editableUserMessageIds}
             onPermission={onPermission}
             onCopyUserMessage={onCopyUserMessage}
@@ -120,9 +118,8 @@ function groupTurns(blocks: Block[]): Turn[] {
   return turns;
 }
 
-function TurnBody({ blocks, historyToolIds, editableUserMessageIds, onPermission, onCopyUserMessage, onResendUserMessage, onOpenArtifact }: {
+function TurnBody({ blocks, editableUserMessageIds, onPermission, onCopyUserMessage, onResendUserMessage, onOpenArtifact }: {
   blocks: Block[];
-  historyToolIds: Set<string>;
   editableUserMessageIds: Set<string>;
   onPermission: (t: string, p: string, a: boolean) => void;
   onCopyUserMessage: (text: string) => void;
@@ -143,7 +140,7 @@ function TurnBody({ blocks, historyToolIds, editableUserMessageIds, onPermission
     else groups.push([block]);
   }
   return <>{groups.map((group) => Array.isArray(group)
-    ? <ToolActivityGroup key={`activity-${group[0].id}`} tools={group} initiallyOpen={group.some((tool) => historyToolIds.has(tool.id))} onPermission={onPermission} onOpenArtifact={onOpenArtifact} />
+    ? <ToolActivityGroup key={`activity-${group[0].id}`} tools={group} onPermission={onPermission} onOpenArtifact={onOpenArtifact} />
     : <BlockView
       key={group.id}
       block={group}
@@ -539,26 +536,22 @@ function localAssistantLinkPath(href: string | null): string | null {
   }
 }
 
-function ToolActivityGroup({ tools, initiallyOpen, onPermission, onOpenArtifact }: {
+function ToolActivityGroup({ tools, onPermission, onOpenArtifact }: {
   tools: ToolBlock[];
-  initiallyOpen: boolean;
   onPermission: (t: string, p: string, a: boolean) => void;
   onOpenArtifact: (path: string) => void;
 }) {
-  const [open, setOpen] = useState(initiallyOpen);
+  const [open, setOpen] = useState(false);
   const active = tools.find((tool) => tool.status === 'running');
   const failures = tools.filter((tool) => tool.status === 'error' || tool.status === 'denied').length;
-  const summary = active
-    ? `${activityLabel(active)}…`
-    : failures
-      ? `${failures} step${failures === 1 ? '' : 's'} need attention`
-      : `${tools.length} step${tools.length === 1 ? '' : 's'} completed`;
+  const summary = failures
+    ? `${failures} step${failures === 1 ? '' : 's'} need attention — ${activitySummary(tools, active)}`
+    : activitySummary(tools, active);
   return (
-    <section className={'agent-activity' + (active ? ' active' : '')}>
+    <section className={'agent-activity' + (active ? ' active' : '') + (failures ? ' attention' : '')}>
       <button type="button" className="agent-activity-head" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         <ChevronDownIcon className={'agent-activity-chev' + (open ? ' open' : '')} />
         {active && <span className="agent-dot" />}
-        <strong>{active ? 'Working' : failures ? 'Attention needed' : 'Completed'}</strong>
         <span>{summary}</span>
       </button>
       {open && <div className="agent-activity-body">{tools.map((tool) => <ToolCard key={tool.id} block={tool} onPermission={onPermission} />)}</div>}
@@ -589,7 +582,7 @@ const STATUS_LABEL: Record<ToolStatus, string> = {
 };
 
 function ToolCard({ block, onPermission }: { block: ToolBlock; onPermission: (t: string, p: string, a: boolean) => void }) {
-  const [open, setOpen] = useState(block.status === 'awaiting' || block.name === 'Bash');
+  const [open, setOpen] = useState(false);
   const diff = useMemo(() => buildDiff(block.name, block.input), [block.name, block.input]);
   const summary = toolSummary(block.name, block.input);
 
@@ -597,8 +590,8 @@ function ToolCard({ block, onPermission }: { block: ToolBlock; onPermission: (t:
     <div className={'agent-tool status-' + block.status}>
       <button type="button" className="agent-tool-head" onClick={() => setOpen((o) => !o)}>
         <ChevronDownIcon className="agent-tool-chev" />
-        <span className="agent-tool-name">{block.name}</span>
-        <span className="agent-tool-summary">{summary}</span>
+        <span className="agent-tool-name">{toolActivityTitle(block.name, block.input)}</span>
+        {summary && <span className="agent-tool-summary">{summary}</span>}
         <span className={'agent-tool-status s-' + block.status}>
           {block.status === 'running' && <span className="agent-dot" />}
           {STATUS_LABEL[block.status]}
@@ -667,6 +660,68 @@ function activityLabel(tool: ToolBlock): string {
   return tool.name;
 }
 
+type CommandAction = { type?: unknown; path?: unknown };
+
+function commandActions(input: Record<string, unknown>): CommandAction[] {
+  return Array.isArray(input.actions)
+    ? input.actions.filter((action): action is CommandAction => !!action && typeof action === 'object')
+    : [];
+}
+
+function toolActivityTitle(name: string, input: Record<string, unknown>): string {
+  if (name === 'Bash') {
+    const action = commandActions(input)[0];
+    if (action?.type === 'read' && typeof action.path === 'string') return `Read ${baseName(action.path)}`;
+    if (action?.type === 'listFiles') return 'Listed files';
+    if (action?.type === 'search') return 'Searched files';
+    return 'Ran command';
+  }
+  if (/read_file$/i.test(name)) {
+    const path = input.path ?? input.file_path;
+    return typeof path === 'string' ? `Read ${baseName(path)}` : 'Read file';
+  }
+  if (/list_directory$/i.test(name)) return 'Listed files';
+  if (/search/i.test(name)) return 'Searched files';
+  if (name === 'File change') return 'Changed files';
+  return name;
+}
+
+function activitySummary(tools: ToolBlock[], active?: ToolBlock): string {
+  if (active) return `${toolActivityTitle(active.name, active.input)}…`;
+
+  let reads = 0;
+  let lists = 0;
+  let searches = 0;
+  let commands = 0;
+  let changes = 0;
+  let toolsUsed = 0;
+  for (const tool of tools) {
+    if (tool.name === 'Bash') {
+      const actions = commandActions(tool.input);
+      if (!actions.length) { commands++; continue; }
+      for (const action of actions) {
+        if (action.type === 'read') reads++;
+        else if (action.type === 'listFiles') lists++;
+        else if (action.type === 'search') searches++;
+        else commands++;
+      }
+    } else if (/read_file$/i.test(tool.name)) reads++;
+    else if (/list_directory$/i.test(tool.name)) lists++;
+    else if (/search/i.test(tool.name)) searches++;
+    else if (tool.name === 'File change') changes++;
+    else toolsUsed++;
+  }
+  const labels = [
+    reads && `read ${reads} file${reads === 1 ? '' : 's'}`,
+    lists && `listed ${lists} folder${lists === 1 ? '' : 's'}`,
+    searches && `searched ${searches} time${searches === 1 ? '' : 's'}`,
+    commands && `ran ${commands} command${commands === 1 ? '' : 's'}`,
+    changes && `changed ${changes} file set${changes === 1 ? '' : 's'}`,
+    toolsUsed && `used ${toolsUsed} tool${toolsUsed === 1 ? '' : 's'}`,
+  ].filter(Boolean);
+  return labels.length ? labels.join(', ') : 'Worked';
+}
+
 type DiffRow = { type: 'ctx' | 'del' | 'add'; text: string };
 
 function DiffView({ diff }: { diff: { file: string; rows: DiffRow[] } }) {
@@ -725,7 +780,7 @@ function lineDiff(oldStr: string, newStr: string): DiffRow[] {
 function toolSummary(name: string, input: Record<string, unknown>): string {
   const f = input.file_path ?? input.path;
   if (typeof f === 'string') return baseName(f);
-  if (name === 'Bash' && typeof input.command === 'string') return clipInline(input.command, 60);
+  if (name === 'Bash' && typeof input.command === 'string') return clipInline(input.command, 100);
   if (typeof input.pattern === 'string') return input.pattern;
   if (typeof input.query === 'string') return input.query;
   if (typeof input.url === 'string') return input.url;

@@ -34,7 +34,8 @@ The accepted baseline includes:
 - per-agent chat tab selection and toggle behavior
 - keyboard navigation for `@` file mentions
 - smooth chat-side resize without drag-frequency global state updates
-- compact activity grouping for non-actionable tool calls
+- compact activity grouping for non-actionable tool calls, with inspectable
+  command/read/search labels rather than lifecycle-only summaries
 - visible permission cards outside collapsed activity
 - lightweight file/artifact open affordances
 - jump-to-latest behavior for transcript scrolling
