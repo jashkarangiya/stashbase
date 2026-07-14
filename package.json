@@ -47,6 +47,7 @@
     "build:desktop": "pnpm build && pnpm build:python-sidecar",
     "setup:python": "node scripts/setup-python.mjs",
     "test:python": "node scripts/test-python.mjs",
+    "test:release-gate": "node --test scripts/require-green-ci.test.mjs",
     "prestart": "pnpm build:web",
     "electron": "electron .",
     "package:mac": "node scripts/package-unsigned.mjs",

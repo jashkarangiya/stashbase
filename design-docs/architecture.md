@@ -320,7 +320,17 @@ Claude session titles come from the Claude SDK history metadata. Codex threads a
 
 ---
 
-# 9. Boundaries
+# 9. Release Pipeline
+
+Source validation and platform packaging are separate GitHub Actions workflows. `.github/workflows/ci.yml` validates pull requests and pushes to `main`. Publishing a GitHub Release, or manually dispatching a platform backfill, starts the existing macOS, Linux, and Windows packaging workflows.
+
+Each platform workflow calls `.github/workflows/release-ci-gate.yml` before its packaging job. The gate resolves the release tag to its exact commit, including annotated tags, and queries GitHub Actions for a successful `ci.yml` push run with the same commit SHA. It waits for an absent or active run for up to fifteen minutes and blocks packaging when the matching run fails, is cancelled, or never succeeds. The gate implementation is read from the default branch so a manual dispatch can validate an older tag; the platform job still checks out and packages the requested tag.
+
+Version selection, the version-bump commit, tag creation, and GitHub Release publication remain maintainer-controlled.
+
+---
+
+# 10. Boundaries
 
 This architecture document does not try to specify every implementation detail.
 

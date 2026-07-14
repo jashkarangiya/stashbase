@@ -150,12 +150,17 @@ Protocol, in order:
    major derived from `package.json` `version`). This is the ONE
    question in the flow; everything after runs unattended.
 3. **Commit the bump** as a standalone `chore: bump to <new-version>`.
-4. **Hand off**: tell the user to publish the GitHub Release for
+4. **Gate the tag on source CI.** Push `main`, wait for the `CI` workflow to
+   succeed for the exact version-bump commit, then create and push the matching
+   `v<version>` tag. Every platform release workflow independently verifies
+   that the tag commit has a successful `ci.yml` push run; a missing, failed,
+   cancelled, or timed-out run blocks packaging.
+5. **Hand off**: tell the user to publish the GitHub Release for
    `v<version>` (or manually run the `Release macOS` / `Release Linux` /
    `Release Windows` workflows with that tag to backfill assets). The macOS
    workflow requires `HOMEBREW_TAP_TOKEN` with push access to
    `liliu-z/homebrew-stashbase`.
-5. **Verify when Actions finish** (or when asked): `gh release view
+6. **Verify when Actions finish** (or when asked): `gh release view
    v<version>` — DMG/zip, deb, and Windows exe/zip assets attached, tap commit
    landed.
    Release notes are auto-generated and state: macOS arm64 (Apple Silicon)

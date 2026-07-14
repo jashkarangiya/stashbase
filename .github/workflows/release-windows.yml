@@ -14,7 +14,16 @@ permissions:
   contents: write
 
 jobs:
+  release-ci-gate:
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/release-ci-gate.yml
+    with:
+      tag: ${{ github.event_name == 'workflow_dispatch' && (startsWith(inputs.tag, 'v') && inputs.tag || format('v{0}', inputs.tag)) || github.event.release.tag_name }}
+
   windows-installer:
+    needs: release-ci-gate
     runs-on: windows-latest
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && (startsWith(inputs.tag, 'v') && inputs.tag || format('v{0}', inputs.tag)) || github.event.release.tag_name }}

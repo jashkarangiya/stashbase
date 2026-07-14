@@ -263,9 +263,11 @@ Packaging is release-only. GitHub Actions builds and uploads macOS, Linux, and W
 The release workflow:
 
 1. Commit the code and version bump.
-2. Push `main` and the `vX.Y.Z` tag.
-3. Publish the GitHub Release for that tag.
-4. Let the macOS, Linux, and Windows release workflows attach installers.
+2. Push `main` and wait for `CI` to succeed for the version-bump commit.
+3. Create and push the matching `vX.Y.Z` tag, then publish the GitHub Release for that tag.
+4. Let the macOS, Linux, and Windows release workflows verify that exact tag commit and attach installers.
+
+Release packaging fails closed when the tag commit has no successful `ci.yml` push run. If CI is still running, the release gate waits for it before packaging starts.
 
 Local macOS fallback:
 

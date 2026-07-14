@@ -38,6 +38,9 @@ jobs:
       - name: Test Python sidecars
         run: pnpm test:python
 
+      - name: Test release CI gate
+        run: pnpm test:release-gate
+
       - name: Typecheck server + mcp
         run: pnpm exec tsc --noEmit
 
