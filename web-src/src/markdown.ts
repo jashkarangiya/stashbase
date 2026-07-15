@@ -8,6 +8,7 @@
  * sandboxed and would not inherit the host page's CSS anyway.
  */
 import { Marked } from 'marked';
+import sanitizeHtml from 'sanitize-html';
 
 const documentMarkdown = new Marked({ gfm: true, breaks: false });
 const inlineMarkdown = new Marked({ gfm: true, breaks: true });
@@ -22,6 +23,7 @@ export function renderMarkdownInline(md: string): string {
 
 export function renderMarkdown(md: string): string {
   let html = documentMarkdown.parse(md ?? '', { async: false }) as string;
+  html = sanitizeHtml(html, MARKDOWN_SANITIZE_OPTIONS);
   const nextSuffix = new Map<string, number>();
   const usedSlugs = new Set<string>();
   html = html.replace(
@@ -29,11 +31,59 @@ export function renderMarkdown(md: string): string {
     (_match, level: string, attrs: string | undefined, inner: string) => {
       const text = stripInlineTags(inner).trim();
       const id = nextSlug(text, nextSuffix, usedSlugs);
-      return `<h${level} id="${id}"${attrs ?? ''}>${inner}</h${level}>`;
+      const safeAttrs = (attrs ?? '').replace(/\sid=(?:"[^"]*"|'[^']*'|[^\s>]+)/i, '');
+      return `<h${level} id="${id}"${safeAttrs}>${inner}</h${level}>`;
     },
   );
   return `<!doctype html><html><head><meta charset="utf-8"><style>${PREVIEW_CSS}</style></head><body>${html}</body></html>`;
 }
+
+const MARKDOWN_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
+  allowedTags: [
+    'a', 'abbr', 'address', 'article', 'aside', 'b', 'blockquote', 'br',
+    'caption', 'cite', 'code', 'col', 'colgroup', 'dd', 'del', 'details',
+    'div', 'dl', 'dt', 'em', 'figcaption', 'figure', 'h1', 'h2', 'h3',
+    'h4', 'h5', 'h6', 'hr', 'i', 'img', 'input', 'ins', 'kbd', 'li',
+    'main', 'mark', 'ol', 'p', 'pre', 'q', 's', 'samp', 'section', 'small',
+    'span', 'strong', 'sub', 'summary', 'sup', 'table', 'tbody', 'td',
+    'tfoot', 'th', 'thead', 'tr', 'u', 'ul', 'var',
+  ],
+  allowedAttributes: {
+    '*': ['id', 'title', 'dir', 'lang', 'aria-*'],
+    a: ['href'],
+    blockquote: ['cite'],
+    code: ['class'],
+    col: ['span'],
+    colgroup: ['span'],
+    del: ['cite', 'datetime'],
+    details: ['open'],
+    img: ['src', 'alt', 'width', 'height', 'loading'],
+    input: ['type', 'checked', 'disabled'],
+    ins: ['cite', 'datetime'],
+    li: ['class', 'value'],
+    ol: ['start', 'reversed', 'type'],
+    q: ['cite'],
+    td: ['colspan', 'rowspan', 'headers', 'align'],
+    th: ['colspan', 'rowspan', 'headers', 'scope', 'align'],
+    ul: ['class'],
+  },
+  allowedSchemes: ['http', 'https', 'mailto'],
+  allowedSchemesByTag: {
+    img: ['http', 'https'],
+  },
+  allowProtocolRelative: false,
+  disallowedTagsMode: 'discard',
+  transformTags: {
+    input: (_tagName, attributes) => ({
+      tagName: 'input',
+      attribs: {
+        type: 'checkbox',
+        disabled: '',
+        ...(Object.hasOwn(attributes, 'checked') ? { checked: '' } : {}),
+      },
+    }),
+  },
+};
 
 /** Kebab-case heading slug. Mirrors GitHub's approach: lowercase, drop
  *  punctuation, collapse folders to dashes. Cross-file anchor links use

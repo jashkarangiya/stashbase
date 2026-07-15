@@ -8,7 +8,7 @@ The renderer recognizes `.md` and `.markdown` files as the `md` viewer format. T
 
 The implementation is split across these renderer modules:
 
-- [`web-src/src/markdown.ts`](../web-src/src/markdown.ts) owns Marked configuration, Markdown-to-HTML conversion, heading IDs, and the preview document's inline CSS.
+- [`web-src/src/markdown.ts`](../web-src/src/markdown.ts) owns Marked configuration, Markdown-to-HTML conversion, the document allowlist, heading IDs, and the preview document's inline CSS.
 - [`web-src/src/components/MarkdownPreview.tsx`](../web-src/src/components/MarkdownPreview.tsx) owns iframe installation and preview-specific DOM integration.
 - [`web-src/src/lib/previewIframe.ts`](../web-src/src/lib/previewIframe.ts) injects the local asset base and interprets link and image clicks.
 - [`web-src/src/components/findIframe.ts`](../web-src/src/components/findIframe.ts) implements in-preview find with the CSS Custom Highlight API.
@@ -38,6 +38,7 @@ The read-only render path is synchronous until the browser installs the generate
 folder-relative name + source Markdown
   -> renderMarkdown(content)
        -> documentMarkdown.parse(content)
+       -> sanitize parsed body fragment
        -> heading-ID post-pass
        -> complete HTML document + inline preview CSS
   -> injectAssetBase(document, assetBaseUrl(name))
@@ -75,15 +76,15 @@ The current preview renders Marked's standard block and inline constructs:
 - Inline and reference links, autolinks, and email links.
 - Images.
 - GFM tables and alignment attributes.
-- Escapes, entities, and raw HTML.
+- Escapes, entities, and allowlisted raw HTML.
 
 Fenced-code language labels are retained as `language-*` classes. No syntax-highlighting pass runs over those classes.
 
-Marked passes raw HTML through to the generated body. There is no sanitizer in the Markdown conversion path. YAML frontmatter has no preview-specific handling, and the renderer has no implementations for footnotes, wikilinks, embeds, callouts, math, Mermaid, definition lists, emoji shortcodes, MDX, or explicit heading-attribute syntax.
+Marked passes raw HTML into the parsed body, then `sanitize-html` applies a document-oriented allowlist before the preview document is assembled. It preserves ordinary structural and presentational elements, including tables, links, images, `details`, `summary`, `kbd`, `mark`, `sub`, and `sup`. It removes scripts, styles, frames and embedded content, forms, metadata, event-handler and inline-style attributes, frame targets, and non-HTTP(S) image protocols. Relative URLs remain valid; links additionally allow `mailto:`. Task-list inputs are normalized to disabled checkboxes. YAML frontmatter has no preview-specific handling, and the renderer has no implementations for footnotes, wikilinks, embeds, callouts, math, Mermaid, definition lists, emoji shortcodes, MDX, or explicit heading-attribute syntax.
 
 ## 5. Heading IDs and anchors
 
-After Marked returns HTML, `renderMarkdown()` runs a regular-expression pass over every `<h1>` through `<h6>`. It strips inline HTML tags from the heading body, decodes a small fixed set of HTML entities, and builds a slug from the resulting text.
+After Marked returns HTML and the body fragment is sanitized, `renderMarkdown()` runs a regular-expression pass over every `<h1>` through `<h6>`. It strips inline HTML tags from the heading body, decodes a small fixed set of HTML entities, and builds a slug from the resulting text. Any author-supplied heading `id` is removed before the generated ID is installed.
 
 Slug generation:
 
@@ -141,7 +142,7 @@ Before the HTML is assigned to `srcDoc`, `injectAssetBase()` adds a `<base>` ele
 /asset/__window/<window-id>/<encoded-note-directory>/
 ```
 
-The window ID is embedded in the path rather than the query string so it propagates to relative image, stylesheet, font, and media URLs. The server strips the reserved `__window/<id>/` prefix before resolving the remaining folder-relative path.
+The window ID is embedded in the path rather than the query string so it propagates to relative image and link URLs retained by the sanitizer. The server strips the reserved `__window/<id>/` prefix before resolving the remaining folder-relative path.
 
 `/asset/*` resolves the target within the current folder and streams it with a known MIME type where available. The route supports images, SVG, CSS, JavaScript, JSON, fonts, PDF, audio, and video. Video formats that require range requests are sent with `sendFile()`; other assets use a read stream. Markdown itself is not fetched through `/asset/*` for rendering—the preview uses the source text already returned by `/api/files/*`.
 
@@ -155,7 +156,7 @@ Markdown preview uses:
 
 `allow-same-origin` lets the parent renderer access `contentDocument` and `contentWindow`. The sandbox omits `allow-scripts`, so scripts inside the Markdown document do not execute. The same-origin access is what enables direct click interception, keyboard handling, find ranges, search-result highlights, and file-drop forwarding.
 
-Raw HTML is not sanitized before entering `srcDoc`. The sandbox is therefore the active script-execution boundary, while raw HTML and CSS remain confined to the iframe's document. The generated document has no Content Security Policy.
+Raw HTML is sanitized before entering `srcDoc`. Sanitization removes executable markup, unsafe URL protocols, embedded content, and document-level navigation vectors; the scriptless iframe remains an independent execution boundary. The generated document has no Content Security Policy. The trusted preview stylesheet and asset `<base>` are added outside the sanitized fragment.
 
 Messages that can cause navigation, lightbox display, or external opening are accepted only when `event.source` is the app window or the current `#previewFrame` window. Message payloads are type-checked again in `App.tsx`. Image lightbox messages accept only HTTP, HTTPS, data, and blob URLs. External-open messages accept only HTTP and HTTPS URLs.
 
