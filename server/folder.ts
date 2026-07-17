@@ -107,6 +107,14 @@ export function memberFolderRoots(): string[] {
   return getRecentFolders().map((r) => toPosixAbs(r.path));
 }
 
+/** Return the stored spelling of an exact library-member root. Windows callers
+ * may supply drive, separator, or component case variants; downstream path-
+ * keyed stores must continue from the one spelling kept in membership. */
+export function exactMemberFolderRoot(abs: string): string | null {
+  const target = toPosixAbs(abs);
+  return memberFolderRoots().find((root) => sameFilesystemPath(root, target)) ?? null;
+}
+
 /** The member folder (longest-prefix) that contains `abs`, or null when
  *  the path isn't inside any member folder. The longest-prefix rule keeps
  *  nested members (`<root>/foo` and `<root>/foo/bar` both opened) correct. */
@@ -114,7 +122,7 @@ export function memberRootForAbs(abs: string): string | null {
   const target = toPosixAbs(abs);
   let best: string | null = null;
   for (const root of memberFolderRoots()) {
-    if (target === root || target.startsWith(`${root}/`)) {
+    if (isAtOrUnderRoot(target, root)) {
       if (!best || root.length > best.length) best = root;
     }
   }
@@ -168,7 +176,7 @@ export function getFolderHome(): string {
 export function isInsideFolderHome(absPath: string): boolean {
   const root = getFolderHome();
   const target = path.resolve(absPath);
-  if (target === root) return false;
+  if (sameFilesystemPath(target, root)) return false;
   const rel = path.relative(root, target);
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
@@ -222,6 +230,25 @@ export function toPosixAbs(p: string): string {
   return path.resolve(p).split(path.sep).join('/');
 }
 
+/** Filesystem path equality for canonical paths and external path references.
+ * Windows callers may use native separators or case variants, so preserve the
+ * original spelling for I/O and display while comparing a folded identity key
+ * for membership, deduplication, and subtree checks. */
+export function sameFilesystemPath(a: string, b: string): boolean {
+  return pathComparisonKey(a) === pathComparisonKey(b);
+}
+
+export function isFilesystemPathAtOrUnder(target: string, root: string): boolean {
+  return sameFilesystemPath(target, root)
+    || pathComparisonKey(target).startsWith(pathComparisonKey(rootChildPrefix(root)));
+}
+
+function pathComparisonKey(value: string): string {
+  return process.platform === 'win32'
+    ? value.replace(/\\/g, '/').toLowerCase()
+    : value;
+}
+
 /** Human-facing label for the open folder: relative display text when under
  *  the default home, else the folder basename. null if no folder is open. */
 export function getCurrentFolderLabel(): string | null {
@@ -229,7 +256,7 @@ export function getCurrentFolderLabel(): string | null {
   if (!cs) return null;
   const root = getFolderHome();
   const rel = path.relative(root, cs);
-  if (cs !== root && rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+  if (!sameFilesystemPath(cs, root) && rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)) {
     return rel.split(path.sep).join('/');
   }
   return path.basename(cs);
@@ -246,6 +273,34 @@ export function toSourcePath(folderRel: string): string {
   const cs = getCurrentFolder();
   if (!cs) throw new Error('no folder open');
   return joinUnderRoot(toPosixAbs(cs), folderRel);
+}
+
+/** Join a folder-relative source identity without creating `//child` at `/`
+ * or `C://child` at a drive/share root. */
+export function sourcePathInFolder(folderRoot: string, folderRel: string): string {
+  return joinUnderRoot(toPosixAbs(folderRoot), folderRel);
+}
+
+/** Restore the on-disk component spelling for Windows path identities without
+ * changing the source/root relationship. Missing suffixes keep caller spelling
+ * so create/move targets remain valid. */
+export function canonicalFolderRelativePath(folderRoot: string, folderRel: string): string {
+  const segments = (folderRel ?? '').split(/[\\/]+/).filter(Boolean);
+  if (process.platform !== 'win32' || segments.length === 0) return segments.join('/');
+  const canonical: string[] = [];
+  let cursor = folderRoot;
+  for (const segment of segments) {
+    let spelling = segment;
+    try {
+      const found = fs.readdirSync(cursor).find((entry) => entry.toLowerCase() === segment.toLowerCase());
+      if (found) spelling = found;
+    } catch {
+      // Once a create target reaches a missing parent, retain its requested suffix.
+    }
+    canonical.push(spelling);
+    cursor = path.join(cursor, spelling);
+  }
+  return canonical.join('/');
 }
 
 /** Convert an absolute path (a daemon reply) back to a path relative to
@@ -266,14 +321,22 @@ export function relInFolder(abs: string, folderRoot: string): string | null {
 
 function joinUnderRoot(root: string, rel: string): string {
   const r = (rel ?? '').split(path.sep).join('/').replace(/^\/+/, '');
-  return r ? `${root}/${r}` : root;
+  return r ? `${rootChildPrefix(root)}${r}` : root;
 }
 
 function relUnderRoot(abs: string, root: string): string | null {
-  if (abs === root) return '';
-  const prefix = `${root}/`;
-  if (!abs.startsWith(prefix)) return null;
+  if (sameFilesystemPath(abs, root)) return '';
+  const prefix = rootChildPrefix(root);
+  if (!pathComparisonKey(abs).startsWith(pathComparisonKey(prefix))) return null;
   return abs.slice(prefix.length);
+}
+
+function rootChildPrefix(root: string): string {
+  return root.endsWith('/') ? root : `${root}/`;
+}
+
+function isAtOrUnderRoot(target: string, root: string): boolean {
+  return isFilesystemPathAtOrUnder(target, root);
 }
 
 /** Idempotent startup hook:
@@ -350,7 +413,7 @@ export function seedBuiltinFolder(): void {
   // (1) Already on disk → ensure it's in recents, regardless of the latch.
   if (fs.existsSync(dest)) {
     try {
-      const inRecents = (readConfig().recentFolders ?? []).some((r) => r.path === dest);
+      const inRecents = (readConfig().recentFolders ?? []).some((r) => sameFilesystemPath(r.path, dest));
       if (!inRecents) pushRecent(dest);
     } catch (err) {
       log.warn(`failed to surface built-in folder: ${errorMessage(err)}`);
@@ -442,7 +505,7 @@ export function setCurrentFolder(absPath: string, opts?: { create?: boolean; exc
 
   const windowId = currentWindowId();
   const prev = currentFolders.get(windowId) ?? null;
-  const changed = prev !== normalized;
+  const changed = prev == null || !sameFilesystemPath(prev, normalized);
   currentFolders.set(windowId, normalized);
   pushRecent(normalized);
   return changed;
@@ -463,13 +526,13 @@ export function clearCurrentFolder(windowId = currentWindowId()): void {
 
 export function clearFolderPath(absPath: string): void {
   for (const [windowId, value] of [...currentFolders.entries()]) {
-    if (value === absPath) clearCurrentFolder(windowId);
+    if (sameFilesystemPath(value, absPath)) clearCurrentFolder(windowId);
   }
 }
 
 export function replaceCurrentFolderPath(oldPath: string, newPath: string): void {
   for (const [windowId, value] of currentFolders.entries()) {
-    if (value === oldPath) {
+    if (sameFilesystemPath(value, oldPath)) {
       currentFolders.set(windowId, newPath);
       notifyFolderSwitch(newPath, windowId);
     }
@@ -477,7 +540,7 @@ export function replaceCurrentFolderPath(oldPath: string, newPath: string): void
   const cfg = readConfig();
   if (cfg.recentFolders?.length) {
     cfg.recentFolders = cfg.recentFolders.map((r) => (
-      r.path === oldPath ? { ...r, path: newPath } : r
+      sameFilesystemPath(r.path, oldPath) ? { ...r, path: newPath } : r
     ));
     writeConfig(cfg);
   }
@@ -516,9 +579,9 @@ function pushRecent(absPath: string): void {
   // entries whose target folder no longer exists — keeps the persisted
   // recents from accumulating dead tmp dirs / deleted folders over
   // time. Opportunistic cleanup on every write.
-  const existing = list.find((v) => v.path === absPath);
+  const existing = list.find((v) => sameFilesystemPath(v.path, absPath));
   const filtered = list.filter((v) => {
-    if (v.path === absPath) return false;
+    if (sameFilesystemPath(v.path, absPath)) return false;
     try { return fs.statSync(v.path).isDirectory(); } catch { return false; }
   });
   filtered.unshift({ ...(existing ?? {}), path: absPath, openedAt: new Date().toISOString() });
@@ -540,7 +603,7 @@ export function removeRecent(absPath: string): void {
   const target = toPosixAbs(absPath);
   const cfg = readConfig();
   const list = cfg.recentFolders ?? [];
-  const filtered = list.filter((v) => toPosixAbs(v.path) !== target);
+  const filtered = list.filter((v) => !sameFilesystemPath(toPosixAbs(v.path), target));
   if (filtered.length === list.length) return;
   cfg.recentFolders = filtered;
   writeConfig(cfg);

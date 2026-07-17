@@ -348,9 +348,9 @@ export function clearConversionStatus(pathKey: string): void {
 export function clearConversionStatusUnder(pathKey: string): void {
   const conn = getStateDb();
   if (!conn) return;
-  const name = pathKey.replace(/\/+$/, '');
+  const name = pathKey === '/' ? '/' : pathKey.replace(/\/+$/, '');
   if (!name) return;
-  const prefix = name + '/';
+  const prefix = name === '/' ? '/' : name + '/';
   conn.prepare(
     'DELETE FROM conversions WHERE path = @name OR substr(path, 1, @plen) = @prefix',
   ).run({ name, prefix, plen: prefix.length });

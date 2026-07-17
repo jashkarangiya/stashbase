@@ -1,7 +1,9 @@
 /**
  * File preparation status — split by durability:
  *
- *   - **in-flight: process memory only.** A conversion's subprocess is
+ *   - **queued/running: process memory only.** `conversion-scheduler.ts`
+ *     owns queued tasks; this module tracks extractor progress after a task
+ *     starts. A conversion's subprocess is
  *     our child; if this process dies, the conversion dies with it, so
  *     persisting "in-flight" only ever produced corpses that needed a
  *     reclaim pass on every reconcile. Memory state can't outlive the
@@ -31,6 +33,7 @@ import {
 export type { ConversionStatus, ConversionStatusEntry };
 export type ConversionStatusMap = Record<string, ConversionStatusEntry>;
 export type ConversionProgress =
+  | { phase: 'queued'; lane: 'light' | 'heavy'; tasksAhead: number }
   | { phase: 'extracting'; currentPage?: number }
   | { phase: 'indexing' };
 
@@ -55,20 +58,6 @@ export function markInFlight(sourcePath: string): void {
   progress.set(sourcePath, { phase: 'extracting' });
 }
 
-export function isInFlight(sourcePath: string): boolean {
-  return inFlight.has(sourcePath);
-}
-
-export function hasInFlightUnder(sourcePathPrefix: string): boolean {
-  const name = sourcePathPrefix.replace(/\/+$/, '');
-  if (!name) return false;
-  const prefix = `${name}/`;
-  for (const path of inFlight) {
-    if (path === name || path.startsWith(prefix)) return true;
-  }
-  return false;
-}
-
 /** Success: drop the in-flight marker and clear any stale failure row
  *  from a previous attempt. */
 export function markDone(sourcePath: string): void {
@@ -90,9 +79,9 @@ export function clearRecord(sourcePath: string): void {
 }
 
 export function clearRecordsUnder(sourcePathPrefix: string): void {
-  const name = sourcePathPrefix.replace(/\/+$/, '');
+  const name = sourcePathPrefix === '/' ? '/' : sourcePathPrefix.replace(/\/+$/, '');
   if (!name) return;
-  const prefix = `${name}/`;
+  const prefix = name === '/' ? '/' : `${name}/`;
   for (const path of [...inFlight]) {
     if (path === name || path.startsWith(prefix)) {
       inFlight.delete(path);
@@ -104,11 +93,6 @@ export function clearRecordsUnder(sourcePathPrefix: string): void {
 
 export function listFailed(): Array<{ path: string; entry: ConversionStatusEntry }> {
   return listConversionStatus('failed');
-}
-
-/** sourcePaths with a conversion running in this process right now. */
-export function listInFlight(): string[] {
-  return [...inFlight];
 }
 
 export function setProgress(sourcePath: string, next: ConversionProgress): void {

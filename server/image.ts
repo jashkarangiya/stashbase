@@ -109,6 +109,8 @@ function convertImage(
  *  Unlike PDFs there's no image bundle — OCR yields only the text note. */
 const IMAGE_SPEC: ConversionSpec = {
   kind: 'ocr_extract',
+  lane: 'heavy',
+  cost: 10,
   matches: isImageFile,
   derivedNote: derivedNotePathForImage,
   derivedReady: derivedImageIsComplete,
@@ -116,11 +118,13 @@ const IMAGE_SPEC: ConversionSpec = {
   cleanupDerived: cleanupDerivedImage,
 };
 
-/** Fire-and-forget OCR used by the upload route. Skips if the note
- *  already exists; persists in-flight → done/failed to `state.db`
- *  (shared with PDFs) so the UI can show status. */
-export function maybeConvertImage(imageAbsPath: string): void {
-  maybeConvert(imageAbsPath, IMAGE_SPEC);
+/** Fire-and-forget OCR entry. Queued/running state is scheduler memory;
+ *  durable failures are shared with PDF/DOCX through state.db. */
+export function maybeConvertImage(
+  imageAbsPath: string,
+  opts: { urgency?: 'interactive' } = {},
+): void {
+  maybeConvert(imageAbsPath, IMAGE_SPEC, { urgency: opts.urgency ?? 'background' });
 }
 
 /** Reconcile hook: OCR any untracked image under the folder (added via git

@@ -48,6 +48,7 @@
     "setup:python": "node scripts/setup-python.mjs",
     "test:python": "node scripts/test-python.mjs",
     "test:renderer": "node --import tsx --test web-src/src/markdown/__tests__/*.test.ts",
+    "test:conversion-scheduler": "node --import tsx --test server/conversion-scheduler.test.ts server/conversion.test.ts server/extractor-process.test.ts",
     "test:mcp": "node --import tsx --test server/__tests__/mcp-http-settings.test.ts server/__tests__/mcp-http-service.test.ts server/__tests__/mcp-http-transport.test.ts server/__tests__/shutdown-cleanup.test.ts",
     "test:release-gate": "node --test scripts/require-green-ci.test.mjs",
     "prestart": "pnpm build:web",

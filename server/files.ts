@@ -146,6 +146,22 @@ export function fileVersion(relPath: string): string | null {
   }
 }
 
+/** Cheap cache/reload identity for binary viewers. Text write conflicts use
+ * the content hash above; binary previews only need a token that changes when
+ * the filesystem object or its bytes are replaced. */
+export function fileStatVersion(relPath: string): string | null {
+  let target: string;
+  try { target = resolveSafe(relPath); } catch { return null; }
+  try {
+    assertRealPathInsideFolder(target);
+    const st = fs.statSync(target, { bigint: true });
+    if (!st.isFile()) return null;
+    return `stat:${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`;
+  } catch {
+    return null;
+  }
+}
+
 /** Write raw bytes (e.g. images / css / fonts that arrive alongside
  *  an HTML bundle on drag-import). Same atomic write-then-rename as
  *  saveText so partial writes don't leave a half-baked file in the

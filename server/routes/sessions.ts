@@ -28,7 +28,7 @@ import {
   deleteSession,
   type SDKSessionInfo,
 } from '@anthropic-ai/claude-agent-sdk';
-import { getCurrentFolder } from '../folder.ts';
+import { getCurrentFolder, sameFilesystemPath } from '../folder.ts';
 import { sendError } from '../http.ts';
 
 /** Trimmed session row sent to the client. */
@@ -64,7 +64,7 @@ export function mount(app: express.Express): void {
       const cur = folder ? path.resolve(folder) : null;
       const rows = sessions
         .map(toRow)
-        .filter((r) => !cur || (r.cwd != null && path.resolve(r.cwd) === cur))
+        .filter((r) => !cur || (r.cwd != null && sameFilesystemPath(path.resolve(r.cwd), cur)))
         .sort((a, b) => b.lastModified - a.lastModified);
       res.json(rows);
     } catch (err: unknown) {
@@ -132,7 +132,8 @@ async function sessionBelongsToCurrentFolder(id: string): Promise<boolean> {
 }
 
 export function sessionInfoMatchesFolder(info: { cwd?: unknown } | null | undefined, folder: string): boolean {
-  return !!(info && typeof info.cwd === 'string' && path.resolve(info.cwd) === path.resolve(folder));
+  return !!(info && typeof info.cwd === 'string'
+    && sameFilesystemPath(path.resolve(info.cwd), path.resolve(folder)));
 }
 
 // ----- transcript → panel blocks ----------------------------------------

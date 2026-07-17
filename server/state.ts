@@ -14,7 +14,7 @@
  */
 import { MfsIndexer } from './indexer.mfs.ts';
 import type { Indexer, EmbedderRuntimeConfig } from './indexer.ts';
-import { getCurrentFolder, getRecentFolders, onClose, onSwitch, runWithWindowId, toPosixAbs } from './folder.ts';
+import { getCurrentFolder, getRecentFolders, onClose, onSwitch, runWithWindowId, sameFilesystemPath, toPosixAbs } from './folder.ts';
 import { getApiKey } from './app-config.ts';
 import { syncIndex, type SyncResult } from './sync.ts';
 import { getDaemon } from './mfs-daemon.ts';
@@ -289,7 +289,8 @@ export function scheduleIndexerSync(folderRoot: string, reason: string, windowId
     .catch(() => undefined)
     .then(async () => {
       await runWithWindowId(windowId, async () => {
-        if (getCurrentFolder() !== folderRoot) return;
+        const current = getCurrentFolder();
+        if (!current || !sameFilesystemPath(current, folderRoot)) return;
         try {
           // Full content-hash diff — the only reconcile tier. Hashing
           // is milliseconds for a personal library; embedding still only
@@ -299,7 +300,12 @@ export function scheduleIndexerSync(folderRoot: string, reason: string, windowId
           // a manual sync.
           await syncFolderNow(folderRoot, {
             reason,
-            shouldContinue: () => getCurrentFolder() === folderRoot && seq === indexerSwitchSeq.get(windowId),
+            shouldContinue: () => {
+              const active = getCurrentFolder();
+              return !!active
+                && sameFilesystemPath(active, folderRoot)
+                && seq === indexerSwitchSeq.get(windowId);
+            },
           });
         } catch (err: unknown) {
           log.warn(`${reason}: index sync failed for ${folderRoot}: ${errorMessage(err)}`);

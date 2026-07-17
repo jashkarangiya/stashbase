@@ -1,4 +1,4 @@
-import type { ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import os from 'node:os';
 
 const KILL_GRACE_MS = 1500;
@@ -36,10 +36,38 @@ export function lowerExtractorPriority(proc: ChildProcess): void {
 }
 
 export function terminateExtractorTree(proc: ChildProcess): void {
+  if (process.platform === 'win32') {
+    terminateWindowsTree(proc);
+    return;
+  }
   sendSignal(proc, 'SIGTERM');
   setTimeout(() => {
     if (proc.exitCode == null && proc.signalCode == null) sendSignal(proc, 'SIGKILL');
   }, KILL_GRACE_MS).unref();
+}
+
+/** Node cannot address Windows process groups with a negative PID. `taskkill`
+ * is the OS-provided tree primitive; `/T /F` makes cancellation a real tree
+ * kill before the scheduler observes the extractor's close event. */
+function terminateWindowsTree(proc: ChildProcess): void {
+  if (!proc.pid) return;
+  const fallback = () => {
+    if (proc.exitCode == null && proc.signalCode == null) {
+      try { proc.kill(); } catch { /* already gone */ }
+    }
+  };
+  try {
+    const killer = spawn('taskkill.exe', ['/PID', String(proc.pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    killer.once('error', fallback);
+    killer.once('close', (code) => {
+      if (code !== 0) fallback();
+    });
+  } catch {
+    fallback();
+  }
 }
 
 function sendSignal(proc: ChildProcess, signal: NodeJS.Signals): void {

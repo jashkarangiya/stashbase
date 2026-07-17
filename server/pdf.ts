@@ -16,10 +16,15 @@ import { spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { isDerivedNoteName, matchDerivedNote, NOTE_EXTS } from './format.ts';
-import { getCurrentFolder, relInFolder, toPosixAbs } from './folder.ts';
 import { derivedNoteFor, derivedBundleFor, derivedBatchesFor, derivedDir } from './derived-store.ts';
 import { extractorSpawn } from './python-host.ts';
-import { discoverNewSources, indexFreshDerived, maybeConvert, TransientConversionError, type ConversionSpec } from './conversion.ts';
+import {
+  discoverNewSources,
+  indexFreshDerived,
+  maybeConvert,
+  TransientConversionError,
+  type ConversionSpec,
+} from './conversion.ts';
 import { lowerExtractorPriority, spawnOptionsForExtractor, terminateExtractorTree } from './extractor-process.ts';
 import type { ConversionProgress } from './conversion-status.ts';
 import { logger } from './log.ts';
@@ -27,22 +32,10 @@ import { logger } from './log.ts';
 const log = logger('pdf');
 const STDERR_TAIL_BYTES = 64 * 1024;
 const PDF_COMPLETE_MARKER = '<!-- stashbase-pdf-conversion: complete -->';
-const PDF_QUEUE_DEBOUNCE_MS = 100;
 const PDF_TEXT_PROBE_TIMEOUT_MS = 5000;
-const PDF_TEXT_PROBE_CONCURRENCY = 4;
-
-interface QueuedPdf {
-  absPath: string;
-  seq: number;
-  priority?: number;
-  priorityPromise?: Promise<number>;
-}
-
-const queuedPdfs = new Map<string, QueuedPdf>();
-const cancelledPdfRoots = new Set<string>();
-let pdfQueueTimer: ReturnType<typeof setTimeout> | null = null;
-let pdfQueueRunning = false;
-let pdfQueueSeq = 0;
+const PDF_TEXT_PROBE_REAP_TIMEOUT_MS = 2000;
+const PDF_COST_TEXT_LAYER = 0;
+const PDF_COST_OCR_OR_UNKNOWN = 10;
 
 export interface ConvertResult {
   /** Absolute AppData path of the written derived Markdown. */
@@ -95,167 +88,69 @@ function derivedPdfIsComplete(_pdfAbsPath: string, notePath: string): boolean {
   }
 }
 
-function pdfQueueKey(pdfAbsPath: string): string {
-  return toPosixAbs(path.resolve(pdfAbsPath));
-}
-
-function normalizeRoot(folderAbs: string): string {
-  return toPosixAbs(folderAbs).replace(/\/+$/, '');
-}
-
-function isUnderRoot(absPath: string, root: string): boolean {
-  const abs = toPosixAbs(absPath);
-  return abs === root || abs.startsWith(`${root}/`);
-}
-
-function isCancelledPdfPath(absPath: string): boolean {
-  for (const root of cancelledPdfRoots) {
-    if (isUnderRoot(absPath, root)) return true;
-  }
-  return false;
-}
-
-function allowQueuedPdfsUnder(folderAbs: string): void {
-  const root = normalizeRoot(folderAbs);
-  for (const cancelled of [...cancelledPdfRoots]) {
-    if (cancelled === root || cancelled.startsWith(`${root}/`) || root.startsWith(`${cancelled}/`)) {
-      cancelledPdfRoots.delete(cancelled);
-    }
-  }
-}
-
-function schedulePdfQueueDrain(): void {
-  if (pdfQueueTimer || pdfQueueRunning) return;
-  pdfQueueTimer = setTimeout(() => {
-    pdfQueueTimer = null;
-    void drainPdfQueue();
-  }, PDF_QUEUE_DEBOUNCE_MS);
-}
-
-async function drainPdfQueue(): Promise<void> {
-  if (pdfQueueRunning) return;
-  pdfQueueRunning = true;
-  try {
-    while (queuedPdfs.size > 0) {
-      const items = [...queuedPdfs.values()];
-      await resolvePdfPriorities(items);
-      items.sort((a, b) =>
-        pdfCurrentFolderPriority(a.absPath) - pdfCurrentFolderPriority(b.absPath)
-        || (a.priority ?? 0) - (b.priority ?? 0)
-        || a.seq - b.seq,
-      );
-      const next = items.find((item) => queuedPdfs.has(pdfQueueKey(item.absPath)));
-      if (!next) break;
-      queuedPdfs.delete(pdfQueueKey(next.absPath));
-      if (isCancelledPdfPath(next.absPath)) continue;
-      const run = maybeConvert(next.absPath, PDF_SPEC);
-      if (run) await run;
-    }
-  } finally {
-    pdfQueueRunning = false;
-    if (queuedPdfs.size > 0) schedulePdfQueueDrain();
-  }
-}
-
-export function cancelQueuedPdfsUnder(folderAbs: string): string[] {
-  const root = normalizeRoot(folderAbs);
-  if (root) cancelledPdfRoots.add(root);
-  const removed: string[] = [];
-  for (const item of queuedPdfs.values()) {
-    const abs = toPosixAbs(item.absPath);
-    if (!isUnderRoot(abs, root)) continue;
-    queuedPdfs.delete(pdfQueueKey(abs));
-    removed.push(abs);
-  }
-  return removed;
-}
-
-function pdfCurrentFolderPriority(pdfAbsPath: string): number {
-  const current = getCurrentFolder();
-  if (!current) return 1;
-  return relInFolder(pdfAbsPath, current) == null ? 1 : 0;
-}
-
-async function resolvePdfPriorities(items: QueuedPdf[]): Promise<void> {
-  let cursor = 0;
-  const workers = Array.from(
-    { length: Math.min(PDF_TEXT_PROBE_CONCURRENCY, items.length) },
-    async () => {
-      while (cursor < items.length) {
-        const item = items[cursor++];
-        if (item) await resolvePdfPriority(item);
-      }
-    },
-  );
-  await Promise.all(workers);
-}
-
-async function resolvePdfPriority(item: QueuedPdf): Promise<number> {
-  if (item.priority != null) return item.priority;
-  item.priorityPromise ??= pdfConversionPriority(item.absPath)
-    .then((priority) => {
-      item.priority = priority;
-      return priority;
-    });
-  return item.priorityPromise;
-}
-
-async function pdfConversionPriority(pdfAbsPath: string): Promise<number> {
-  const hasTextLayer = await probePdfTextLayer(pdfAbsPath);
+async function pdfConversionPriority(pdfAbsPath: string, signal: AbortSignal): Promise<number> {
+  const hasTextLayer = await probePdfTextLayer(pdfAbsPath, signal);
   // Text-layer PDFs are cheap and should run first. Scanned PDFs fall behind
   // because their OCR path is usually the slowest conversion work.
-  return hasTextLayer ? 0 : 10;
+  return hasTextLayer ? PDF_COST_TEXT_LAYER : PDF_COST_OCR_OR_UNKNOWN;
 }
 
-function probePdfTextLayer(pdfAbsPath: string): Promise<boolean> {
+function probePdfTextLayer(pdfAbsPath: string, signal: AbortSignal): Promise<boolean> {
   return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(false);
+      return;
+    }
     let cmd: string;
     let args: string[];
     try {
       ({ cmd, args } = extractorSpawn('pdf', 'pdf_extract.py', ['--probe-text-layer', pdfAbsPath]));
     } catch (err: unknown) {
       log.warn(`pdf text probe skipped for ${path.basename(pdfAbsPath)}: ${err instanceof Error ? err.message : String(err)}`);
-      resolve(true);
+      resolve(false);
       return;
     }
     const proc = spawn(cmd, args, spawnOptionsForExtractor());
     lowerExtractorPriority(proc);
     let settled = false;
-    let timer: ReturnType<typeof setTimeout>;
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let reapTimer: ReturnType<typeof setTimeout> | null = null;
     const done = (value: boolean) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
+      if (reapTimer) clearTimeout(reapTimer);
+      signal.removeEventListener('abort', onAbort);
       resolve(value);
     };
-    timer = setTimeout(() => {
+    const stopAndSettle = () => {
       terminateExtractorTree(proc);
+      // A broken/non-cooperative child must not permanently occupy one of the
+      // bounded classifier slots. Normal exit/error still settles immediately;
+      // this grace is longer than the extractor tree's TERM→KILL escalation.
+      if (!reapTimer) {
+        reapTimer = setTimeout(() => done(false), PDF_TEXT_PROBE_REAP_TIMEOUT_MS);
+        reapTimer.unref?.();
+      }
+    };
+    const onAbort = () => stopAndSettle();
+    signal.addEventListener('abort', onAbort, { once: true });
+    timer = setTimeout(() => {
+      timedOut = true;
+      stopAndSettle();
       // A probe that cannot finish quickly is likely not a cheap text-layer
       // document; defer it behind definitely text-readable PDFs.
-      done(false);
     }, PDF_TEXT_PROBE_TIMEOUT_MS);
-    proc.on('error', () => done(true));
+    timer.unref?.();
+    proc.on('error', () => done(false));
     proc.on('exit', (code) => {
-      if (code === 0) done(true);
+      if (signal.aborted || timedOut) done(false);
+      else if (code === 0) done(true);
       else if (code === 10) done(false);
-      else done(true);
+      else done(false);
     });
   });
-}
-
-function enqueuePdf(pdfAbsPath: string, priority?: number): void {
-  if (isCancelledPdfPath(pdfAbsPath)) return;
-  const key = pdfQueueKey(pdfAbsPath);
-  const current = queuedPdfs.get(key);
-  if (current) {
-    if (priority != null && (current.priority == null || priority < current.priority)) {
-      current.priority = priority;
-      current.priorityPromise = Promise.resolve(priority);
-    }
-    return;
-  }
-  queuedPdfs.set(key, { absPath: pdfAbsPath, seq: ++pdfQueueSeq, priority });
-  schedulePdfQueueDrain();
 }
 
 /** Given a POSIX-relative path to a legacy dot-prefixed derived note
@@ -398,43 +293,35 @@ function convertPdf(
 /** Conversion spec wiring PDFs into the shared `conversion.ts` plumbing. */
 const PDF_SPEC: ConversionSpec = {
   kind: 'pdf_extract',
+  lane: 'heavy',
+  cost: PDF_COST_OCR_OR_UNKNOWN,
   matches: (name) => /\.pdf$/i.test(name),
   derivedNote: (abs) => derivedPathsForPdf(abs).notePath,
   derivedReady: derivedPdfIsComplete,
+  classifyCost: pdfConversionPriority,
   convert: convertPdf,
   cleanupBeforeConvert: cleanupFinalPdfArtifacts,
   cleanupDerived: cleanupDerivedPdf,
 };
 
-/** Fire-and-forget convert used by the upload route. Skips if the note
- *  already exists; persists in-flight → done/failed to `state.db` so
- *  search-readiness accounting and retry recovery survive restart. */
+/** Fire-and-forget conversion entry. Skips fresh derived output; queued and
+ *  running state lives in the scheduler, while failures persist in state.db. */
 export function maybeConvertPdf(
   pdfAbsPath: string,
-  opts: { priority?: 'immediate' } = {},
+  opts: { urgency?: 'interactive' } = {},
 ): void {
-  enqueuePdf(pdfAbsPath, opts.priority === 'immediate' ? -10 : undefined);
+  maybeConvert(pdfAbsPath, PDF_SPEC, {
+    urgency: opts.urgency ?? 'background',
+    cost: PDF_COST_OCR_OR_UNKNOWN,
+  });
 }
 
 /** Reconcile hook: convert any untracked `.pdf` under the folder (dropped
  *  in via git checkout / external copy / `mv`). */
 export function discoverNewPdfs(folderAbs: string): void {
-  allowQueuedPdfsUnder(folderAbs);
   discoverNewSources(folderAbs, PDF_SPEC, (abs) => maybeConvertPdf(abs));
 }
 
 export function indexFreshPdf(pdfAbsPath: string): Promise<boolean> {
   return indexFreshDerived(pdfAbsPath, PDF_SPEC);
-}
-
-export function getQueuedPdfConversions(folderRoot?: string): string[] {
-  const out: string[] = [];
-  for (const item of queuedPdfs.values()) {
-    if (!existsSync(item.absPath)) continue;
-    const sourcePath = toPosixAbs(item.absPath);
-    const folderRel = folderRoot ? relInFolder(sourcePath, folderRoot) : sourcePath;
-    if (folderRel != null) out.push(folderRel);
-  }
-  out.sort();
-  return out;
 }

@@ -22,8 +22,12 @@ import { sendError } from '../http.ts';
 import { renameWithRollback } from '../rename-helpers.ts';
 import { noteTreeChanged } from '../watcher.ts';
 import { remapFileOrderPath, removeFileOrderPath } from '../file-order.ts';
-import { clearRecordsUnder, hasInFlightUnder } from '../conversion-status.ts';
+import { clearRecordsUnder } from '../conversion-status.ts';
+import { cancelConversionsUnder, hasRunningConversionsUnder } from '../conversion.ts';
 import { deleteDerivedUnderFolder } from '../derived-store.ts';
+import { discoverNewPdfs } from '../pdf.ts';
+import { discoverNewImages } from '../image.ts';
+import { discoverNewDocx } from '../docx.ts';
 
 const log = logger('routes/folders');
 
@@ -38,7 +42,7 @@ export interface InFlightFolderRouteError {
 }
 
 export function inFlightFolderOperationError(p: string, action: InFlightFolderAction): InFlightFolderRouteError | null {
-  if (!hasInFlightUnder(toSourcePath(p))) return null;
+  if (!hasRunningConversionsUnder(toSourcePath(p))) return null;
   const actionText = action === 'rename' ? 'Rename it' : 'Delete it';
   return {
     status: 409,
@@ -47,6 +51,18 @@ export function inFlightFolderOperationError(p: string, action: InFlightFolderAc
       code: 'CONVERSION_IN_FLIGHT',
     },
   };
+}
+
+function scheduleConversionRediscovery(sourcePrefix: string, displayPath: string): void {
+  setImmediate(() => {
+    try {
+      discoverNewPdfs(sourcePrefix);
+      discoverNewImages(sourcePrefix);
+      discoverNewDocx(sourcePrefix);
+    } catch (err: unknown) {
+      log.warn(`rename_folder: conversion rediscovery failed for ${displayPath}: ${errorMessage(err)}`);
+    }
+  });
 }
 
 export function mount(app: express.Express): void {
@@ -67,13 +83,19 @@ export function mount(app: express.Express): void {
     try {
       const inFlightError = inFlightFolderOperationError(p, 'delete');
       if (inFlightError) return res.status(inFlightError.status).json(inFlightError.body);
+      const sourcePrefix = toSourcePath(p);
       // Recursive delete on disk — the route layer trusts the UI's
       // confirm prompt to be the guardrail against "oops, I just
       // wiped a populated folder". Index cleanup fires async so we
       // can respond fast (same fire-and-forget pattern as file delete).
-      try { deleteDerivedUnderFolder(toSourcePath(p)); }
+      try { deleteDerivedUnderFolder(sourcePrefix); }
       catch (err: unknown) { log.warn(`delete_prefix: derived cleanup failed for ${p}: ${errorMessage(err)}`); }
       const removed = deleteFolder(p);
+      // Also retire queued work when the directory was removed externally
+      // before this request; "already gone" still means app-owned work is stale.
+      void cancelConversionsUnder(sourcePrefix).catch((err: unknown) => {
+        log.warn(`delete_prefix: queued conversion cancel failed for ${p}: ${errorMessage(err)}`);
+      });
       if (removed) {
         noteTreeChanged();
         try { removeFileOrderPath(p, 'folder'); }
@@ -108,6 +130,8 @@ export function mount(app: express.Express): void {
     if (newPath === oldPath) return res.json({ path: oldPath });
     const inFlightError = inFlightFolderOperationError(oldPath, 'rename');
     if (inFlightError) return res.status(inFlightError.status).json(inFlightError.body);
+    const oldSourcePrefix = toSourcePath(oldPath);
+    const newSourcePrefix = toSourcePath(newPath);
     const cascadeOn = req.body?.cascade !== false;
     const linkPlan = cascadeOn ? planRenameLinks([{ kind: 'folder', old: oldPath, new: newPath }]) : [];
 
@@ -117,7 +141,13 @@ export function mount(app: express.Express): void {
       to: newPath,
       res,
       doDisk: () => renameFolder(oldPath, newPath),
-      undoDisk: () => renameFolder(newPath, oldPath),
+      undoDisk: () => {
+        renameFolder(newPath, oldPath);
+        // A queued task may have observed the source missing while the index
+        // update was in progress and retired its old identity. Re-scan the
+        // restored prefix so rollback restores background work as well as disk.
+        scheduleConversionRediscovery(oldSourcePrefix, oldPath);
+      },
       doIndex: async () => {
         const applied = cascadeOn ? applyRenamePlan(linkPlan) : null;
         try {
@@ -158,6 +188,16 @@ export function mount(app: express.Express): void {
         }
       },
       okResponse: () => {
+        // Running extractors remain guarded above. Queued identities can be
+        // retired after the successful move and rediscovered at the new path,
+        // preserving rename/delete usability while keeping derived ownership
+        // aligned with the filesystem.
+        void cancelConversionsUnder(oldSourcePrefix).catch((err: unknown) => {
+          log.warn(`rename_folder: queued conversion cancel failed for ${oldPath}: ${errorMessage(err)}`);
+        });
+        try { deleteDerivedUnderFolder(oldSourcePrefix); }
+        catch (err: unknown) { log.warn(`rename_folder: old derived cleanup failed for ${oldPath}: ${errorMessage(err)}`); }
+        scheduleConversionRediscovery(newSourcePrefix, newPath);
         noteTreeChanged();
         try { remapFileOrderPath(oldPath, newPath, 'folder'); }
         catch (err: unknown) { log.warn(`file-order remap failed for ${oldPath} -> ${newPath}: ${errorMessage(err)}`); }

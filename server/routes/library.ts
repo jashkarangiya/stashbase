@@ -23,6 +23,7 @@ import {
   getRecentFolders,
   notifyFolderSwitch,
   removeRecent,
+  sameFilesystemPath,
   setCurrentFolder,
   toPosixAbs,
   validateFolderName,
@@ -34,7 +35,6 @@ import { cancelConversionsUnder } from '../conversion.ts';
 import { noteTreeChanged } from '../watcher.ts';
 import { deleteDerivedForSource, deleteDerivedUnderFolder, type DerivedCleanupStats } from '../derived-store.ts';
 import { deleteFileOrderForRoot } from '../file-order.ts';
-import { cancelQueuedPdfsUnder } from '../pdf.ts';
 import { ensureAgentsFile } from '../agent-rules.ts';
 
 const log = logger('routes/folder');
@@ -59,16 +59,13 @@ async function cleanupDerivedForFolder(folderAbs: string): Promise<DerivedCleanu
   return stats;
 }
 
-async function cleanupRemovedLibraryFolder(abs: string, cancelledQueued: number): Promise<void> {
-  const cancelledRunning = await cancelConversionsUnder(abs).catch((err: unknown) => {
+async function cleanupRemovedLibraryFolder(abs: string): Promise<void> {
+  const cancelled = await cancelConversionsUnder(abs).catch((err: unknown) => {
     log.warn(`folder remove: conversion cancel failed for ${abs}: ${errorMessage(err)}`);
     return [];
   });
-  if (cancelledQueued || cancelledRunning.length) {
-    log.info(
-      `folder remove: cancelled ${cancelledRunning.length} running and ` +
-      `${cancelledQueued} queued conversion(s) under ${abs}`,
-    );
+  if (cancelled.length) {
+    log.info(`folder remove: cancelled ${cancelled.length} queued/running conversion(s) under ${abs}`);
   }
   await cleanupDerivedForFolder(abs);
   // Clear its index rows + unbind from the daemon. deletePathPrefix is
@@ -164,20 +161,19 @@ export function mount(app: express.Express): void {
       const raw = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
       if (!raw) return res.status(400).json({ error: 'path required' });
       const abs = toPosixAbs(raw);
-      if (!getRecentFolders().some((r) => toPosixAbs(r.path) === abs)) {
+      if (!getRecentFolders().some((r) => sameFilesystemPath(toPosixAbs(r.path), abs))) {
         return res.status(404).json({ error: 'folder is not in your folders' });
       }
       // Tear down any live window bound to it FIRST (kills terminal sessions
       // whose cwd is inside this folder).
       clearFolderPath(abs);
-      const cancelledQueued = cancelQueuedPdfsUnder(abs);
       try { clearRecordsUnder(abs); }
       catch (err: unknown) { log.warn(`conversion-state cleanup failed for ${abs}: ${errorMessage(err)}`); }
       try { deleteFileOrderForRoot(abs); }
       catch (err: unknown) { log.warn(`file-order cleanup failed for ${abs}: ${errorMessage(err)}`); }
       removeRecent(abs);
       noteTreeChanged();
-      const cleanup = cleanupRemovedLibraryFolder(abs, cancelledQueued.length).catch((err: unknown) => {
+      const cleanup = cleanupRemovedLibraryFolder(abs).catch((err: unknown) => {
         log.warn(`folder remove cleanup failed for ${abs}: ${errorMessage(err)}`);
       });
       res.json({});

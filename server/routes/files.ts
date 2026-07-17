@@ -17,6 +17,7 @@ import {
   deleteFile,
   detectFormat,
   fileVersion,
+  fileStatVersion,
   getCurrentFolderBasename,
   listFilesAndFolders,
   pathExists,
@@ -27,10 +28,10 @@ import {
   sanitizeFilename,
   saveText,
 } from '../files.ts';
-import { detectViewerFormat, isDerivedNoteName, isDocxFile, isImageFile, isNoteName } from '../format.ts';
+import { detectViewerFormat, isDerivedNoteName, isImageFile, isNoteName } from '../format.ts';
 import { readFileOrder, remapFileOrderPath, removeFileOrderPath, setFolderOrder } from '../file-order.ts';
 import { applyRenamePlan, planRenameLinks, type RenameEntry } from '../links.ts';
-import { getCurrentFolder, getCurrentFolderLabel, toSourcePath } from '../folder.ts';
+import { getCurrentFolder, getCurrentFolderLabel, runWithFolderRoot, toPosixAbs, toSourcePath } from '../folder.ts';
 import { getApiKey } from '../app-config.ts';
 import { errorMessage, logger } from '../log.ts';
 import { indexer } from '../state.ts';
@@ -39,9 +40,9 @@ import { bundleRenameEntry, renameWithRollback } from '../rename-helpers.ts';
 import { maybeConvertImage } from '../image.ts';
 import { maybeConvertPdf } from '../pdf.ts';
 import { derivedHtmlPathForDocx, maybeConvertDocx } from '../docx.ts';
-import { cancelConversion } from '../conversion.ts';
+import { cancelConversion, getScheduledConversion, isConversionTextUnavailable } from '../conversion.ts';
 import { noteTreeChanged } from '../watcher.ts';
-import { clearRecord, isInFlight } from '../conversion-status.ts';
+import { clearRecord, readAll as readConversionStatus } from '../conversion-status.ts';
 import { deleteDerivedForSource } from '../derived-store.ts';
 
 const log = logger('routes/files');
@@ -57,8 +58,7 @@ export interface InFlightRouteError {
 }
 
 export function inFlightFileOperationError(name: string, action: InFlightFileAction): InFlightRouteError | null {
-  if (action === 'delete') return null;
-  if (!isInFlight(toSourcePath(name))) return null;
+  if (getScheduledConversion(toSourcePath(name))?.state !== 'running') return null;
   const verb = action === 'rename' ? 'Rename' : 'Delete';
   return {
     status: 409,
@@ -82,6 +82,21 @@ function renameTargetPath(oldName: string, requested: string): string {
   const lastSlash = oldName.lastIndexOf('/');
   const parent = lastSlash >= 0 ? oldName.slice(0, lastSlash + 1) : '';
   return sanitizeFilename(parent + normalizedRequest);
+}
+
+function queueViewerConversion(
+  format: ReturnType<typeof detectViewerFormat>,
+  name: string,
+  sourceAbs: string,
+  logContext = 'rename',
+): void {
+  try {
+    if (format === 'pdf') maybeConvertPdf(sourceAbs);
+    else if (isImageFile(name)) maybeConvertImage(sourceAbs);
+    else if (format === 'docx') maybeConvertDocx(sourceAbs);
+  } catch (err: unknown) {
+    log.warn(`${logContext}: conversion kickoff failed for ${name}: ${errorMessage(err)}`);
+  }
 }
 
 export function validateEditableFileWrite(name: string): void {
@@ -274,7 +289,12 @@ export function mount(app: express.Express): void {
   app.head('/api/files/*', (req, res) => {
     const name = (req.params as any)[0] as string;
     try {
-      res.sendStatus(fileHeadStatus(name));
+      const status = fileHeadStatus(name);
+      if (status === 204) {
+        const version = fileStatVersion(name);
+        if (version) res.setHeader('x-stashbase-file-version', version);
+      }
+      res.sendStatus(status);
     } catch (err: unknown) {
       sendError(res, err);
     }
@@ -333,6 +353,8 @@ export function mount(app: express.Express): void {
     if (!requested) return res.status(400).json({ error: 'new_name required' });
     const oldFormat = detectViewerFormat(oldName);
     if (!oldFormat) return res.status(415).json({ error: 'unsupported format' });
+    const requestFolderRoot = getCurrentFolder();
+    if (!requestFolderRoot) return res.status(412).json({ error: 'no folder open', code: 'NO_FOLDER' });
     const inFlightError = inFlightFileOperationError(oldName, 'rename');
     if (inFlightError) return res.status(inFlightError.status).json(inFlightError.body);
     const oldStructuredFormat = detectFormat(oldName);
@@ -351,6 +373,11 @@ export function mount(app: express.Express): void {
     }
     newName = renameTargetPath(oldName, newName);
     if (newName === oldName) return res.json({ name: oldName, linksUpdated: 0 });
+    // Capture absolute conversion identities while this request's folder
+    // binding is stable. The async-index branch may finish after the user has
+    // switched this window to another folder.
+    const oldViewerSourceAbs = viewerOnly ? toSourcePath(oldName) : null;
+    const newViewerSourceAbs = viewerOnly ? toSourcePath(newName) : null;
     const content = viewerOnly ? null : readText(oldName);
     if (!viewerOnly && content == null) return res.status(404).json({ error: 'not found' });
     if (viewerOnly && !pathExists(oldName)) return res.status(404).json({ error: 'not found' });
@@ -387,8 +414,8 @@ export function mount(app: express.Express): void {
           }
         };
         if (viewerOnly) {
-          const oldSourceAbs = toSourcePath(oldName);
-          const newSourceAbs = toSourcePath(newName);
+          const oldSourceAbs = oldViewerSourceAbs!;
+          const newSourceAbs = newViewerSourceAbs!;
           cancelConversion(oldSourceAbs);
           clearRecord(oldSourceAbs);
           clearRecord(newSourceAbs);
@@ -407,13 +434,6 @@ export function mount(app: express.Express): void {
             });
           }
           if (getApiKey()) await reindexUpdatedLinks();
-          try {
-            if (oldFormat === 'pdf') maybeConvertPdf(newSourceAbs);
-            else if (isImageFile(newName)) maybeConvertImage(newSourceAbs);
-            else if (isDocxFile(newName)) maybeConvertDocx(newSourceAbs);
-          } catch (err: unknown) {
-            log.warn(`rename: conversion kickoff failed for ${newName}: ${errorMessage(err)}`);
-          }
           return 'Searchable text is being regenerated in the background.';
         }
         if (!getApiKey()) {
@@ -440,6 +460,9 @@ export function mount(app: express.Express): void {
     if (asyncIndex) {
       try {
         renameOnDisk(oldName, newName);
+        // Queued work is safe to retire after the source moves; the background
+        // index step below immediately schedules the new source identity.
+        if (oldViewerSourceAbs) cancelConversion(oldViewerSourceAbs);
       } catch (err: unknown) {
         sendError(res, err);
         return;
@@ -457,9 +480,16 @@ export function mount(app: express.Express): void {
           ? `${warning}. The file moved, but semantic search will skip it until you split or reduce it and run sync.`
           : undefined,
       });
-      updateLinksAndIndex({ rollbackLinksOnFailure: false }).catch((err: unknown) => {
-        log.warn(`rename: background index update failed for ${oldName} -> ${newName}: ${errorMessage(err)}`);
-      });
+      // The response is already on its way, so keep the remaining file/link
+      // reads pinned to the folder that owned this request even if the window
+      // switches folders before indexing finishes.
+      void runWithFolderRoot(requestFolderRoot, () => updateLinksAndIndex({ rollbackLinksOnFailure: false }))
+        .catch((err: unknown) => {
+          log.warn(`rename: background index update failed for ${oldName} -> ${newName}: ${errorMessage(err)}`);
+        })
+        .finally(() => {
+          if (newViewerSourceAbs) queueViewerConversion(oldFormat, newName, newViewerSourceAbs);
+        });
       return;
     }
 
@@ -470,11 +500,17 @@ export function mount(app: express.Express): void {
       to: newName,
       res,
       doDisk: () => renameOnDisk(oldName, newName),
-      undoDisk: () => renameOnDisk(newName, oldName),
+      undoDisk: () => {
+        renameOnDisk(newName, oldName);
+        if (oldViewerSourceAbs) {
+          queueViewerConversion(oldFormat, oldName, oldViewerSourceAbs, 'rename rollback');
+        }
+      },
       doIndex: async () => {
         indexWarning = await updateLinksAndIndex({ rollbackLinksOnFailure: true });
       },
       okResponse: () => {
+        if (newViewerSourceAbs) queueViewerConversion(oldFormat, newName, newViewerSourceAbs);
         noteTreeChanged();
         try { remapFileOrderPath(oldName, newName, 'file'); }
         catch (err: unknown) { log.warn(`file-order remap failed for ${oldName} -> ${newName}: ${errorMessage(err)}`); }
@@ -489,8 +525,14 @@ export function mount(app: express.Express): void {
     try {
       const inFlightError = inFlightFileOperationError(name, 'delete');
       if (inFlightError) return res.status(inFlightError.status).json(inFlightError.body);
+      const sourceAbs = toSourcePath(name);
       const derivedArtifacts = derivedArtifactsForSource(name);
       const removed = deleteFile(name);
+      // The source may already have disappeared outside StashBase. Retire any
+      // queued identity and stale AppData ownership in both cases.
+      cancelConversion(sourceAbs);
+      try { deleteDerivedForSource(sourceAbs); }
+      catch (err: unknown) { log.warn(`delete: derived cleanup failed for ${name}: ${errorMessage(err)}`); }
       // Respond as soon as the file is off disk. Milvus row cleanup is
       // fired async — if the daemon is busy (e.g. mid-embed of an
       // upload), waiting for the queue here would freeze the UI delete.
@@ -499,13 +541,10 @@ export function mount(app: express.Express): void {
       // sync sweeps orphans.
       if (removed) {
         noteTreeChanged();
-        cancelConversion(toSourcePath(name));
-        try { deleteDerivedForSource(toSourcePath(name)); }
-        catch (err: unknown) { log.warn(`delete: derived cleanup failed for ${name}: ${errorMessage(err)}`); }
         try { removeFileOrderPath(name, 'file'); }
         catch (err: unknown) { log.warn(`file-order cleanup failed for ${name}: ${errorMessage(err)}`); }
       }
-      try { clearRecord(toSourcePath(name)); }
+      try { clearRecord(sourceAbs); }
       catch (err: unknown) { log.warn(`delete: preparation status cleanup failed for ${name}: ${errorMessage(err)}`); }
       res.json({ alreadyGone: !removed });
       for (const rel of [name, ...derivedArtifacts.notes]) {
@@ -630,21 +669,44 @@ export function mount(app: express.Express): void {
     fs.createReadStream(abs).pipe(res);
   });
 
-  // Serves AppData-derived preview HTML for convertible sources that do not
-  // have a useful native browser preview (currently DOCX). The source path is
-  // still folder-relative; this route only swaps the served bytes.
+  // Serves AppData-derived DOCX HTML as a fallback when renderer-side source
+  // conversion cannot produce the immediate preview. The source path is still
+  // folder-relative; this route only swaps the served bytes.
   app.get('/asset-derived/*', (req, res) => {
     const rel = stripAssetWindowPrefix((req.params as any)[0] as string);
     if (detectViewerFormat(rel) !== 'docx') return res.status(415).end();
+    let sourceAbs: string | null = null;
     try {
-      const sourceAbs = resolveExisting(rel);
+      sourceAbs = resolveExisting(rel);
       if (!sourceAbs) return res.status(404).end();
+      if (isConversionTextUnavailable(sourceAbs)) throw new Error('document conversion unavailable');
       const htmlAbs = derivedHtmlPathForDocx(sourceAbs);
       const raw = fs.readFileSync(htmlAbs, 'utf8');
       const { preparedHtml } = analyzeHtml(raw);
       res.type('text/html').send(preparedHtml);
     } catch {
-      res.status(409).type('text/html').send('<!doctype html><meta charset="utf-8"><body>Preparing document preview…</body>');
+      let sourcePath: string | null = sourceAbs ? toPosixAbs(sourceAbs) : null;
+      if (!sourcePath) {
+        try { sourcePath = toSourcePath(rel); } catch { /* no active folder context */ }
+      }
+      const scheduled = sourcePath ? getScheduledConversion(sourcePath) : null;
+      let failed = false;
+      if (sourcePath) {
+        try { failed = readConversionStatus()[sourcePath]?.status === 'failed'; }
+        catch { /* preparation status is auxiliary */ }
+      }
+      let message = 'Preparing document preview…';
+      if (failed) {
+        message = 'Document preparation failed. Use Reprocess to try again.';
+      } else if (scheduled?.state === 'queued') {
+        const ahead = scheduled.tasksAhead ?? 0;
+        message = ahead > 0
+          ? `Waiting for document conversion — ${ahead} light-lane task${ahead === 1 ? '' : 's'} ahead.`
+          : 'Waiting for document conversion…';
+      }
+      res.status(409).type('text/html').send(
+        `<!doctype html><meta charset="utf-8"><body>${message}</body>`,
+      );
     }
   });
 }

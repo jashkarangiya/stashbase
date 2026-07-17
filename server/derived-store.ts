@@ -17,7 +17,7 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { appDataRoot } from './local-data.ts';
-import { toPosixAbs } from './folder.ts';
+import { isFilesystemPathAtOrUnder, toPosixAbs } from './folder.ts';
 import { isConvertibleSource } from './format.ts';
 import { isCloudPlaceholderName, isIndexExcludedDirName } from './indexable.ts';
 import { logger, errorMessage } from './log.ts';
@@ -83,10 +83,9 @@ function forgetDerivedSource(sourceAbs: string): void {
 
 export function knownDerivedSourcesUnderFolder(folderAbs: string): string[] {
   const root = toPosixAbs(folderAbs).replace(/\/+$/, '');
-  const prefix = `${root}/`;
   return Object.values(readManifest())
     .map(toPosixAbs)
-    .filter((sourceAbs) => sourceAbs === root || sourceAbs.startsWith(prefix));
+    .filter((sourceAbs) => isFilesystemPathAtOrUnder(sourceAbs, root));
 }
 
 /** Absolute path of the derived markdown note for a source file. */

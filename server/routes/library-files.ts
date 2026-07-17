@@ -9,7 +9,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { deleteDerivedForSource, derivedNoteFor, sourceForDerivedText } from '../derived-store.ts';
 import { errorMessage, logger } from '../log.ts';
-import { getFolderHome, memberFolderRoots, memberRootForAbs, resolveFolderRoot, runWithFolderRoot, toPosixAbs } from '../folder.ts';
+import {
+  canonicalFolderRelativePath,
+  exactMemberFolderRoot,
+  getFolderHome,
+  memberFolderRoots,
+  memberRootForAbs,
+  relInFolder,
+  resolveFolderRoot,
+  runWithFolderRoot,
+  sameFilesystemPath,
+  sourcePathInFolder,
+  toPosixAbs,
+} from '../folder.ts';
 import { indexer, syncFolderNow } from '../state.ts';
 import { remapSearchHitsForDisplay } from '../search-display.ts';
 import { getLibraryInfo } from '../library-info.ts';
@@ -28,7 +40,7 @@ import {
   renameOnDisk,
 } from '../files.ts';
 import { inFlightFileOperationError, saveFileContent } from './files.ts';
-import { cancelConversion } from '../conversion.ts';
+import { cancelConversion, isConversionTextUnavailable } from '../conversion.ts';
 import { applyRenamePlan, planRenameLinks, type RenameEntry } from '../links.ts';
 import { maybeConvertPdf } from '../pdf.ts';
 import { maybeConvertImage } from '../image.ts';
@@ -46,10 +58,11 @@ export interface LibrarySearchScope {
 
 function requireMemberFolderRoot(ref: string): string {
   const root = resolveFolderRoot(ref);
-  if (!memberFolderRoots().includes(root)) {
+  const memberRoot = exactMemberFolderRoot(root);
+  if (!memberRoot) {
     throw routeError('folder is not in your folders', 404, 'FOLDER_NOT_FOUND');
   }
-  return root;
+  return memberRoot;
 }
 
 export function normalizeLibrarySearchScope(folderRaw: unknown, pathPrefixRaw: unknown): LibrarySearchScope {
@@ -87,7 +100,10 @@ export function mount(app: express.Express): void {
       // the unambiguous MCP identity the file tools accept. The base only
       // drives PDF page-marker resolution; absolute hits resolve regardless.
       const rawHits = await indexer.search(query, topK, folderRoot, pathPrefix);
-      const hits = remapSearchHitsForDisplay(rawHits, toPosixAbs(getFolderHome()));
+      const hits = remapSearchHitsForDisplay(
+        rawHits.filter((hit) => !isConversionTextUnavailable(hit.fileName)),
+        toPosixAbs(getFolderHome()),
+      );
       res.json({ hits });
     } catch (err: unknown) {
       sendError(res, err);
@@ -246,11 +262,14 @@ function normalizeLibraryPathPrefix(value: string): string {
   // Resolve to an absolute prefix and require it to live under a member folder.
   // Absolute paths are the normal API; non-absolute values are compatibility
   // refs under the default folder home.
-  const abs = resolveLibraryAbs(value, { allowEmpty: false });
-  if (!memberRootForAbs(abs)) {
+  const requestedAbs = resolveLibraryAbs(value, { allowEmpty: false });
+  const folderRoot = memberRootForAbs(requestedAbs);
+  if (!folderRoot) {
     throw routeError('path_prefix must live under one of your folders', 400);
   }
-  return abs;
+  const requestedRel = relInFolder(requestedAbs, folderRoot);
+  if (requestedRel == null) throw routeError('path_prefix must live under one of your folders', 400);
+  return sourcePathInFolder(folderRoot, canonicalFolderRelativePath(folderRoot, requestedRel));
 }
 
 interface LibraryPath {
@@ -287,8 +306,8 @@ export interface AgentContextFile {
   reason: string;
 }
 
-/** Resolve a raw path to an absolute POSIX path, rejecting traversal / Windows /
- *  control chars. Absolute paths are the normal API; non-absolute values are
+/** Resolve a raw path to an absolute POSIX path, rejecting traversal, native
+ *  separators, and control chars. Absolute paths are the normal API; non-absolute values are
  *  compatibility refs under the default folder home. Does NOT check membership;
  *  callers do via `memberRootForAbs`. */
 function resolveLibraryAbs(raw: unknown, opts: { allowEmpty: boolean }): string {
@@ -297,8 +316,11 @@ function resolveLibraryAbs(raw: unknown, opts: { allowEmpty: boolean }): string 
     if (opts.allowEmpty) return '';
     throw routeError('path required', 400);
   }
-  if (value.includes('\\') || /^[A-Za-z]:[\\/]/.test(value)) {
+  if (value.includes('\\')) {
     throw routeError('path must be a POSIX path', 400);
+  }
+  if (/^[A-Za-z]:\//.test(value) && process.platform !== 'win32') {
+    throw routeError('Windows drive paths are only valid on Windows', 400);
   }
   if (/[\x00-\x1f'"]/.test(value)) throw routeError('path contains invalid characters', 400);
   for (const seg of value.split('/')) {
@@ -309,29 +331,37 @@ function resolveLibraryAbs(raw: unknown, opts: { allowEmpty: boolean }): string 
 }
 
 export function normalizeLibraryFilePath(raw: unknown): LibraryPath {
-  const abs = resolveLibraryAbs(raw, { allowEmpty: false });
-  const folderRoot = memberRootForAbs(abs);
+  const requestedAbs = resolveLibraryAbs(raw, { allowEmpty: false });
+  const folderRoot = memberRootForAbs(requestedAbs);
   if (!folderRoot) {
     throw routeError('path must live under one of your folders (call library_info to list them)', 400);
   }
-  if (abs === folderRoot) {
+  const requestedRel = relInFolder(requestedAbs, folderRoot);
+  const folderRel = requestedRel == null
+    ? null
+    : canonicalFolderRelativePath(folderRoot, requestedRel);
+  if (folderRel == null || folderRel === '') {
     throw routeError('path must include a file path, not just the folder root', 400);
   }
-  const folderRel = abs.slice(folderRoot.length + 1);
   if (isDerivedNoteName(folderRel)) {
     throw routeError('app-maintained derived notes are hidden; use the visible source file path', 403);
   }
-  return { abs, folderRoot, folderRel };
+  return { abs: sourcePathInFolder(folderRoot, folderRel), folderRoot, folderRel };
 }
 
 function normalizeLibraryDirectoryPath(raw: unknown): { abs?: string; folderRoot?: string; folderRel?: string } {
-  const abs = resolveLibraryAbs(raw, { allowEmpty: true });
-  if (!abs) return {};
-  const folderRoot = memberRootForAbs(abs);
+  const requestedAbs = resolveLibraryAbs(raw, { allowEmpty: true });
+  if (!requestedAbs) return {};
+  const folderRoot = memberRootForAbs(requestedAbs);
   if (!folderRoot) {
     throw routeError('path must live under one of your folders (call library_info to list them)', 400);
   }
-  return { abs, folderRoot, folderRel: abs === folderRoot ? '' : abs.slice(folderRoot.length + 1) };
+  const requestedRel = relInFolder(requestedAbs, folderRoot);
+  const folderRel = requestedRel == null
+    ? null
+    : canonicalFolderRelativePath(folderRoot, requestedRel);
+  if (folderRel == null) throw routeError('path must live under one of your folders', 400);
+  return { abs: sourcePathInFolder(folderRoot, folderRel), folderRoot, folderRel };
 }
 
 function validateLibraryWritableFolderRel(folderRel: string): void {
@@ -384,6 +414,18 @@ export async function agentContextFile(rawPath: unknown): Promise<AgentContextFi
     const derivedAbs = sourceFormat === 'docx'
       ? derivedHtmlPathForDocx(target.abs)
       : derivedNoteFor(target.abs);
+    if (isConversionTextUnavailable(target.abs)) {
+      return {
+        path: target.abs,
+        folder: folderName,
+        sourcePath: target.folderRel,
+        readPath: target.folderRel,
+        kind: 'direct',
+        sourceFormat,
+        available: false,
+        reason: 'Searchable text is pending or preparation failed; retry after completion or reprocess the source.',
+      };
+    }
     if (!fs.existsSync(derivedAbs)) {
       return {
         path: target.abs,
@@ -434,7 +476,7 @@ export async function listLibraryDirectory(rawPath: unknown): Promise<{ path: st
     for (const folder of listFolders()) {
       const child = immediateChild(prefix, folder.path);
       if (!child) continue;
-      const entryPath = `${folderRoot}/${child.path}`;
+      const entryPath = sourcePathInFolder(folderRoot, child.path);
       children.set(`d:${child.path}`, {
         name: child.name,
         path: entryPath,
@@ -444,7 +486,7 @@ export async function listLibraryDirectory(rawPath: unknown): Promise<{ path: st
     for (const file of listFiles()) {
       const child = immediateFileChild(prefix, file.name);
       if (!child) continue;
-      const entryPath = `${folderRoot}/${child.path}`;
+      const entryPath = sourcePathInFolder(folderRoot, child.path);
       children.set(`f:${child.path}`, {
         name: child.name,
         path: entryPath,
@@ -507,6 +549,9 @@ export async function readLibraryFile(rawPath: unknown): Promise<{
     if (!format) {
       const viewerFormat = detectViewerFormat(target.folderRel);
       if (viewerFormat === 'pdf') {
+        if (isConversionTextUnavailable(target.abs)) {
+          throw routeError('extracted Markdown is pending or preparation failed; retry after completion or reprocess the PDF', 409, 'CONVERSION_NOT_READY');
+        }
         const derivedAbs = derivedNoteFor(target.abs);
         let content: string;
         try {
@@ -525,6 +570,9 @@ export async function readLibraryFile(rawPath: unknown): Promise<{
         };
       }
       if (viewerFormat === 'docx') {
+        if (isConversionTextUnavailable(target.abs)) {
+          throw routeError('extracted HTML is pending or preparation failed; retry after completion or reprocess the DOCX', 409, 'CONVERSION_NOT_READY');
+        }
         const derivedAbs = derivedHtmlPathForDocx(target.abs);
         let content: string;
         try {
@@ -583,7 +631,13 @@ function readDerivedLibraryFile(derivedAbs: string, sourceAbs: string, folderRoo
   readPath?: string;
   derived?: boolean;
 }> {
-  const folderRel = sourceAbs.slice(folderRoot.length + 1);
+  if (isConversionTextUnavailable(sourceAbs)) {
+    throw routeError('derived text is pending or preparation failed; retry after completion or reprocess the source', 409, 'CONVERSION_NOT_READY');
+  }
+  const folderRel = relInFolder(sourceAbs, folderRoot);
+  if (folderRel == null || folderRel === '') {
+    throw routeError('derived source path is invalid for its folder', 400);
+  }
   const sourceFormat = detectViewerFormat(folderRel);
   if (sourceFormat !== 'pdf' && sourceFormat !== 'docx') {
     throw routeError('derived reads are only exposed for PDF/DOCX text context', 403);
@@ -663,7 +717,7 @@ export async function moveLibraryFile(
 ): Promise<{ path: string; oldPath: string; linksUpdated: number; indexWarning?: string }> {
   const oldTarget = normalizeLibraryFilePath(rawPath);
   const newTarget = normalizeLibraryFilePath(rawNewPath);
-  if (oldTarget.folderRoot !== newTarget.folderRoot) {
+  if (!sameFilesystemPath(oldTarget.folderRoot, newTarget.folderRoot)) {
     throw routeError('move_file currently supports moves within the same folder only', 400);
   }
   validateLibraryWritableFolderRel(newTarget.folderRel);
@@ -710,8 +764,9 @@ export async function moveLibraryFile(
           log.warn(`library move: failed to remove old source index row ${oldTarget.abs}: ${errorMessage(err)}`);
         });
         for (const rel of oldDerivedArtifacts.notes) {
-          await indexer.deleteFile(`${oldTarget.folderRoot}/${rel}`).catch((err) => {
-            log.warn(`library move: failed to remove legacy derived index row ${oldTarget.folderRoot}/${rel}: ${errorMessage(err)}`);
+          const sourcePath = sourcePathInFolder(oldTarget.folderRoot, rel);
+          await indexer.deleteFile(sourcePath).catch((err) => {
+            log.warn(`library move: failed to remove legacy derived index row ${sourcePath}: ${errorMessage(err)}`);
           });
         }
         try {
@@ -740,7 +795,7 @@ export async function moveLibraryFile(
         if (!getApiKey()) break;
         if (u.name === newTarget.folderRel) continue;
         const body = readText(u.name);
-        if (body != null) await indexer.upsertFile(`${oldTarget.folderRoot}/${u.name}`, body);
+        if (body != null) await indexer.upsertFile(sourcePathInFolder(oldTarget.folderRoot, u.name), body);
       }
     } catch (err) {
       // The disk move has already happened; keep the user's file move
@@ -764,17 +819,16 @@ export async function deleteLibraryFile(rawPath: unknown): Promise<{ path: strin
     if (inFlightError) throw routeError(inFlightError.body.error, inFlightError.status, inFlightError.body.code);
     const derivedArtifacts = derivedArtifactsForSource(target.folderRel);
     const removed = deleteFile(target.folderRel);
-    if (removed) cancelConversion(target.abs);
-    if (removed) {
-      try { deleteDerivedForSource(target.abs); }
-      catch (err: unknown) { log.warn(`library delete: derived cleanup failed for ${target.abs}: ${errorMessage(err)}`); }
-    }
+    cancelConversion(target.abs);
+    try { deleteDerivedForSource(target.abs); }
+    catch (err: unknown) { log.warn(`library delete: derived cleanup failed for ${target.abs}: ${errorMessage(err)}`); }
     try { clearRecord(target.abs); }
     catch (err: unknown) { log.warn(`library delete: preparation status cleanup failed for ${target.abs}: ${errorMessage(err)}`); }
     if (removed && getApiKey()) {
       for (const rel of [target.folderRel, ...derivedArtifacts.notes]) {
-        indexer.deleteFile(`${target.folderRoot}/${rel}`).catch((err) => {
-          log.warn(`library delete: index cleanup failed for ${target.folderRoot}/${rel}: ${errorMessage(err)}`);
+        const sourcePath = sourcePathInFolder(target.folderRoot, rel);
+        indexer.deleteFile(sourcePath).catch((err) => {
+          log.warn(`library delete: index cleanup failed for ${sourcePath}: ${errorMessage(err)}`);
         });
       }
     }

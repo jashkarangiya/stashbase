@@ -27,9 +27,10 @@ import { isCloudPlaceholderName, isIndexExcludedDirName } from '../indexable.ts'
 import { errorMessage, logger } from '../log.ts';
 import {
   getCurrentFolder,
-  memberFolderRoots,
+  exactMemberFolderRoot,
   resolveFolderRoot,
   runWithWindowId,
+  sourcePathInFolder,
   toPosixAbs,
   WINDOW_ID_HEADER,
 } from '../folder.ts';
@@ -54,12 +55,13 @@ const uploadParser = multer({
 function resolveUploadFolder(explicitFolder: string): string {
   if (explicitFolder) {
     const root = resolveFolderRoot(explicitFolder);
-    if (!memberFolderRoots().includes(root)) {
+    const memberRoot = exactMemberFolderRoot(root);
+    if (!memberRoot) {
       const err = new Error('folder is not in your folders');
       (err as any).code = 'FOLDER_NOT_FOUND';
       throw err;
     }
-    return root;
+    return memberRoot;
   }
   const current = getCurrentFolder();
   if (!current) {
@@ -237,7 +239,7 @@ async function handleUpload(req: express.Request, res: express.Response): Promis
         // memory). This honours the "don't modify the opened folder" rule
         // now that any folder on disk can be opened in place.
         const text = f.buffer.toString('utf8');
-        toIndex.push({ name, sourcePath: `${folderRoot}/${name}`, text });
+        toIndex.push({ name, sourcePath: sourcePathInFolder(folderRoot, name), text });
       } else if (folderAbs && /\.pdf$/i.test(name)) {
         // PDFs run through the PyMuPDF pipeline so the
         // app gets AppData-derived Markdown + extracted assets, then pushes
@@ -284,7 +286,7 @@ async function handleUpload(req: express.Request, res: express.Response): Promis
     try { maybeConvertImage(abs); } catch (err: unknown) { log.warn(`upload: image OCR kickoff failed for ${rel}: ${errorMessage(err)}`); }
   }
   for (const { abs, rel } of toConvertDocx) {
-    try { maybeConvertDocx(abs); } catch (err: unknown) { log.warn(`upload: docx convert kickoff failed for ${rel}: ${errorMessage(err)}`); }
+    try { maybeConvertDocx(abs, { urgency: 'interactive' }); } catch (err: unknown) { log.warn(`upload: docx convert kickoff failed for ${rel}: ${errorMessage(err)}`); }
   }
 }
 

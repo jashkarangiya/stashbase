@@ -248,11 +248,13 @@ app.use([
 
 // ----- mount routes -------------------------------------------------------
 mountEmbedderRoutes(app);
+// Register exact `/api/files/prepare` and `/api/files/reprocess` endpoints
+// before the generic file-content wildcard routes.
+mountIndexingRoutes(app);
 mountFilesRoutes(app);
 mountFoldersRoutes(app);
 mountUploadRoutes(app);
 mountAttachRoutes(app);
-mountIndexingRoutes(app);
 mountLibraryFileRoutes(app);
 mountTerminalRoutes(app);
 mountMcpRoutes(app, mcpHttpService);

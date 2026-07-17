@@ -12,18 +12,18 @@ import { analyzeHtml } from '../html.ts';
 import {
   relInFolder,
   getCurrentFolder,
-  memberFolderRoots,
+  exactMemberFolderRoot,
   resolveFolderRoot,
   toPosixAbs,
 } from '../folder.ts';
 import { getApiKey } from '../app-config.ts';
 import { hasNoExtractableText, isCloudPlaceholderName, isIndexExcludedDirName, shouldIndexFilePath } from '../indexable.ts';
-import { derivedPathsForPdf, displayPathForHit, getQueuedPdfConversions, maybeConvertPdf } from '../pdf.ts';
+import { derivedPathsForPdf, displayPathForHit, maybeConvertPdf } from '../pdf.ts';
 import { derivedNotePathForImage, maybeConvertImage } from '../image.ts';
 import { derivedHtmlPathForDocx, maybeConvertDocx } from '../docx.ts';
-import { getInFlightConversions } from '../conversion.ts';
+import { getConversionSchedulerSnapshot, getInFlightConversions, isConversionPending, isConversionTextUnavailable, promoteConversion } from '../conversion.ts';
 import { isDocxFile, isImageFile } from '../format.ts';
-import { clearRecord, isInFlight, listFailed, listInFlight, readAll as readConversionStatus, readProgress, type ConversionProgress } from '../conversion-status.ts';
+import { clearRecord, listFailed, readAll as readConversionStatus, readProgress, type ConversionProgress } from '../conversion-status.ts';
 import { getFsChangeCounter } from '../watcher.ts';
 import { clearIndexWarning, getIndexWarning, indexer, syncFolderNow } from '../state.ts';
 import { noteTreeChanged } from '../watcher.ts';
@@ -45,13 +45,14 @@ function parseFolderParam(value: unknown): string | undefined {
 
 function requireMemberFolderRoot(ref: string): string {
   const root = resolveFolderRoot(ref);
-  if (!memberFolderRoots().includes(root)) {
+  const memberRoot = exactMemberFolderRoot(root);
+  if (!memberRoot) {
     const err = new Error('folder is not in your folders');
     (err as any).status = 404;
     (err as any).code = 'FOLDER_NOT_FOUND';
     throw err;
   }
-  return root;
+  return memberRoot;
 }
 
 function requireRequestFolder(explicit?: string): { folderRoot: string } {
@@ -73,6 +74,43 @@ function sourcePathForAbs(absPath: string): string {
   return toPosixAbs(absPath);
 }
 
+function relativePathEscapesRoot(rel: string): boolean {
+  return rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
+}
+
+/** Resolve an explicit-folder request without allowing a symlink inside the
+ * library folder to redirect preparation/extraction outside that folder. */
+function requireExistingFileInFolder(folderRoot: string, rel: string): string {
+  const abs = path.resolve(folderRoot, rel);
+  const folderRel = path.relative(folderRoot, abs);
+  if (relativePathEscapesRoot(folderRel)) {
+    const err = new Error('path escapes folder');
+    (err as any).status = 400;
+    throw err;
+  }
+  if (!fs.existsSync(abs)) {
+    clearRecord(sourcePathForAbs(abs));
+    const err = new Error('file not found');
+    (err as any).status = 404;
+    throw err;
+  }
+
+  const rootReal = fs.realpathSync.native(folderRoot);
+  const sourceReal = fs.realpathSync.native(abs);
+  const realRel = path.relative(rootReal, sourceReal);
+  if (relativePathEscapesRoot(realRel)) {
+    const err = new Error('path escapes folder through symlink');
+    (err as any).status = 400;
+    throw err;
+  }
+  if (!fs.statSync(abs).isFile()) {
+    const err = new Error('file not found');
+    (err as any).status = 404;
+    throw err;
+  }
+  return abs;
+}
+
 export function preparationFailuresForFolder(folderRoot: string): Array<{ path: string; lastError: string; attempts: number }> {
   const root = toPosixAbs(folderRoot);
   const out: Array<{ path: string; lastError: string; attempts: number }> = [];
@@ -88,14 +126,36 @@ export function preparationFailuresForFolder(folderRoot: string): Array<{ path: 
   return out;
 }
 
-export function conversionProgressForFolder(folderRoot: string): Record<string, ConversionProgress> {
+type SchedulerSnapshot = ReturnType<typeof getConversionSchedulerSnapshot>;
+
+export function conversionProgressForFolder(
+  folderRoot: string,
+  snapshot: SchedulerSnapshot = getConversionSchedulerSnapshot(),
+): Record<string, ConversionProgress> {
   const root = toPosixAbs(folderRoot);
   const out: Record<string, ConversionProgress> = {};
-  for (const sourcePath of listInFlight()) {
-    const rel = relInFolder(sourcePath, root);
+  for (const task of snapshot.tasks) {
+    const rel = relInFolder(task.key, root);
     if (rel == null) continue;
-    const progress = readProgress(sourcePath);
+    if (task.state === 'queued') {
+      out[rel] = { phase: 'queued', lane: task.lane, tasksAhead: task.tasksAhead ?? 0 };
+      continue;
+    }
+    const progress = readProgress(task.key);
     if (progress) out[rel] = progress;
+  }
+  return out;
+}
+
+export function conversionVersionsForFolder(
+  folderRoot: string,
+  snapshot: SchedulerSnapshot = getConversionSchedulerSnapshot(),
+): Record<string, number> {
+  const root = toPosixAbs(folderRoot);
+  const out: Record<string, number> = {};
+  for (const [sourcePath, version] of Object.entries(snapshot.versions)) {
+    const rel = relInFolder(sourcePath, root);
+    if (rel != null) out[rel] = version;
   }
   return out;
 }
@@ -110,41 +170,33 @@ export function reprocessFileInFolder(relPath: string, folderName?: string): 'co
 
   const { folderRoot } = requireRequestFolder(folderName?.trim() || undefined);
 
-  const abs = path.resolve(folderRoot, rel);
-  const folderRel = path.relative(folderRoot, abs);
-  if (folderRel.startsWith('..') || path.isAbsolute(folderRel)) {
-    const err = new Error('path escapes folder');
-    (err as any).status = 400;
-    throw err;
-  }
+  const abs = requireExistingFileInFolder(folderRoot, rel);
   const sourcePath = sourcePathForAbs(abs);
-  if (!fs.existsSync(abs)) {
-    clearRecord(sourcePath);
-    const err = new Error('file not found');
-    (err as any).status = 404;
-    throw err;
-  }
   const isPdf = /\.pdf$/i.test(rel);
   const isImage = isImageFile(rel);
   const isDocx = isDocxFile(rel);
-  if (isInFlight(sourcePath)) return isPdf || isImage || isDocx ? 'conversion' : 'index';
+  if (isConversionPending(sourcePath)) {
+    // A manual retry promotes queued work; running work is non-preemptive.
+    promoteConversion(sourcePath, 'interactive');
+    return isPdf || isImage || isDocx ? 'conversion' : 'index';
+  }
 
   clearRecord(sourcePath);
   if (isPdf) {
     const { notePath: staleNote, bundleDir: staleBundle } = derivedPathsForPdf(abs);
     try { fs.rmSync(staleNote, { force: true }); } catch { /* no stale to remove */ }
     try { fs.rmSync(staleBundle, { recursive: true, force: true }); } catch { /* no bundle */ }
-    maybeConvertPdf(abs, { priority: 'immediate' });
+    maybeConvertPdf(abs, { urgency: 'interactive' });
     return 'conversion';
   }
   if (isImage) {
     try { fs.rmSync(derivedNotePathForImage(abs), { force: true }); } catch { /* no stale */ }
-    maybeConvertImage(abs);
+    maybeConvertImage(abs, { urgency: 'interactive' });
     return 'conversion';
   }
   if (isDocx) {
     try { fs.rmSync(derivedHtmlPathForDocx(abs), { force: true }); } catch { /* no stale */ }
-    maybeConvertDocx(abs);
+    maybeConvertDocx(abs, { urgency: 'interactive' });
     return 'conversion';
   }
 
@@ -158,7 +210,39 @@ export function reprocessFileInFolder(relPath: string, folderName?: string): 'co
   return 'index';
 }
 
+function prepareDocxInFolder(relPath: string, folderName?: string): void {
+  const rel = typeof relPath === 'string' ? relPath.trim() : '';
+  if (!rel) {
+    const err = new Error('path required');
+    (err as any).status = 400;
+    throw err;
+  }
+  if (!isDocxFile(rel)) {
+    const err = new Error('only DOCX files require interactive preview preparation');
+    (err as any).status = 415;
+    throw err;
+  }
+
+  const { folderRoot } = requireRequestFolder(folderName?.trim() || undefined);
+  const abs = requireExistingFileInFolder(folderRoot, rel);
+  const sourcePath = sourcePathForAbs(abs);
+  if (!promoteConversion(sourcePath, 'interactive')) {
+    maybeConvertDocx(abs, { urgency: 'interactive' });
+  }
+}
+
 export function mount(app: express.Express): void {
+  // Opening a DOCX is an explicit user gesture. Queue it in the light lane
+  // at interactive priority (or promote the existing queued task).
+  app.post('/api/files/prepare', (req, res) => {
+    try {
+      prepareDocxInFolder(req.body?.path, parseFolderParam(req.body?.folder));
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      sendError(res, err);
+    }
+  });
+
   // Trigger a folder sync manually — useful after external edits / file
   // moves. Returns the diff (added / removed / failed). Defaults to the
   // active folder; accepts `?folder=<name>` to sync any known folder
@@ -208,6 +292,7 @@ export function mount(app: express.Express): void {
       // pendingHighlight and jump to the matching passage.
       const out = remapSearchHitsForDisplay(
         hits
+          .filter((hit) => !isConversionTextUnavailable(hit.fileName))
           .map((h) => {
             const rel = relInFolder(h.fileName, root);
             return rel == null ? null : { ...h, fileName: rel };
@@ -291,9 +376,8 @@ export function mount(app: express.Express): void {
       // dispatches by extension: PDF/image/DOCX sources re-run extraction,
       // other files clear the failure row and reconcile the folder.
       const preparationFailures = preparationFailuresForFolder(curRoot);
-      const pendingConversions = [
-        ...new Set([...getInFlightConversions(curRoot), ...getQueuedPdfConversions(curRoot)]),
-      ].sort();
+      const schedulerSnapshot = getConversionSchedulerSnapshot();
+      const pendingConversions = getInFlightConversions(curRoot);
       res.json({
         folder: curRoot,
         ...status,
@@ -305,7 +389,9 @@ export function mount(app: express.Express): void {
         orphanedCount: orphaned.length,
         visibleIndexingSettled: !semanticEnabled || pending.length === 0,
         pendingConversions,
-        conversionProgress: conversionProgressForFolder(curRoot),
+        conversionProgress: conversionProgressForFolder(curRoot, schedulerSnapshot),
+        conversionRevision: schedulerSnapshot.revision,
+        conversionVersions: conversionVersionsForFolder(curRoot, schedulerSnapshot),
         preparationFailures,
         treeVersion: getFsChangeCounter(),
         indexWarning: getIndexWarning(curRoot),
@@ -533,6 +619,7 @@ function searchDerivedMarkdown(query: string, folderRoot: string, opts: RipgrepO
 }
 
 function readDerivedSearchText(rel: string, abs: string): string | null {
+  if (isConversionTextUnavailable(abs)) return null;
   try {
     if (isDocxFile(rel)) {
       const raw = fs.readFileSync(derivedHtmlPathForDocx(abs), 'utf8');
