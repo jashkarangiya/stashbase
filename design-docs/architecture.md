@@ -68,6 +68,17 @@ StashBase does not introduce a new workspace model. A user points it at ordinary
 - New Folder opens the native folder picker at `~/Documents/StashBase`. The picker creates or selects a normal local folder; the location is a default, not a boundary.
 - One app window views one folder at a time. This is UI scope, not a separate library.
 
+`server/filesystem-path.ts` is the single platform-path seam for user files and
+folder roots. It converts native or source input into an absolute POSIX-spelled
+source path, derives a comparison identity (case-folded on Windows), performs
+component-safe root/relative/join operations for POSIX, drive, and UNC roots,
+restores existing Windows component spelling, and resolves existing or
+creatable paths without allowing symlink escape. Filesystem I/O, upload,
+explicit-folder preparation, scheduler/status keys, folder membership, and the
+Node-to-daemon adapter all cross this seam rather than implementing their own
+separator, case, or prefix rules. Durable records retain canonical source
+spelling for display and compatibility; comparison-only maps use the identity.
+
 ## 2.2 Library Scope
 
 One installation has **one library**: the set of opened folders indexed into one collection and exposed by one MCP server.
@@ -167,7 +178,7 @@ Both DOCX paths use Mammoth to extract semantic HTML; neither is a pixel-perfect
 
 PDF, image, and DOCX preparation share one in-memory conversion scheduler. It has a light lane for DOCX (capacity 2) and a heavy lane for PDF/OCR (capacity 1), so DOCX search/Agent preparation can continue while an expensive OCR subprocess is running. Visible DOCX preview is independent of both lanes. Within a lane, explicit interaction runs before work in any open window's folder, which runs before other library background work. Background work ages into the open-folder tier after 60 seconds, but never overtakes explicit interaction. Running work is not preempted.
 
-`server/conversion-scheduler.ts` owns when work runs: lane capacity, priority, ageing, absolute-path deduplication, cancellation, queue position, and renderer revision tokens. It retains the filesystem spelling supplied by the first task for I/O and display, while Windows task identity and subtree matching are case-insensitive so drive-letter or filename case variants cannot duplicate work. `server/conversion.ts` owns conversion correctness: source signatures, artifact freshness, extractor lifecycle, cleanup, durable failure recording, and direct indexing on success. The format modules (`server/pdf.ts`, `server/image.ts`, and `server/docx.ts`) provide lane/cost specs and extractor implementations. Scheduling is auxiliary; completion is still defined only by a current derived artifact with its format completion marker.
+`server/conversion-scheduler.ts` owns when work runs: lane capacity, priority, ageing, absolute-path deduplication, cancellation, queue position, and renderer revision tokens. It retains the filesystem spelling supplied by the first task for I/O and display, while delegating comparison identity and subtree matching to `server/filesystem-path.ts`; drive-letter, separator, UNC, or filename case variants therefore cannot duplicate Windows work. `server/conversion.ts` owns conversion correctness: source signatures, artifact freshness, extractor lifecycle, cleanup, durable failure recording, and direct indexing on success. The format modules (`server/pdf.ts`, `server/image.ts`, and `server/docx.ts`) provide lane/cost specs and extractor implementations. Scheduling is auxiliary; completion is still defined only by a current derived artifact with its format completion marker.
 
 PDF text-layer probing is asynchronous and does not delay enqueue. The scheduler owns a separate capacity-4 classifier pool, so a large import cannot spawn unbounded probes; task start, cancellation, folder removal, and shutdown abort the owned probe and wait for subprocess exit/error or a bounded post-kill grace. A non-cooperative child therefore cannot retain a classifier slot forever. A PDF starts at conservative OCR cost; a successful cheap probe lowers the cost while it remains queued. Probe failure or timeout leaves the PDF at heavy cost, and the actual conversion attempt remains responsible for reporting a durable failure.
 
