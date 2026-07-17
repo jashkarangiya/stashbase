@@ -61,3 +61,20 @@ jobs:
 
       - name: Build web + server
         run: pnpm build
+
+      - name: Build Windows Python sidecars
+        if: runner.os == 'Windows'
+        run: pnpm build:python-extract-sidecar
+
+      - name: Build packaged Windows app
+        if: runner.os == 'Windows'
+        env:
+          STASHBASE_REQUIRE_EXTRACT: '1'
+          STASHBASE_SKIP_SIDECAR_BUILD: '1'
+        run: pnpm dist:win
+
+      - name: Smoke packaged Windows server
+        if: runner.os == 'Windows'
+        env:
+          STASHBASE_REQUIRE_EXTRACT: '1'
+        run: node scripts/smoke-packaged-server.mjs --require-extract

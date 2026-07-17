@@ -23,6 +23,7 @@ const log = logger('files');
 import { detectFormat, detectViewerFormat, isDerivedNoteName, isImageFile, matchNoteStem, NOTE_EXTS, type FileFormat, type ViewerFormat } from './format.ts';
 import { isCloudPlaceholderName, isIndexExcludedDirName, shouldIndexFilePath } from './indexable.ts';
 import { filesystemPath, type PathAccess } from './filesystem-path.ts';
+import { normalizeFolderRelativePath, type FolderRelativePathOptions } from './folder-relative-path.ts';
 
 export { detectFormat, type FileFormat } from './format.ts';
 
@@ -68,52 +69,21 @@ export function sanitizeFilename(name: string): string {
     .normalize('NFC');
 }
 
-function safePath(rel: string): string {
-  if (typeof rel !== 'string') throw new Error('path required');
-  let norm = rel.replace(/\\/g, '/').replace(/\/+/g, '/');
-  norm = norm.replace(/^\/+|\/+$/g, '');
-  if (!norm) throw new Error('empty path');
-  if (/[\x00-\x1f'"]/.test(norm)) {
-    throw new Error('invalid path (control chars / quotes not allowed)');
-  }
-  for (const seg of norm.split('/')) {
-    if (seg === '..' || seg === '.') throw new Error('invalid path segment');
-  }
-  return norm;
-}
-
 /** Resolve relative-to-folder path to an absolute filesystem path AND
  *  defend against any edge case where the result escapes the folder root. */
-function resolveSafe(rel: string, access: PathAccess = 'lexical', label = 'path'): string {
-  const safe = safePath(rel);
+function resolveSafe(
+  rel: string,
+  access: PathAccess = 'lexical',
+  label = 'path',
+  options: FolderRelativePathOptions = {},
+): string {
+  const safe = normalizeFolderRelativePath(rel, { allowQuotes: true, ...options });
   return filesystemPath.resolveUnder(folderRoot(), safe, { access, label });
-}
-
-function sameFilesystemEntry(a: string, b: string): boolean {
-  try {
-    const aStat = fs.statSync(a);
-    const bStat = fs.statSync(b);
-    return aStat.dev === bStat.dev && aStat.ino === bStat.ino;
-  } catch {
-    return false;
-  }
-}
-
-function samePathCaseAlias(from: string, to: string): boolean {
-  if (!sameFilesystemEntry(from, to)) return false;
-  try {
-    // On a case-insensitive APFS/NTFS volume, both spellings resolve to the
-    // same canonical path. Distinct hard links share an inode but keep
-    // different real paths, so they are not mistaken for case aliases.
-    return filesystemPath.equal(filesystemPath.real(from), filesystemPath.real(to));
-  } catch {
-    return false;
-  }
 }
 
 function caseOnlySameEntryRename(from: string, to: string): boolean {
   return from !== to
-    && samePathCaseAlias(from, to);
+    && filesystemPath.sameExistingPath(from, to);
 }
 
 function uniqueRenameHop(target: string): string {
@@ -146,7 +116,7 @@ export function isSameExistingPath(oldRel: string, newRel: string): boolean {
   let newAbs: string;
   try { oldAbs = resolveSafe(oldRel); newAbs = resolveSafe(newRel); }
   catch { return false; }
-  return samePathCaseAlias(oldAbs, newAbs);
+  return filesystemPath.sameExistingPath(oldAbs, newAbs);
 }
 
 export function saveText(relPath: string, content: string): void {
@@ -227,7 +197,7 @@ export function renameOnDisk(oldRel: string, newRel: string): void {
     throw new Error('source file not found');
   }
   resolveSafe(oldRel, 'existing', 'source file');
-  if (fs.existsSync(n) && !samePathCaseAlias(o, n)) {
+  if (fs.existsSync(n) && !filesystemPath.sameExistingPath(o, n)) {
     throw new Error('target already exists');
   }
   fs.mkdirSync(path.dirname(n), { recursive: true });
@@ -337,7 +307,7 @@ function renameBundleSibling(oldNoteRel: string, newNoteRel: string): void {
   try {
     if (!fs.statSync(oldAbs).isDirectory()) return;
   } catch { return; /* no bundle to follow */ }
-  if (fs.existsSync(newAbs) && !samePathCaseAlias(oldAbs, newAbs)) return; // target taken — leave alone, surface as orphan
+  if (fs.existsSync(newAbs) && !filesystemPath.sameExistingPath(oldAbs, newAbs)) return; // target taken — leave alone, surface as orphan
   renameAbsPreservingCase(oldAbs, newAbs);
 }
 
@@ -459,10 +429,10 @@ function renameFirstExistingArtifact(oldRels: string[], newRel: string | undefin
 /** Create a (possibly nested) folder inside the folder. Returns false if
  *  the folder already exists, throws on other errors. */
 export function createFolder(relPath: string): boolean {
-  const target = resolveSafe(relPath, 'creatable', 'folder');
+  const target = resolveSafe(relPath, 'creatable', 'folder', { writable: true });
   if (fs.existsSync(target)) return false;
   fs.mkdirSync(target, { recursive: true });
-  resolveSafe(relPath, 'existing', 'folder');
+  resolveSafe(relPath, 'existing', 'folder', { writable: true });
   return true;
 }
 
@@ -477,12 +447,12 @@ export function renameFolder(oldRel: string, newRel: string): void {
     throw new Error('source folder not found');
   }
   resolveSafe(oldRel, 'existing', 'source folder');
-  if (fs.existsSync(newAbs)) {
+  if (fs.existsSync(newAbs) && !filesystemPath.sameExistingPath(oldAbs, newAbs)) {
     throw new Error('target already exists');
   }
   fs.mkdirSync(path.dirname(newAbs), { recursive: true });
   resolveSafe(newRel, 'creatable', 'target folder');
-  fs.renameSync(oldAbs, newAbs);
+  renameAbsPreservingCase(oldAbs, newAbs);
 }
 
 /** Delete a folder and everything inside it (recursively). The route
@@ -618,7 +588,7 @@ export function listFolders(): FolderEntry[] {
  *  Includes legacy hidden derived notes if they still exist on disk; current
  *  PDF/image AppData-derived notes are handled by conversion/index reconcile. */
 export function listIndexableTextFilesUnder(relPrefix: string): Array<{ name: string; content: string }> {
-  const safePrefix = safePath(relPrefix);
+  const safePrefix = normalizeFolderRelativePath(relPrefix, { allowQuotes: true });
   const start = resolveSafe(safePrefix, 'existing', 'folder');
   const out: Array<{ name: string; content: string }> = [];
   walk(start, safePrefix, (rel, full, ent) => {

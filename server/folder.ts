@@ -132,7 +132,7 @@ export function memberRootForAbs(abs: string): string | null {
   let best: string | null = null;
   for (const root of memberFolderRoots()) {
     if (filesystemPath.contains(root, target)) {
-      if (!best || root.length > best.length) best = root;
+      if (!best || filesystemPath.identity(root).length > filesystemPath.identity(best).length) best = root;
     }
   }
   return best;
@@ -174,8 +174,8 @@ function normalizeWindowId(windowId: string | null | undefined): string {
  *  `STASHBASE_FOLDER_HOME` overrides it for tests / power users. */
 export function getFolderHome(): string {
   const env = process.env.STASHBASE_FOLDER_HOME;
-  if (typeof env === 'string' && env.trim()) return path.resolve(env.trim());
-  return path.join(os.homedir(), 'Documents', 'StashBase');
+  if (typeof env === 'string' && env.trim()) return filesystemPath.absolute(env.trim());
+  return filesystemPath.join(filesystemPath.absolute(os.homedir()), 'Documents/StashBase');
 }
 
 /** True if `absPath` lives anywhere inside the folder home (any depth); the
@@ -394,10 +394,11 @@ export function setCurrentFolder(absPath: string, opts?: { create?: boolean; exc
   // Expand a leading `~` so the welcome screen can accept `~/Notes`
   // without forcing the user to spell out their home directory.
   let expanded = absPath;
-  if (expanded === '~' || expanded.startsWith('~/')) {
-    expanded = path.join(os.homedir(), expanded.slice(1));
+  if (expanded === '~') expanded = filesystemPath.absolute(os.homedir());
+  else if (expanded.startsWith('~/')) {
+    expanded = filesystemPath.join(filesystemPath.absolute(os.homedir()), expanded.slice(2));
   }
-  if (!path.isAbsolute(expanded)) throw new Error('path must be absolute');
+  if (!filesystemPath.isAbsolute(expanded)) throw new Error('path must be absolute');
   const normalized = filesystemPath.absolute(expanded);
   // A Folder can be opened from anywhere on disk — there is no unified root
   // constraint. The folder home is only the default location for the built-in
@@ -504,7 +505,7 @@ function pushRecent(absPath: string): void {
     if (storedFolderPathEquals(v.path, absPath)) return false;
     try { return fs.statSync(v.path).isDirectory(); } catch { return false; }
   });
-  // Reopening the same Windows folder through a separator/case variant must
+  // Reopening the same folder through an equivalent filesystem spelling must
   // not rewrite the durable source spelling: index rows, derived keys, and
   // daemon replay all continue from the first established root.
   const retainedPath = existing

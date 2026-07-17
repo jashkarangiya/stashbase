@@ -55,6 +55,16 @@ class StashbaseDaemonTests(unittest.TestCase):
             )
             self.assertEqual(stashbase_daemon._source_child_prefix("C:/"), "C:/")
             self.assertEqual(
+                stashbase_daemon._source_parent("C:/Folder/File.md"),
+                "C:/Folder",
+            )
+            self.assertEqual(
+                stashbase_daemon._relative_source_path(
+                    "C:/Folder/", "C:/Folder/Nested/File.md"
+                ),
+                "Nested/File.md",
+            )
+            self.assertEqual(
                 stashbase_daemon._norm_root("//Server/Share"),
                 "//Server/Share/",
             )

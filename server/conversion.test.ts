@@ -47,6 +47,8 @@ test('stale final output is invalidated synchronously when conversion is queued'
     await completion;
     assert.equal(fs.readFileSync(derived, 'utf8'), '<p>fresh searchable text</p>');
   } finally {
+    const { closeStateDb } = await import('./state-db.ts');
+    closeStateDb();
     if (previousDataRoot == null) delete process.env.STASHBASE_LOCAL_DATA_ROOT;
     else process.env.STASHBASE_LOCAL_DATA_ROOT = previousDataRoot;
     fs.rmSync(root, { recursive: true, force: true });
@@ -123,6 +125,8 @@ test('running conversions protect file operations while queued work stays usable
     await Promise.all([completion, secondCompletion, queuedCompletion]);
   } finally {
     gate.resolve();
+    const { closeStateDb } = await import('./state-db.ts');
+    closeStateDb();
     if (previousDataRoot == null) delete process.env.STASHBASE_LOCAL_DATA_ROOT;
     else process.env.STASHBASE_LOCAL_DATA_ROOT = previousDataRoot;
     fs.rmSync(root, { recursive: true, force: true });

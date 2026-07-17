@@ -23,7 +23,7 @@ import {
 } from '../files.ts';
 import { isDocxFile, isImageFile, isNoteName } from '../format.ts';
 import { getApiKey } from '../app-config.ts';
-import { isCloudPlaceholderName, isIndexExcludedDirName } from '../indexable.ts';
+import { normalizeFolderRelativePath } from '../folder-relative-path.ts';
 import { errorMessage, logger } from '../log.ts';
 import {
   getCurrentFolder,
@@ -261,17 +261,7 @@ async function handleUpload(req: express.Request, res: express.Response): Promis
  *  carry it along when renamed. A renamed folder moves as a unit, so any
  *  bundle that lives *inside* it follows along untouched. */
 export function validateUploadPath(relPath: string): void {
-  const segments = relPath.replace(/\\/g, '/').split('/').filter(Boolean);
-  for (const seg of segments) {
-    if (seg === '.' || seg === '..') throw new Error('upload path contains an invalid segment');
-    if (isCloudPlaceholderName(seg)) {
-      throw new Error('upload path points to an iCloud placeholder; download the file locally first');
-    }
-    if (seg === '.stashbase' || seg.startsWith('.stashbase-')) {
-      throw new Error('upload path cannot write into .stashbase');
-    }
-    if (isIndexExcludedDirName(seg)) throw new Error(`upload path cannot include excluded directory "${seg}"`);
-  }
+  normalizeFolderRelativePath(relPath, { label: 'upload path', writable: true, allowQuotes: true });
 }
 
 function rawUploadPathFor(files: Express.Multer.File[], paths: string[], idx: number): string {

@@ -10,7 +10,8 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { analyzeHtml } from '../html.ts';
-import { contentSizeError, isCloudPlaceholderName, isIndexExcludedDirName } from '../indexable.ts';
+import { contentSizeError } from '../indexable.ts';
+import { normalizeFolderRelativePath } from '../folder-relative-path.ts';
 import {
   createTextExclusive,
   derivedArtifactsForSource,
@@ -102,19 +103,11 @@ function queueViewerConversion(
 }
 
 export function validateEditableFileWrite(name: string): void {
-  const normalized = name.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/^\/+|\/+$/g, '');
-  if (!normalized) throw fileWriteError('path required');
-  for (const seg of normalized.split('/')) {
-    if (seg === '.' || seg === '..') throw fileWriteError('invalid path segment');
-    if (isCloudPlaceholderName(seg)) {
-      throw fileWriteError('cannot save an iCloud placeholder; download the file locally first');
-    }
-    if (seg === '.stashbase' || seg.startsWith('.stashbase-')) {
-      throw fileWriteError('cannot write into .stashbase');
-    }
-    if (isIndexExcludedDirName(seg)) {
-      throw fileWriteError(`cannot write into excluded directory "${seg}"`);
-    }
+  let normalized: string;
+  try {
+    normalized = normalizeFolderRelativePath(name, { writable: true, allowQuotes: true });
+  } catch (err: unknown) {
+    throw fileWriteError(errorMessage(err));
   }
   if (isDerivedNoteName(normalized)) {
     throw fileWriteError('cannot edit app-maintained derived notes');

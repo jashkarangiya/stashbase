@@ -496,6 +496,14 @@ def _join_source_path(root: str, relative: str) -> str:
     return root + relative if root.endswith("/") else root + "/" + relative
 
 
+def _source_parent(source: str) -> str:
+    return "/".join(source.split("/")[:-1])
+
+
+def _relative_source_path(prefix: str, source: str) -> str:
+    return source[len(prefix):] if source.startswith(prefix) else source.rsplit("/", 1)[-1]
+
+
 class StashbaseStore:
     """Holds the global app-data DB and the **single** ``MilvusStore``
     every folder shares. V1 has one fixed embedder (OpenAI), so the whole
@@ -798,7 +806,7 @@ def op_upsert(svc: StashbaseStore, args: dict) -> dict:
     vectors = _embed_with_cache(svc, path, embedder, texts)
     embed_ms = int((time.time() - te0) * 1000)
 
-    parent = "/".join(path.split("/")[:-1])
+    parent = _source_parent(path)
     records = []
     for i, (ch, vec) in enumerate(zip(chunks, vectors)):
         records.append(ChunkRecord(
@@ -906,7 +914,7 @@ def _try_rename_without_reembed(
     """
     from mfs.store import ChunkRecord
 
-    new_parent = "/".join(new.split("/")[:-1])
+    new_parent = _source_parent(new)
     fields = [
         "id", "source", "parent_dir", "chunk_index", "start_line", "end_line",
         "chunk_text", "dense_vector", "content_type", "file_hash",
@@ -1030,7 +1038,7 @@ def op_rename_prefix(svc: StashbaseStore, args: dict) -> dict:
 
     for f in files:
         new_path = f["path"]
-        rel = new_path[len(new_prefix):] if new_path.startswith(new_prefix) else new_path.split("/")[-1]
+        rel = _relative_source_path(new_prefix, new_path)
         old_path = old_prefix + rel
         arg_hash = f.get("file_hash")
         copied = None

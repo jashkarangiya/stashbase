@@ -70,9 +70,10 @@ export function mount(app: express.Express): void {
     const requested = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
     if (!requested) return res.status(400).json({ error: 'path required' });
     try {
-      if (!createFolder(requested)) return res.status(409).json({ error: 'folder exists' });
+      const folderPath = sanitizeFilename(requested);
+      if (!createFolder(folderPath)) return res.status(409).json({ error: 'folder exists' });
       noteTreeChanged();
-      res.json({ path: requested });
+      res.json({ path: folderPath });
     } catch (err: unknown) {
       sendError(res, err);
     }

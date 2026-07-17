@@ -38,8 +38,7 @@ const log = logger('index');
 // already passes absolute paths/roots (`state.ts` binds absolute roots) and accepts absolute paths
 // back. This adapter normalizes every crossing so daemon calls never acquire
 // a second separator or relative-path convention.
-const toAbs = (p: string): string => filesystemPath.absolute(p);
-const fromAbs = (p: string): string => filesystemPath.absolute(p);
+const normalizeDaemonPath = (p: string): string => filesystemPath.absolute(p);
 
 /** Rebase one indexed source onto the retained spelling of its longest bound
  * member root. Identity is deliberately computed only by filesystemPath;
@@ -119,7 +118,7 @@ export class MfsIndexer implements Indexer {
 
   async bindFolder(folder: string, cfg: EmbedderRuntimeConfig): Promise<void> {
     const daemon = getDaemon();
-    const source = toAbs(folder);
+    const source = normalizeDaemonPath(folder);
     const key = filesystemPath.identity(source);
     await daemon.bindFolder(source, {
       provider: cfg.provider,
@@ -146,7 +145,7 @@ export class MfsIndexer implements Indexer {
   }
 
   async unbindFolder(folder: string): Promise<void> {
-    const source = toAbs(folder);
+    const source = normalizeDaemonPath(folder);
     const key = filesystemPath.identity(source);
     await getDaemon().unbindFolder(source);
     this.folderReady.delete(key);
@@ -155,13 +154,13 @@ export class MfsIndexer implements Indexer {
 
   async upsertFile(filePath: string, content: string): Promise<number> {
     if (!shouldIndexSourcePath(filePath)) {
-      await getDaemon().call('delete', { path: toAbs(filePath) });
+      await getDaemon().call('delete', { path: normalizeDaemonPath(filePath) });
       log.info(`upsert ${filePath}: skipped by index rules`);
       return 0;
     }
     const tooLarge = contentSizeError(content);
     if (tooLarge) {
-      await getDaemon().call('delete', { path: toAbs(filePath) });
+      await getDaemon().call('delete', { path: normalizeDaemonPath(filePath) });
       log.warn(`upsert ${filePath}: ${tooLarge}`);
       return 0;
     }
@@ -172,14 +171,14 @@ export class MfsIndexer implements Indexer {
     // round-trip. `/api/index-status` filters the same files out of
     // `pending` (see `hasNoExtractableText`) so they don't pulse forever.
     if (text.trim().length === 0) {
-      await getDaemon().call('delete', { path: toAbs(filePath) });
+      await getDaemon().call('delete', { path: normalizeDaemonPath(filePath) });
       log.info(`upsert ${filePath}: no extractable text, skipped embedding`);
       return 0;
     }
     const t0 = Date.now();
     const res = await getDaemon().call<{ chunks: number; embed_ms: number; total_ms: number }>(
       'upsert', {
-        path: toAbs(filePath),
+        path: normalizeDaemonPath(filePath),
         path_identity: filesystemPath.identity(filePath),
         content: text,
         ext,
@@ -204,12 +203,12 @@ export class MfsIndexer implements Indexer {
       ? analyzeHtml(derivedContent).plaintext
       : derivedContent;
     if (content.trim().length === 0) {
-      await getDaemon().call('delete', { path: toAbs(sourceAbs) });
+      await getDaemon().call('delete', { path: normalizeDaemonPath(sourceAbs) });
       return 0;
     }
     const res = await getDaemon().call<{ chunks: number; embed_ms: number; total_ms: number }>(
       'upsert', {
-        path: toAbs(sourceAbs),
+        path: normalizeDaemonPath(sourceAbs),
         path_identity: filesystemPath.identity(sourceAbs),
         content,
         ext: '.md',
@@ -222,11 +221,11 @@ export class MfsIndexer implements Indexer {
   }
 
   async deleteFile(filePath: string): Promise<void> {
-    await getDaemon().call('delete', { path: toAbs(filePath) });
+    await getDaemon().call('delete', { path: normalizeDaemonPath(filePath) });
   }
 
   async deletePathPrefix(prefix: string): Promise<void> {
-    const norm = toAbs(prefix);
+    const norm = normalizeDaemonPath(prefix);
     const res = await getDaemon().call<{ removed: number }>(
       'delete_prefix', { prefix: norm },
     );
@@ -238,8 +237,8 @@ export class MfsIndexer implements Indexer {
     const t0 = Date.now();
     const res = await getDaemon().call<{ chunks: number; embed_ms: number; fast_path?: boolean }>(
       'rename', {
-        old: toAbs(oldPath),
-        new: toAbs(newPath),
+        old: normalizeDaemonPath(oldPath),
+        new: normalizeDaemonPath(newPath),
         new_identity: filesystemPath.identity(newPath),
         content: text,
         ext,
@@ -263,21 +262,21 @@ export class MfsIndexer implements Indexer {
     newPrefix: string,
     files: Array<{ path: string; content: string }>,
   ): Promise<void> {
-    const oldRoot = toAbs(oldPrefix);
-    const newRoot = toAbs(newPrefix);
+    const oldRoot = normalizeDaemonPath(oldPrefix);
+    const newRoot = normalizeDaemonPath(newPrefix);
     if (files.length === 0) {
       await getDaemon().call('rename_prefix', { old: oldRoot, new: newRoot, files: [] });
       return;
     }
     const payload = files.map((f) => {
-      const rel = filesystemPath.relative(oldRoot, toAbs(f.path));
+      const rel = filesystemPath.relative(oldRoot, normalizeDaemonPath(f.path));
       if (rel == null || rel === '') {
         throw new Error(`rename source is outside prefix: ${f.path}`);
       }
       const newP = filesystemPath.join(newRoot, rel);
       const { text, ext, fileHash } = prepareForIndex(newP, f.content);
       return {
-        path: toAbs(newP),
+        path: normalizeDaemonPath(newP),
         path_identity: filesystemPath.identity(newP),
         content: text,
         ext,
@@ -298,7 +297,7 @@ export class MfsIndexer implements Indexer {
 
   async syncDiff(folder?: string): Promise<SyncDiff> {
     const args: Record<string, unknown> = {};
-    if (folder) args.folder = toAbs(folder);
+    if (folder) args.folder = normalizeDaemonPath(folder);
     const res = await getDaemon().call<{
       added: string[];
       modified: string[];
@@ -306,22 +305,22 @@ export class MfsIndexer implements Indexer {
       renamed?: Array<{ old: string; new: string; file_hash: string }>;
       unchanged_count: number;
     }>('scan_diff', args);
-    const renamed = (res.renamed ?? []).map((r) => ({ old: fromAbs(r.old), new: fromAbs(r.new), fileHash: r.file_hash }));
+    const renamed = (res.renamed ?? []).map((r) => ({ old: normalizeDaemonPath(r.old), new: normalizeDaemonPath(r.new), fileHash: r.file_hash }));
     return {
-      added: res.added.map(fromAbs),
-      modified: res.modified.map(fromAbs),
-      deleted: res.deleted.map(fromAbs),
+      added: res.added.map(normalizeDaemonPath),
+      modified: res.modified.map(normalizeDaemonPath),
+      deleted: res.deleted.map(normalizeDaemonPath),
       renamed,
     };
   }
 
   async search(query: string, topK: number, folder?: string, pathPrefix?: string): Promise<SearchHit[]> {
     const args: Record<string, unknown> = { query, top_k: topK };
-    if (folder) args.folder = toAbs(folder);
-    if (pathPrefix) args.path_prefix = toAbs(pathPrefix);
+    if (folder) args.folder = normalizeDaemonPath(folder);
+    if (pathPrefix) args.path_prefix = normalizeDaemonPath(pathPrefix);
     const res = await getDaemon().call<{ hits: DaemonHit[] }>('search', args);
     return res.hits.map((h) => ({
-      fileName: fromAbs(h.path),
+      fileName: normalizeDaemonPath(h.path),
       chunkIndex: h.chunk_index,
       content: h.chunk_text,
       // MFS markdown chunker stuffs heading info into metadata; lift it
@@ -341,7 +340,7 @@ export class MfsIndexer implements Indexer {
     // and indexed-name truth, which keeps Node from maintaining a second
     // partial cache that can drift from the vector store.
     const args: Record<string, unknown> = {};
-    if (folder) args.folder = toAbs(folder);
+    if (folder) args.folder = normalizeDaemonPath(folder);
     const res = await getDaemon().call<{
       total: number;
       indexed: number;
@@ -358,9 +357,9 @@ export class MfsIndexer implements Indexer {
       total: res.total,
       indexed: res.indexed,
       pendingCount: res.pending_count,
-      pending: res.pending.map(fromAbs),
+      pending: res.pending.map(normalizeDaemonPath),
       orphanedCount: res.orphaned_count,
-      orphaned: res.orphaned.map(fromAbs),
+      orphaned: res.orphaned.map(normalizeDaemonPath),
       upToDate: res.up_to_date,
       indexReady: !folder ? true : this.folderReady.has(filesystemPath.identity(folder)),
     };
@@ -368,10 +367,10 @@ export class MfsIndexer implements Indexer {
 
   async listFiles(folder?: string): Promise<Record<string, string>> {
     const args: Record<string, unknown> = {};
-    if (folder) args.folder = toAbs(folder);
+    if (folder) args.folder = normalizeDaemonPath(folder);
     const res = await getDaemon().call<{ files: Record<string, string> }>('list', args);
     const out: Record<string, string> = {};
-    for (const [abs, hash] of Object.entries(res.files)) out[fromAbs(abs)] = hash;
+    for (const [abs, hash] of Object.entries(res.files)) out[normalizeDaemonPath(abs)] = hash;
     return out;
   }
 

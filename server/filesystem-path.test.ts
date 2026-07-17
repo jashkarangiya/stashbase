@@ -14,6 +14,65 @@ test('POSIX paths preserve case and root joins', () => {
   assert.equal(paths.relative('/Data', '/Database/File.md'), null);
 });
 
+test('macOS identity follows the mounted volume case behaviour', (t) => {
+  if (process.platform !== 'darwin') {
+    t.skip('requires a native macOS filesystem');
+    return;
+  }
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'stashbase-darwin-path-'));
+  const root = path.join(temp, 'MixedCaseRoot');
+  fs.mkdirSync(root);
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+
+  const alias = path.join(temp, 'mixedcaseroot');
+  let sameEntry = false;
+  try {
+    const actualStat = fs.statSync(root);
+    const aliasStat = fs.statSync(alias);
+    sameEntry = actualStat.dev === aliasStat.dev && actualStat.ino === aliasStat.ino;
+  } catch {
+    // A case-sensitive APFS volume correctly keeps the identities distinct.
+  }
+
+  const paths = createFilesystemPath({ platform: 'darwin', cwd: temp });
+  assert.equal(paths.equal(root, alias), sameEntry);
+  assert.equal(paths.sameExistingPath(root, alias), sameEntry);
+  assert.equal(
+    paths.equal(path.join(root, 'Future.docx'), path.join(alias, 'future.docx')),
+    sameEntry,
+  );
+  assert.equal(paths.contains(root, path.join(alias, 'future.docx')), sameEntry);
+  assert.equal(
+    paths.relative(root, path.join(alias, 'future.docx')),
+    sameEntry ? 'future.docx' : null,
+  );
+
+  const composed = path.join(temp, 'Caf\u00e9');
+  const decomposed = path.join(temp, 'Cafe\u0301');
+  fs.mkdirSync(composed);
+  let sameUnicodeEntry = false;
+  try {
+    const composedStat = fs.statSync(composed);
+    const decomposedStat = fs.statSync(decomposed);
+    sameUnicodeEntry = composedStat.dev === decomposedStat.dev && composedStat.ino === decomposedStat.ino;
+  } catch {
+    // Preserve distinct normalization forms when the mounted volume does.
+  }
+  assert.equal(paths.equal(composed, decomposed), sameUnicodeEntry);
+});
+
+test('existing path aliases do not collapse distinct hard links', (t) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'stashbase-path-alias-'));
+  const source = path.join(temp, 'source.md');
+  const hardLink = path.join(temp, 'hard-link.md');
+  fs.writeFileSync(source, 'content');
+  fs.linkSync(source, hardLink);
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+
+  assert.equal(filesystemPath.sameExistingPath(source, source), true);
+  assert.equal(filesystemPath.sameExistingPath(source, hardLink), false);
+});
+
 test('Windows drive paths share one identity across separator and case variants', () => {
   const paths = createFilesystemPath({ platform: 'win32', cwd: 'C:\\workspace' });
   assert.equal(paths.absolute('c:\\Users\\Alice\\..\\ALICE\\File.docx'), 'c:/Users/ALICE/File.docx');
@@ -75,11 +134,7 @@ test('POSIX paths reject foreign Windows absolute drive syntax but keep valid co
   assert.equal(paths.absolute('A:notes.md'), '/workspace/A:notes.md');
 });
 
-test('resolveUnder blocks existing and creatable symlink escapes', (t) => {
-  if (process.platform === 'win32') {
-    t.skip('symlink creation requires platform-specific privileges on Windows');
-    return;
-  }
+test('resolveUnder blocks existing and creatable symlink or junction escapes', (t) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'stashbase-path-'));
   const root = path.join(temp, 'root');
   const outside = path.join(temp, 'outside');
@@ -87,8 +142,10 @@ test('resolveUnder blocks existing and creatable symlink escapes', (t) => {
   fs.mkdirSync(outside);
   fs.writeFileSync(path.join(root, 'inside.md'), 'inside');
   fs.writeFileSync(path.join(outside, 'outside.md'), 'outside');
-  fs.symlinkSync(outside, path.join(root, 'link'));
-  fs.symlinkSync(path.join(outside, 'outside.md'), path.join(root, 'linked-file.md'));
+  fs.symlinkSync(outside, path.join(root, 'link'), process.platform === 'win32' ? 'junction' : 'dir');
+  if (process.platform !== 'win32') {
+    fs.symlinkSync(path.join(outside, 'outside.md'), path.join(root, 'linked-file.md'));
+  }
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
 
   assert.equal(
@@ -103,10 +160,12 @@ test('resolveUnder blocks existing and creatable symlink escapes', (t) => {
     () => filesystemPath.resolveUnder(root, 'link/new.md', { access: 'creatable' }),
     /escapes folder through symlink/,
   );
-  assert.throws(
-    () => filesystemPath.resolveUnder(root, 'linked-file.md', { access: 'creatable' }),
-    /escapes folder through symlink/,
-  );
+  if (process.platform !== 'win32') {
+    assert.throws(
+      () => filesystemPath.resolveUnder(root, 'linked-file.md', { access: 'creatable' }),
+      /escapes folder through symlink/,
+    );
+  }
   assert.equal(
     filesystemPath.resolveUnder(root, 'new/child.md', { access: 'creatable' }),
     path.join(root, 'new', 'child.md'),

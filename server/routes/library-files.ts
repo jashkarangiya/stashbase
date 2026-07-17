@@ -23,7 +23,8 @@ import { remapSearchHitsForDisplay } from '../search-display.ts';
 import { getLibraryInfo } from '../library-info.ts';
 import { sendError } from '../http.ts';
 import { getApiKey } from '../app-config.ts';
-import { contentSizeError, isCloudPlaceholderName, isIndexExcludedDirName } from '../indexable.ts';
+import { contentSizeError } from '../indexable.ts';
+import { normalizeFolderRelativePath } from '../folder-relative-path.ts';
 import { detectFormat, detectViewerFormat, isDerivedNoteName, isImageFile } from '../format.ts';
 import {
   deleteFile,
@@ -313,7 +314,7 @@ function resolveLibraryAbs(raw: unknown, opts: { allowEmpty: boolean }): string 
     if (opts.allowEmpty) return '';
     throw routeError('path required', 400);
   }
-  if (/[\x00-\x1f'"]/.test(value)) throw routeError('path contains invalid characters', 400);
+  if (/[\x00-\x1f]/.test(value)) throw routeError('path contains invalid characters', 400);
   for (const seg of value.replace(/\\/g, '/').split('/')) {
     if (seg === '.' || seg === '..') throw routeError('path contains an invalid segment', 400);
   }
@@ -355,16 +356,10 @@ function normalizeLibraryDirectoryPath(raw: unknown): { abs?: string; folderRoot
 }
 
 function validateLibraryWritableFolderRel(folderRel: string): void {
-  for (const seg of folderRel.split('/')) {
-    if (isCloudPlaceholderName(seg)) {
-      throw routeError('cannot write an iCloud placeholder; download the file locally first', 400, 'INVALID_FILE_WRITE');
-    }
-    if (seg === '.stashbase' || seg.startsWith('.stashbase-')) {
-      throw routeError('cannot write into .stashbase', 400, 'INVALID_FILE_WRITE');
-    }
-    if (isIndexExcludedDirName(seg)) {
-      throw routeError(`cannot write into excluded directory "${seg}"`, 400, 'INVALID_FILE_WRITE');
-    }
+  try {
+    normalizeFolderRelativePath(folderRel, { writable: true, allowQuotes: true });
+  } catch (err: unknown) {
+    throw routeError(errorMessage(err), 400, 'INVALID_FILE_WRITE');
   }
 }
 
