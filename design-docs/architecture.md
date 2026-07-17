@@ -72,11 +72,15 @@ StashBase does not introduce a new workspace model. A user points it at ordinary
 roots; `server/folder-relative-path.ts` owns the POSIX-spelled path policy inside
 one folder. `server/library-file-access.ts` composes those rules with library
 membership, hidden-derived filtering, and writable-path validation for the MCP
-and library HTTP surface. `server/library-file-reader.ts` owns direct versus
-derived reads and the conversion-not-ready contract; `server/routes/library-files.ts`
-keeps request and response orchestration. Filesystem, scheduler, membership,
-state, and daemon adapters cross these modules. Identity, containment,
-migration, and protocol invariants live in
+and library HTTP surface. `server/library-directory.ts` owns member-folder
+listing, `server/library-file-reader.ts` owns direct versus derived reads and
+the conversion-not-ready contract, and `server/library-file-mutations.ts` owns
+library write, edit, move, and delete transactions. `server/file-save.ts`
+provides the shared editable-file save and index-update path, while
+`server/file-operation-guard.ts` prevents rename/delete only while conversion
+is running. `server/routes/library-files.ts` keeps request and response
+orchestration. Filesystem, scheduler, membership, state, and daemon adapters
+cross these modules. Identity, containment, migration, and protocol invariants live in
 [data-layer §8.2](data-layer.md#82-conversion-scheduler-and-renderer-notification).
 
 ## 2.2 Library Scope
