@@ -412,6 +412,15 @@ class CodexSession {
         break;
       }
       case 'item/fileChange/requestApproval': {
+        // Edit is deliberately narrow: ordinary changes within the opened
+        // folder do not need a click per edit, but a broader filesystem grant
+        // must stay on the shared approval-card path. Keeping the app-server
+        // policy at on-request also leaves command, network, and sandbox
+        // escalation approvals visible instead of making Edit a bypass.
+        if (this.accessMode === 'acceptEdits' && isWorkspaceFileChange(params, this.cwd)) {
+          this.respond(id, { decision: 'accept' });
+          break;
+        }
         const approvalId = `codex-${String(id)}`;
         const itemId = stringValue(params.itemId) || approvalId;
         this.pendingApprovals.set(approvalId, { requestId: id, method, params });
@@ -446,7 +455,7 @@ class CodexSession {
       case 'mcpServer/elicitation/request': {
         const approval = mcpToolApprovalFromElicitation(params);
         if (approval) {
-          if (this.accessMode === 'acceptEdits' && isStashbaseMcpApproval(approval)) {
+          if (this.accessMode === 'acceptEdits' && isStashbaseWorkspaceEdit(approval, this.cwd)) {
             this.respond(id, { action: 'accept', content: {}, _meta: null });
             break;
           }
@@ -858,10 +867,6 @@ function mcpToolApprovalFromElicitation(params: JsonObject): {
   };
 }
 
-function isStashbaseMcpApproval(approval: { input: JsonObject }): boolean {
-  return stringValue(approval.input.server).toLowerCase() === 'stashbase';
-}
-
 function requestedPermissions(params: JsonObject | undefined): JsonObject {
   const permissions = objectValue(params?.permissions);
   const granted: JsonObject = {};
@@ -891,14 +896,17 @@ function codexEffortOption(effort: string | undefined): { effort?: string } {
   return ['low', 'medium', 'high', 'xhigh'].includes(effort) ? { effort } : {};
 }
 
-function codexAccessOptions(mode: string | undefined): {
+export function codexAccessOptions(mode: string | undefined): {
   approvalPolicy: string;
   approvalsReviewer: string;
   sandbox: string;
 } {
   switch (mode) {
     case 'acceptEdits':
-      return { approvalPolicy: 'never', approvalsReviewer: 'user', sandbox: 'workspace-write' };
+      // File-change approvals are selectively accepted above when their
+      // requested root is inside the open folder. Do not use `never` here:
+      // it would also bypass sensitive approvals the shared contract keeps.
+      return { approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'workspace-write' };
     case 'plan':
       return { approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'read-only' };
     case 'auto':
@@ -906,6 +914,52 @@ function codexAccessOptions(mode: string | undefined): {
     case 'default':
     default:
       return { approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'workspace-write' };
+  }
+}
+
+/** Whether an app-server file-change request stays entirely within the
+ * folder the panel opened. Missing or malformed roots are never auto-allowed.
+ */
+export function isWorkspaceFileChange(params: JsonObject | undefined, cwd: string | null): boolean {
+  const grantRoot = stringValue(params?.grantRoot);
+  return isPathWithinWorkspace(grantRoot, cwd);
+}
+
+/** StashBase MCP writes use absolute file paths. Edit mode may accept only
+ * its ordinary write/edit operations inside the opened folder; rename and
+ * deletion stay visible because they can have broader consequences. */
+export function isStashbaseWorkspaceEdit(approval: { input: JsonObject }, cwd: string | null): boolean {
+  const tool = stringValue(approval.input.tool);
+  const args = objectValue(approval.input.arguments);
+  return stringValue(approval.input.server).toLowerCase() === 'stashbase'
+    && (tool === 'write_file' || tool === 'edit_file')
+    && isPathWithinWorkspace(stringValue(args.path), cwd);
+}
+
+function isPathWithinWorkspace(candidate: string, cwd: string | null): boolean {
+  if (!cwd || !candidate) return false;
+  const workspace = resolvedExistingPath(cwd);
+  const target = resolvedExistingPath(candidate);
+  if (!workspace || !target) return false;
+  const relative = path.relative(workspace, target);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+/** Resolve a candidate through all existing path components. This handles a
+ * new file beneath an existing directory while failing closed if its root or
+ * an existing parent cannot be resolved. */
+function resolvedExistingPath(candidate: string): string | null {
+  const absolute = path.resolve(candidate);
+  let existing = absolute;
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) return null;
+    existing = parent;
+  }
+  try {
+    return path.resolve(fs.realpathSync.native(existing), path.relative(existing, absolute));
+  } catch {
+    return null;
   }
 }
 

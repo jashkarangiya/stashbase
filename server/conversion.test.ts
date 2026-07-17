@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { closeStateDb } from './state-db.ts';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -47,6 +48,7 @@ test('stale final output is invalidated synchronously when conversion is queued'
     await completion;
     assert.equal(fs.readFileSync(derived, 'utf8'), '<p>fresh searchable text</p>');
   } finally {
+    closeStateDb();
     if (previousDataRoot == null) delete process.env.STASHBASE_LOCAL_DATA_ROOT;
     else process.env.STASHBASE_LOCAL_DATA_ROOT = previousDataRoot;
     fs.rmSync(root, { recursive: true, force: true });
@@ -123,6 +125,7 @@ test('running conversions protect file operations while queued work stays usable
     await Promise.all([completion, secondCompletion, queuedCompletion]);
   } finally {
     gate.resolve();
+    closeStateDb();
     if (previousDataRoot == null) delete process.env.STASHBASE_LOCAL_DATA_ROOT;
     else process.env.STASHBASE_LOCAL_DATA_ROOT = previousDataRoot;
     fs.rmSync(root, { recursive: true, force: true });
