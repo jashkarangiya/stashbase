@@ -16,10 +16,12 @@ This is not a second architecture document. `architecture.md` explains where mod
 | Go Home / close the active folder | Conversion may still be running, while the UI leaves the folder view. | In-flight work is process-owned. The renderer returns to Welcome immediately; server-side folder close runs in the background and must not block navigation. Welcome may keep a display snapshot, but it is not data truth. |
 | Open a library folder from Welcome | Folder opening can fail or hang at the transport/action boundary before the folder view appears. | The Welcome opening overlay is only a UI guard: it does not block library clicks, follows the latest click, clears when the latest open action settles, and has a 20s watchdog so it cannot permanently cover the app. |
 | Reopen a folder | Old derived text may exist from a partial or legacy conversion. | Completion must be verified, not inferred from file existence alone. |
+| Change a convertible source while its lane is busy | A stale final derived artifact can remain readable during the queue wait. | A newly queued task invalidates final output synchronously; PDF resume batches remain scratch, never completion truth. |
 | Import or copy in a large PDF | Some PDF batches may finish before the app exits or the extractor is killed. | Batch scratch can be reused, but the final PDF note is complete only with the completion marker. |
-| Import several PDFs, including scans | Scanned PDFs can monopolize conversion time because OCR is slow. | PDF scheduling probes for a text layer and runs text-layer PDFs before scanned PDFs. |
-| Open a folder while other library PDFs are queued | Background library conversion can delay the folder the user is actively trying to search/read. | PDF scheduling prefers queued work in the current folder, then text-layer PDFs, then original enqueue order. Already-running conversions are not preempted. |
-| OCR a scanned PDF or image | OCR libraries may use many native threads and make the desktop UI feel stuck even though work is in a child process. | Extractor work runs through a bounded global slot, with conservative native-thread limits and lower OS priority; OCR may take longer, but UI responsiveness has priority. |
+| Import several PDFs, including scans | Scanned PDFs can monopolize conversion time, while one probe per import can itself exhaust subprocess resources. | A capacity-4 scheduler-owned classifier pool probes asynchronously; cheaper text-layer PDFs run first within the same urgency tier, and probe failure/timeout remains conservative heavy work. |
+| Open a folder while other library conversions are queued | Background library conversion can delay the folder the user is actively trying to search/read. | One scheduler prefers explicit interaction, then work under any open window's folder, then library background work. Background tasks age only into the open-folder tier; running work is not preempted. |
+| Open an unprepared DOCX while OCR is running | Making visible content depend on server preparation can leave the document on “Preparing…” behind unrelated work or a failed scheduler path; parsing a large source on the renderer thread can also freeze navigation. | An on-demand worker converts and sanitizes the source directly, independently of server preparation and the renderer UI thread. A 20s watchdog aborts a stuck direct path and exposes the server-derived fallback. Opening/importing also promotes the durable search/Agent derivation into the capacity-2 light lane; its status never replaces visible content. |
+| OCR a scanned PDF or image | OCR libraries may use many native threads and make the desktop UI feel stuck even though work is in a child process. | PDF/image extractor work runs through the capacity-1 heavy lane, with conservative native-thread limits and lower OS priority; OCR may take longer, but UI responsiveness has priority. |
 | Run without optional native helpers | A packaged build may be missing the PDF/OCR extractor, or a native status-store dependency may fail to load. | Optional preparation/status layers must degrade to warnings or failed preparation records; opening folders and browsing source files must keep working. |
 | Import an image | OCR may fail or produce empty text. | Empty OCR text is a preparation failure for search; the source image remains viewable. |
 | Search immediately after import | Conversion completion and semantic indexing completion are different clocks. | Keyword search can use completed derived text; semantic search depends on daemon index status only when embeddings are enabled. |
@@ -69,7 +71,7 @@ PDF batch scratch is not completion. A marker-less PDF derived note is treated a
 
 ## DOCX
 
-DOCX files remain the source files, but StashBase reads them through derived HTML because the app does not provide a native Word renderer.
+DOCX files remain the source files. Because the app does not provide a native Word renderer, the visible preview fetches the source bytes and converts plus sanitizes them in an on-demand worker before rendering. This direct path has no durable completion state, does not wait for the conversion scheduler, and does not parse or sanitize the document on the renderer UI thread. It has a 20-second fetch/worker deadline, resolves relative assets against the source folder, and uses a cheap filesystem version token so external replacements reload both active and reactivated tabs.
 
 A DOCX conversion is complete only when:
 
@@ -78,7 +80,7 @@ A DOCX conversion is complete only when:
 - it includes the StashBase DOCX completion marker
 - it contains extractable text
 
-The derived HTML is used for preview, Agent text reading, keyword search, and semantic indexing. Search results still point to the source `.docx`.
+The durable derived HTML is used for Agent text reading, keyword search, semantic indexing, and fallback preview when direct renderer conversion fails. Server-side Mammoth parsing runs in a terminable worker, observes scheduler cancellation, and has a 60-second deadline. Its fragment passes through the same no-scripts sanitizer as direct preview before being committed, so fallback never exposes raw document markup. It is not required for the normal visible preview. Search results still point to the source `.docx`.
 
 ## Semantic Index
 
@@ -112,14 +114,14 @@ Preparation status is auxiliary. If the status store cannot load, StashBase may 
 Reprocess does this:
 
 - clears the failure row
-- for PDF/image/DOCX sources, removes stale final derived artifacts and queues extraction again
+- for PDF/image/DOCX sources, removes stale final derived artifacts and queues extraction again at interactive priority (or promotes an existing queued task)
 - for directly readable sources, reconciles the folder so the source can be indexed again
 
 For PDFs, reprocess and transient recovery preserve resumable batch scratch when possible, so a large PDF can continue from completed batches instead of starting from page one.
 
-PDF queue priority is an optimization, not a source of truth. Text-layer PDFs are scheduled ahead of scanned PDFs so slow OCR does not block cheaper work. Manual PDF reprocess is prioritized ahead of normal queued work.
+Scheduler priority is an optimization, not a source of truth. Tasks are deduplicated by canonical absolute POSIX source path. Windows comparisons fold path case without changing the retained path spelling, matching the normal filesystem identity for drive and UNC paths. Each lane orders queued work by interactive/open-folder/background urgency, then format cost, then enqueue order. After 60 seconds, background work may age to open-folder urgency but never above interactive work. Manual reprocess is interactive; already-running tasks are non-preemptive.
 
-PDF text-layer probing is also auxiliary. If the packaged extractor is unavailable, the probe is skipped and the conversion attempt fails quietly as preparation work; the server must not crash.
+PDF text-layer probing is auxiliary and asynchronous. Enqueue does not wait for it. The scheduler bounds probe concurrency separately from conversion lanes and owns probe cancellation. A successful probe can lower a queued PDF's cost; timeout, spawn failure, or an unavailable helper leaves conservative heavy cost. The conversion attempt records the actual preparation result and must not crash the server.
 
 ---
 
@@ -202,7 +204,7 @@ Deleting a PDF/image/DOCX source clears:
 
 Reprocessing a PDF/image/DOCX clears stale final derived artifacts and failure rows before queueing extraction. Reprocessing a directly readable source clears the failure row and reconciles the folder. It should not leave old output available as if it belonged to the new attempt.
 
-Renames and moves use absolute source path identity. A file rename request with a basename target stays in the source file's current parent folder; requests with a folder-relative target path are moves. Structured text files can move index rows when the content remains readable. PDF/image/DOCX moves clear old derived artifacts and old index rows, then queue conversion again under the new absolute source path.
+Renames and moves use absolute source path identity. On Windows, library/MCP boundaries restore the stored member-root spelling and the actual on-disk component spelling before consulting derived hashes, failure rows, or index identities; path comparisons remain case-insensitive. Root-aware joins keep filesystem, drive, and UNC roots canonical. A file rename request with a basename target stays in the source file's current parent folder; requests with a folder-relative target path are moves. Structured text files can move index rows when the content remains readable. PDF/image/DOCX moves clear old derived artifacts and old index rows, then queue conversion again under the new absolute source path.
 
 ---
 
@@ -222,7 +224,8 @@ Renames and moves use absolute source path identity. A file rename request with 
 | HTTP MCP credential, exposure preference, and Docker port | `~/.stashbase/config.json` `mcpHttp` | Yes | Is the token visible/rotatable only through Settings, checked live on every request, and is Docker exposure explicit opt-in? |
 | Vector index | AppData daemon store | Rebuildable | Is the daemon the source of truth for semantic index status? |
 | Preparation failures | AppData `state.db` | Yes | Is reprocess possible, and are persistent failures not silently retried forever? |
-| In-flight conversions | Process memory | No | Can lost in-flight state be rediscovered? |
+| Queued/running conversions | Process memory scheduler | No | Can lost work be rediscovered, and do cancellation/rename/remove flows cover both queued and running tasks? |
+| Scheduler revision/per-file versions | Process memory, mirrored in renderer | No | Are they treated only as refresh notifications while derived artifacts remain completion truth? |
 | Search readiness snapshot | Renderer memory | No | Is it display-only and reconciled from `/api/index-status`? |
 
 ---
@@ -245,6 +248,29 @@ Review invariants:
 - Concurrent listener transitions must be serialized; persistence failure must not leave an untracked host-facing listener.
 - A malformed app config must disable HTTP MCP management without overwriting unrelated folder or API-key state.
 - Browser-origin protections stay intact; URL access is for server-side MCP clients.
+
+## 8.2 Conversion scheduler and renderer notification
+
+- The production scheduler is one process-wide owner with fixed light/heavy capacities `2/1`, a capacity-4 auxiliary classifier pool, a 60-second ageing threshold, and an active-folder classifier that ignores short-lived internal folder bindings (`server/conversion.ts:117-135`). Tests may inject capacities, time, activity classification, and path sensitivity (`server/conversion-scheduler.ts:120-150`).
+- Canonical absolute source path is the task identity. Windows scheduler and folder-membership comparisons are case-insensitive while preserving path spelling for I/O and display; drive-root and UNC subtree operations coalesce case variants without matching sibling names (`server/conversion-scheduler.ts:98-116`, `server/conversion-scheduler.ts:152-218`, `server/conversion-scheduler.ts:507-509`, `server/folder.ts:107-115`, `server/folder.ts:237-303`, `server/folder.ts:327-336`). Duplicate schedules share one completion promise and may only raise urgency or lower cost while queued. Effective ordering is urgency, then cost, then enqueue sequence (`server/conversion-scheduler.ts:339-357`). Ageing transitions bump the lane revision and affected per-file versions (`server/conversion-scheduler.ts:461-503`).
+- Auxiliary cost classification is scheduler-owned and separately bounded. Starting/cancelling a task aborts its classifier; cancellation completions include classifier exit, including a classifier still shutting down after its conversion task retired (`server/conversion-scheduler.ts:239-288`, `server/conversion-scheduler.ts:371-458`). PDF probes settle on child exit/error or after a bounded post-kill grace, so a non-cooperative child cannot permanently consume classifier capacity (`server/pdf.ts:98-153`).
+- Typed cancellation reasons distinguish source change, shutdown, folder removal, and classifier retirement when conversion starts (`server/conversion.ts:137-160`). A folder-removed or source-changed running task rechecks source existence and current library membership after scheduler retirement, then requeues the current source when appropriate (`server/conversion.ts:294-327`, `server/conversion.ts:332-368`).
+- A newly created task deletes stale final output synchronously at enqueue, then repeats the final-output cleanup before extractor execution (`server/conversion.ts:216-233`, `server/conversion.ts:332-368`). PDF's narrower cleanup keeps batch scratch but removes the final note/bundle (`server/pdf.ts:66-70`). Semantic and keyword search filter pending/failed sources (`server/routes/indexing.ts:285-300`, `server/routes/indexing.ts:621-629`), and library/Agent reads return not-ready under the same condition (`server/routes/library-files.ts:411-428`, `server/routes/library-files.ts:540-590`, `server/routes/library-files.ts:625-650`).
+- Queue snapshots expose queued vs running, same-lane tasks ahead, a process-wide revision, and per-source versions (`server/conversion-scheduler.ts:299-318`). `/api/index-status` scopes that display state to the requested folder (`server/routes/indexing.ts:131-160`, `server/routes/indexing.ts:370-398`); the renderer mirrors it only for preparation progress and fallback-derived refresh (`web-src/src/store/AppContext.tsx:693-708`). Image preview renders queued/extracting/indexing state without blocking the source image (`web-src/src/components/ImagePreview.tsx:47-60`, `web-src/src/components/ImagePreview.tsx:138-142`). DOCX independently fetches versioned source bytes with a watchdog and delegates visible conversion plus sanitization to an on-demand worker, while preparation state occupies only a status row and direct failure falls back to the server-derived route (`web-src/src/components/DocxPreview.tsx:19-88`, `web-src/src/components/DocxPreview.tsx:191-230`, `web-src/src/workers/docxPreview.worker.ts:1-35`). Direct and durable DOCX fragments pass through the shared no-scripts sanitizer (`shared/html-sanitization.ts:8-45`); the durable Mammoth worker is cancellable and bounded before sanitized output is committed (`server/docx.ts:38-69`, `server/docx.ts:98-163`). Derived artifacts and durable failure rows remain truth for the server preparation path.
+
+Review invariants:
+
+- Format modules never own private queues or extractor concurrency.
+- Scheduler changes never define conversion completion; only format completeness checks do.
+- Interactive priority is non-preemptive and does not cancel valid running work.
+- Background ageing cannot rise above open-folder urgency.
+- Every visible ageing transition bumps scheduler revision and affected per-file versions.
+- Auxiliary classifiers have a fixed capacity and share task cancellation ownership.
+- Extractor cancellation owns the whole descendant tree: POSIX signals the detached process group, while Windows uses `taskkill /T /F` (`server/extractor-process.ts:38-79`).
+- A stale final artifact is unavailable for the entire queued interval; resumable PDF batches never count as a final artifact.
+- Folder removal, source delete, rename guards, and shutdown consult the scheduler so queued work is not invisible.
+- File/folder rename and delete remain available while work is only queued. Successful operations cancel old queued identities, clean stale derived ownership, and rediscover sources at new paths; running extractors remain guarded (`server/routes/files.ts:60-70`, `server/routes/files.ts:460-505`, `server/routes/files.ts:522-554`, `server/routes/folders.ts:44-54`, `server/routes/folders.ts:168-200`).
+- Revision/version counters are disposable notifications and may reset on restart.
 
 When reviewing code that touches conversion, indexing, sync, search, folder membership, or AppData cleanup, check these invariants:
 
@@ -315,22 +341,23 @@ Current contract:
 - Welcome can show a lightweight folder-level failure marker because it does not expose file rows.
 - Search is the place that explains how many files are ready and how many are still being prepared.
 
-## 9.3 Background PDF Work Starving The Active Folder
+## 9.3 Background Conversion Starving Interactive Work
 
-PDF conversion order is a liveness concern, not a correctness source of truth.
+Conversion order is a liveness concern, not a correctness source of truth.
 
 Representative failure:
 
-- Welcome or startup queues PDFs from several library folders.
-- A user opens one folder and expects its files to become searchable first.
-- Already-queued PDFs from other folders occupy the queue before the active folder's PDFs.
+- Welcome or startup queues conversions from several library folders.
+- A user opens a DOCX while scanned-PDF OCR is running, or opens a folder whose searchable text is behind unopened-folder work.
+- One global FIFO/slot makes DOCX search/Agent preparation wait on OCR or lets old background work occupy every next slot.
 
 Current contract:
 
-- Queued PDFs in the active folder are preferred over queued PDFs in other folders.
-- Within that, text-layer PDFs run before scanned PDFs.
-- Original enqueue order is the final tie-breaker.
-- Already-running conversions are not preempted; the priority rule applies to queued work.
+- Visible DOCX preview converts the source in the renderer and never enters the scheduler. Durable DOCX search/Agent preparation uses the light lane (capacity 2); PDF/image OCR uses the heavy lane (capacity 1).
+- Interactive work is preferred over work under any open window's folder, which is preferred over other background work.
+- Background ageing is bounded at open-folder urgency, so it prevents starvation without overtaking interaction.
+- Format cost and original enqueue order break ties inside one urgency tier; text-layer PDFs become cheaper only if the asynchronous probe succeeds before they start.
+- Already-running conversions are not preempted; priority changes apply to queued work.
 
 ## 9.4 Status Snapshots Becoming Truth
 
@@ -373,24 +400,27 @@ Current contract:
 - If the vector store still fails, the Node server records an index warning; it
   must not turn source-file browsing into a startup crash.
 
-## 9.6 Removed Folder PDF Work Continuing
+## 9.6 Removed Folder Conversion Work Continuing
 
 Folder membership is a source of truth for background preparation. A conversion
 queue snapshot must not outlive the user's library removal.
 
 Representative failure:
 
-- A folder with many PDFs is opened and queues background PDF extraction.
-- The user removes that folder from the library while one PDF is running.
+- A folder with many convertible files queues background preparation.
+- The user removes that folder from the library while one conversion is running.
 - Runtime bindings are cleared, so the daemon no longer has a root for that
-  path, but the PDF queue continues to start later PDFs from the removed folder.
+  path, but the scheduler continues to start later work from the removed folder.
 - Extraction logs keep appearing for the removed folder, followed by
   "no bound root matches path" index warnings.
 
 Current contract:
 
 - Removing a library folder cancels active conversions under that path.
-- It also removes queued PDFs under that path and marks the path as cancelled
-  for the PDF scheduler, so a stale queue snapshot cannot start the next PDF.
-- Reopening the folder clears that scheduler cancellation and allows discovery
-  to queue the folder's PDFs again.
+- It removes queued tasks under that path through the same scheduler operation,
+  so a stale format-specific queue cannot start later work.
+- Reopening the folder allows reconcile to rediscover any incomplete derived
+  work because cancellation is process state, not a durable failure.
+- If removal's bounded wait expires while a non-cooperative conversion is still
+  exiting, that task checks membership again after retirement and requeues when
+  the folder was already reopened; this closes the cancel/reconcile timing gap.
