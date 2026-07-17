@@ -5,10 +5,9 @@
  * `makeTab`).
  *
  * No React, no side effects — everything in this file is plain data /
- * functions. Imports from `AppContext.tsx` flow one-way (Provider
- * pulls types + reducer from here); circular imports are avoided by
- * keeping `AppActions` + `EditorHandle` + the React Context in
- * `AppContext.tsx` next to the Provider that uses them.
+ * functions. The Provider and action hooks pull types + reducer from
+ * here; action-only interface types live in `actionTypes.ts` so the
+ * dependency direction stays one-way.
  */
 import type {
   FileBody,
