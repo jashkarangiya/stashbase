@@ -7,14 +7,11 @@
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import { deleteDerivedForSource, derivedNoteFor, sourceForDerivedText } from '../derived-store.ts';
+import { deleteDerivedForSource } from '../derived-store.ts';
 import { errorMessage, logger } from '../log.ts';
 import {
-  exactMemberFolderRoot,
   getFolderHome,
   memberFolderRoots,
-  memberRootForAbs,
-  resolveFolderRoot,
   runWithFolderRoot,
 } from '../folder.ts';
 import { filesystemPath } from '../filesystem-path.ts';
@@ -24,8 +21,26 @@ import { getLibraryInfo } from '../library-info.ts';
 import { sendError } from '../http.ts';
 import { getApiKey } from '../app-config.ts';
 import { contentSizeError } from '../indexable.ts';
-import { normalizeFolderRelativePath } from '../folder-relative-path.ts';
-import { detectFormat, detectViewerFormat, isDerivedNoteName, isImageFile } from '../format.ts';
+import { detectFormat, detectViewerFormat, isImageFile } from '../format.ts';
+import {
+  normalizeLibraryDirectoryPath,
+  normalizeLibraryFilePath,
+  normalizeLibrarySearchScope,
+  requireLibraryStatusFolder,
+  routeError,
+  validateLibraryWritableFolderRel,
+  type LibraryDirectoryEntry,
+} from '../library-file-access.ts';
+import { agentContextFile, readLibraryFile } from '../library-file-reader.ts';
+
+export {
+  normalizeLibraryFilePath,
+  normalizeLibrarySearchScope,
+  requireLibraryStatusFolder,
+  type AgentContextFile,
+  type LibrarySearchScope,
+} from '../library-file-access.ts';
+export { agentContextFile, readLibraryFile } from '../library-file-reader.ts';
 import {
   deleteFile,
   derivedArtifactsForSource,
@@ -42,40 +57,11 @@ import { cancelConversion, isConversionTextUnavailable } from '../conversion.ts'
 import { applyRenamePlan, planRenameLinks, type RenameEntry } from '../links.ts';
 import { maybeConvertPdf } from '../pdf.ts';
 import { maybeConvertImage } from '../image.ts';
-import { derivedHtmlPathForDocx, maybeConvertDocx } from '../docx.ts';
+import { maybeConvertDocx } from '../docx.ts';
 import { clearRecord } from '../conversion-status.ts';
 
 const log = logger('routes/library-files');
 
-export interface LibrarySearchScope {
-  /** Absolute root of the folder to scope to, or undefined for whole-library. */
-  folderRoot?: string;
-  /** Absolute path prefix to narrow to, or undefined. */
-  pathPrefix?: string;
-}
-
-function requireMemberFolderRoot(ref: string): string {
-  const root = resolveFolderRoot(ref);
-  const memberRoot = exactMemberFolderRoot(root);
-  if (!memberRoot) {
-    throw routeError('folder is not in your folders', 404, 'FOLDER_NOT_FOUND');
-  }
-  return memberRoot;
-}
-
-export function normalizeLibrarySearchScope(folderRaw: unknown, pathPrefixRaw: unknown): LibrarySearchScope {
-  const folderRef = typeof folderRaw === 'string' && folderRaw.trim() ? folderRaw.trim() : undefined;
-  const folderRoot = folderRef ? requireMemberFolderRoot(folderRef) : undefined;
-  const pathPrefix = typeof pathPrefixRaw === 'string' && pathPrefixRaw.trim()
-    ? normalizeLibraryPathPrefix(pathPrefixRaw.trim())
-    : undefined;
-  return { folderRoot, pathPrefix };
-}
-
-export function requireLibraryStatusFolder(folderRaw: unknown): string | undefined {
-  const folderRef = typeof folderRaw === 'string' && folderRaw.trim() ? folderRaw.trim() : undefined;
-  return folderRef ? requireMemberFolderRoot(folderRef) : undefined;
-}
 
 export function mount(app: express.Express): void {
   // Hybrid search over the whole library (optional `folder` / `path_prefix`
@@ -256,190 +242,6 @@ export function mount(app: express.Express): void {
   });
 }
 
-function normalizeLibraryPathPrefix(value: string): string {
-  // Resolve to an absolute prefix and require it to live under a member folder.
-  // Absolute paths are the normal API; non-absolute values are compatibility
-  // refs under the default folder home.
-  const requestedAbs = resolveLibraryAbs(value, { allowEmpty: false });
-  const folderRoot = memberRootForAbs(requestedAbs);
-  if (!folderRoot) {
-    throw routeError('path_prefix must live under one of your folders', 400);
-  }
-  const requestedRel = filesystemPath.relative(folderRoot, requestedAbs);
-  if (requestedRel == null) throw routeError('path_prefix must live under one of your folders', 400);
-  return filesystemPath.join(folderRoot, filesystemPath.canonicalRelative(folderRoot, requestedRel));
-}
-
-interface LibraryPath {
-  /** Absolute POSIX source spelling exposed through MCP and passed to workers. */
-  abs: string;
-  /** Absolute root of the member folder that contains it. */
-  folderRoot: string;
-  /** Path within that folder (`docs/note.md`). */
-  folderRel: string;
-}
-
-interface LibraryDirectoryEntry {
-  name: string;
-  path: string;
-  type: 'file' | 'directory';
-  format?: string;
-  size?: number;
-  version?: string;
-}
-
-export interface AgentContextFile {
-  /** Absolute source spelling exposed to MCP/file tools. */
-  path: string;
-  /** Display label of the member folder containing the source. */
-  folder: string;
-  /** Folder-relative visible source path (`paper.pdf`). */
-  sourcePath: string;
-  /** Path the agent should read first (folder-relative for direct text; an
-   *  absolute app-data path for extracted PDF/DOCX text). */
-  readPath: string;
-  kind: 'direct' | 'derived';
-  sourceFormat: string;
-  available: boolean;
-  reason: string;
-}
-
-/** Resolve a raw native or POSIX-spelled path to an absolute POSIX path,
- *  rejecting traversal and control chars. Absolute paths are the normal API;
- *  non-absolute values are compatibility refs under the default folder home.
- *  Does NOT check membership; callers do via `memberRootForAbs`. */
-function resolveLibraryAbs(raw: unknown, opts: { allowEmpty: boolean }): string {
-  const value = typeof raw === 'string' ? raw.trim() : '';
-  if (!value) {
-    if (opts.allowEmpty) return '';
-    throw routeError('path required', 400);
-  }
-  if (/[\x00-\x1f]/.test(value)) throw routeError('path contains invalid characters', 400);
-  for (const seg of value.replace(/\\/g, '/').split('/')) {
-    if (seg === '.' || seg === '..') throw routeError('path contains an invalid segment', 400);
-  }
-  return filesystemPath.absolute(value, getFolderHome());
-}
-
-export function normalizeLibraryFilePath(raw: unknown): LibraryPath {
-  const requestedAbs = resolveLibraryAbs(raw, { allowEmpty: false });
-  const folderRoot = memberRootForAbs(requestedAbs);
-  if (!folderRoot) {
-    throw routeError('path must live under one of your folders (call library_info to list them)', 400);
-  }
-  const requestedRel = filesystemPath.relative(folderRoot, requestedAbs);
-  const folderRel = requestedRel == null
-    ? null
-    : filesystemPath.canonicalRelative(folderRoot, requestedRel);
-  if (folderRel == null || folderRel === '') {
-    throw routeError('path must include a file path, not just the folder root', 400);
-  }
-  if (isDerivedNoteName(folderRel)) {
-    throw routeError('app-maintained derived notes are hidden; use the visible source file path', 403);
-  }
-  return { abs: filesystemPath.join(folderRoot, folderRel), folderRoot, folderRel };
-}
-
-function normalizeLibraryDirectoryPath(raw: unknown): { abs?: string; folderRoot?: string; folderRel?: string } {
-  const requestedAbs = resolveLibraryAbs(raw, { allowEmpty: true });
-  if (!requestedAbs) return {};
-  const folderRoot = memberRootForAbs(requestedAbs);
-  if (!folderRoot) {
-    throw routeError('path must live under one of your folders (call library_info to list them)', 400);
-  }
-  const requestedRel = filesystemPath.relative(folderRoot, requestedAbs);
-  const folderRel = requestedRel == null
-    ? null
-    : filesystemPath.canonicalRelative(folderRoot, requestedRel);
-  if (folderRel == null) throw routeError('path must live under one of your folders', 400);
-  return { abs: filesystemPath.join(folderRoot, folderRel), folderRoot, folderRel };
-}
-
-function validateLibraryWritableFolderRel(folderRel: string): void {
-  try {
-    normalizeFolderRelativePath(folderRel, { writable: true, allowQuotes: true });
-  } catch (err: unknown) {
-    throw routeError(errorMessage(err), 400, 'INVALID_FILE_WRITE');
-  }
-}
-
-function routeError(message: string, status = 400, code?: string): Error {
-  const err = new Error(message);
-  (err as any).status = status;
-  if (code) (err as any).code = code;
-  return err;
-}
-
-export async function agentContextFile(rawPath: unknown): Promise<AgentContextFile> {
-  const target = normalizeLibraryFilePath(rawPath);
-  const folderName = path.basename(target.folderRoot);
-  return runWithFolderRoot(target.folderRoot, async () => {
-    const sourceFormat = detectViewerFormat(target.folderRel);
-    if (!sourceFormat) throw routeError('unsupported format', 415, 'UNSUPPORTED_FORMAT');
-    if (!pathExists(target.folderRel)) throw routeError('not found', 404);
-
-    if (sourceFormat !== 'pdf' && sourceFormat !== 'docx') {
-      return {
-        path: target.abs,
-        folder: folderName,
-        sourcePath: target.folderRel,
-        readPath: target.folderRel,
-        kind: 'direct',
-        sourceFormat,
-        available: true,
-        reason: sourceFormat === 'image'
-          ? 'Images are read as the source image; OCR text is used for search indexing.'
-          : 'Structured text files are the readable source.',
-      };
-    }
-
-    // The extracted text lives in per-machine app data (never in the
-    // user's folder), so `readPath` here is an ABSOLUTE path the built-in
-    // agent reads via its shell — not a folder-relative one.
-    const derivedAbs = sourceFormat === 'docx'
-      ? derivedHtmlPathForDocx(target.abs)
-      : derivedNoteFor(target.abs);
-    if (isConversionTextUnavailable(target.abs)) {
-      return {
-        path: target.abs,
-        folder: folderName,
-        sourcePath: target.folderRel,
-        readPath: target.folderRel,
-        kind: 'direct',
-        sourceFormat,
-        available: false,
-        reason: 'Searchable text is pending or preparation failed; retry after completion or reprocess the source.',
-      };
-    }
-    if (!fs.existsSync(derivedAbs)) {
-      return {
-        path: target.abs,
-        folder: folderName,
-        sourcePath: target.folderRel,
-        readPath: target.folderRel,
-        kind: 'direct',
-        sourceFormat,
-        available: false,
-        reason: sourceFormat === 'docx'
-          ? 'No extracted HTML exists yet for this DOCX; retry after conversion if you need text context.'
-          : 'No extracted Markdown exists yet for this PDF; retry after conversion if you need text context.',
-      };
-    }
-
-    return {
-      path: target.abs,
-      folder: folderName,
-      sourcePath: target.folderRel,
-      readPath: derivedAbs,
-      kind: 'derived',
-      sourceFormat,
-      available: true,
-      reason: sourceFormat === 'docx'
-        ? 'Read the extracted HTML file (an absolute app-data path) first for this DOCX; the original DOCX stays as the source identity.'
-        : 'Read the extracted Markdown note (an absolute app-data path) first for this PDF; use the original only when raw visual or binary detail is needed.',
-    };
-  });
-}
 
 export async function listLibraryDirectory(rawPath: unknown): Promise<{ path: string; entries: LibraryDirectoryEntry[] }> {
   const target = normalizeLibraryDirectoryPath(rawPath);
@@ -515,137 +317,6 @@ function immediateFileChild(prefix: string, relPath: string): { name: string; pa
   const child = immediateChild(prefix, relPath);
   if (!child) return null;
   return child.path === relPath ? child : null;
-}
-
-export async function readLibraryFile(rawPath: unknown): Promise<{
-  path: string;
-  format: string;
-  content: string;
-  version?: string;
-  sourceFormat?: string;
-  readPath?: string;
-  derived?: boolean;
-}> {
-  const derived = normalizeDerivedReadPath(rawPath);
-  if (derived) return derived;
-  const target = normalizeLibraryFilePath(rawPath);
-  return runWithFolderRoot(target.folderRoot, async () => {
-    const format = detectFormat(target.folderRel);
-    if (!format) {
-      const viewerFormat = detectViewerFormat(target.folderRel);
-      if (viewerFormat === 'pdf') {
-        if (isConversionTextUnavailable(target.abs)) {
-          throw routeError('extracted Markdown is pending or preparation failed; retry after completion or reprocess the PDF', 409, 'CONVERSION_NOT_READY');
-        }
-        const derivedAbs = derivedNoteFor(target.abs);
-        let content: string;
-        try {
-          content = fs.readFileSync(derivedAbs, 'utf8');
-        } catch {
-          throw routeError('extracted Markdown is not available for this PDF yet; retry conversion or run reindex first', 409, 'CONVERSION_NOT_READY');
-        }
-        return {
-          path: target.abs,
-          format: 'pdf-derived-md',
-          sourceFormat: 'pdf',
-          readPath: derivedAbs,
-          derived: true,
-          content,
-          version: fileVersion(target.folderRel) ?? undefined,
-        };
-      }
-      if (viewerFormat === 'docx') {
-        if (isConversionTextUnavailable(target.abs)) {
-          throw routeError('extracted HTML is pending or preparation failed; retry after completion or reprocess the DOCX', 409, 'CONVERSION_NOT_READY');
-        }
-        const derivedAbs = derivedHtmlPathForDocx(target.abs);
-        let content: string;
-        try {
-          content = fs.readFileSync(derivedAbs, 'utf8');
-        } catch {
-          throw routeError('extracted HTML is not available for this DOCX yet; retry conversion or run reindex first', 409, 'CONVERSION_NOT_READY');
-        }
-        return {
-          path: target.abs,
-          format: 'docx-derived-html',
-          sourceFormat: 'docx',
-          readPath: derivedAbs,
-          derived: true,
-          content,
-          version: fileVersion(target.folderRel) ?? undefined,
-        };
-      }
-      if (viewerFormat === 'image') {
-        throw routeError('read_file cannot return image bytes; image OCR text is used for search evidence, while the image remains the source file', 415, 'UNSUPPORTED_FORMAT');
-      }
-      throw routeError('unsupported format', 415, 'UNSUPPORTED_FORMAT');
-    }
-    const content = readText(target.folderRel);
-    if (content == null) throw routeError('not found', 404);
-    return {
-      path: target.abs,
-      format,
-      content,
-      version: fileVersion(target.folderRel) ?? undefined,
-    };
-  });
-}
-
-function normalizeDerivedReadPath(rawPath: unknown): ReturnType<typeof readDerivedLibraryFile> | null {
-  let abs: string;
-  try {
-    abs = resolveLibraryAbs(rawPath, { allowEmpty: false });
-  } catch {
-    return null;
-  }
-  const sourceAbs = sourceForDerivedText(abs);
-  if (!sourceAbs) return null;
-  const folderRoot = memberRootForAbs(sourceAbs);
-  if (!folderRoot) {
-    throw routeError('derived source is not in your folders (call library_info to list them)', 400);
-  }
-  return readDerivedLibraryFile(abs, sourceAbs, folderRoot);
-}
-
-function readDerivedLibraryFile(derivedAbs: string, sourceAbs: string, folderRoot: string): Promise<{
-  path: string;
-  format: string;
-  content: string;
-  version?: string;
-  sourceFormat?: string;
-  readPath?: string;
-  derived?: boolean;
-}> {
-  if (isConversionTextUnavailable(sourceAbs)) {
-    throw routeError('derived text is pending or preparation failed; retry after completion or reprocess the source', 409, 'CONVERSION_NOT_READY');
-  }
-  const folderRel = filesystemPath.relative(folderRoot, sourceAbs);
-  if (folderRel == null || folderRel === '') {
-    throw routeError('derived source path is invalid for its folder', 400);
-  }
-  const sourceFormat = detectViewerFormat(folderRel);
-  if (sourceFormat !== 'pdf' && sourceFormat !== 'docx') {
-    throw routeError('derived reads are only exposed for PDF/DOCX text context', 403);
-  }
-  return runWithFolderRoot(folderRoot, async () => {
-    let content: string;
-    try {
-      content = fs.readFileSync(derivedAbs, 'utf8');
-    } catch {
-      throw routeError(sourceFormat === 'docx'
-        ? 'extracted HTML is not available for this DOCX yet; retry conversion or run reindex first'
-        : 'extracted Markdown is not available for this PDF yet; retry conversion or run reindex first', 409, 'CONVERSION_NOT_READY');
-    }
-    return {
-      path: sourceAbs,
-      format: sourceFormat === 'docx' ? 'docx-derived-html' : 'pdf-derived-md',
-      sourceFormat,
-      readPath: derivedAbs,
-      derived: true,
-      content,
-      version: fileVersion(folderRel) ?? undefined,
-    };
-  });
 }
 
 export async function writeLibraryFile(
