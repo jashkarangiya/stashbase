@@ -2,15 +2,13 @@
 
 StashBase turns local files into Agent-ready context.
 
-HTML, Markdown, PDF, images, folders — these files were built for people to store and read, not for Agents to search and reuse. StashBase prepares them for retrieval, indexes them, and exposes the result through MCP.
+HTML, Markdown, PDF, DOCX, images, folders — these files were built for people to store and read, not for Agents to search and reuse. StashBase prepares them for retrieval, indexes them, and exposes the result through MCP.
 
 You choose which local files an Agent should be able to use. The original files stay on your computer. The extracted content and indexes become shared context for Claude, ChatGPT, Codex, and any MCP-capable client.
 
 That is the core value today: **make local files readable and searchable for Agents**.
 
 Over time, as Agents keep using that context and writing new output back into local files, the system grows into a personal knowledge base that can compound.
-
-That knowledge base is not a new workspace the user has to move into. It is the user's existing local folders, made readable, searchable, and reusable for Agents.
 
 ---
 
@@ -36,9 +34,29 @@ StashBase focuses on that layer. It takes local knowledge and makes it Agent-rea
 
 ---
 
-# 3. How StashBase Solves It
+# 3. Design Rationale
 
-StashBase does two things: **Convert** and **Index**.
+StashBase is not another chat product, and it is not a generic file manager. It is designed to provide a small set of reliable capabilities inside the local working environment: **convert, index, search, and read**. Together, those capabilities turn files that already live on the user's computer into context an Agent can actually use.
+
+AI products need to avoid two extremes. If the product over-specifies buttons, workflows, and user paths, it constrains what the model can do. If it only provides a generic AI entry point, it starts to look like using the base model directly.
+
+StashBase takes a narrower path: define the setting and the capabilities. The setting is the local working environment. The capability is turning local files into Agent-usable context. The workflows users and Agents build on top of that should emerge from real use.
+
+The design rests on four bets:
+
+**Local PCs need context infrastructure.** Enterprise RAG already connects unstructured data to databases and retrieves it semantically for AI. Local search on a personal computer still mostly depends on filenames, paths, grep, or the user's memory. StashBase fills the missing infrastructure layer between local data and Agents on a personal machine.
+
+**Documents need indexing.** Code comes with structure: files, symbols, references, grep, and language servers. Agents can often follow those signals to find context. Documents depend more on meaning, background, timelines, and cross-file relationships. Without a stable index, an Agent cannot reliably find the relevant context inside a document collection.
+
+**Bring your own Agent.** Users are more likely to pay for a few Agents they trust than to buy another embedded Agent inside every tool. StashBase does not build a closed Agent. It exposes local context through MCP so Claude, ChatGPT, Codex, Cursor, and other MCP-capable Agents can use it.
+
+**Product shape.** Long term, StashBase combines an Obsidian-like local file workspace, a VS Code-like Agent panel, and Cursor-like document indexing.
+
+---
+
+# 4. How StashBase Solves It
+
+StashBase currently commits to four concrete capabilities: **Convert**, **Index**, **Search**, and **Read**.
 
 The product surface stays intentionally small: choose local folders, make their contents readable, make them searchable, and expose them to Agents through MCP.
 
@@ -47,8 +65,8 @@ The product surface stays intentionally small: choose local folders, make their 
 Local files come in formats that Agents do not handle equally well. StashBase keeps the original files in place and creates derived text only where the format needs it.
 
 - **PDF**: extracts Agent-readable Markdown from files that are awkward for Agents to read directly.
-- **Images**: uses OCR so text inside images can be searched.
 - **DOCX**: extracts semantic HTML so Word documents can be previewed, searched, and read by Agents without changing the source file.
+- **Images**: uses OCR so text inside images can be searched.
 
 Derived content is app-owned data and can be regenerated.
 
@@ -62,13 +80,17 @@ Everything remains local-first. The source files are local; extracted content an
 
 Some Agents can read and write the host filesystem directly. Others run in sandboxes. StashBase supports both: MCP exposes search and reindexing, plus bounded file helpers for the folders the user has opened.
 
-> **A typical loop.** You add a PDF paper to StashBase. It converts the paper into Agent-readable Markdown and indexes it. Weeks later, when you discuss a related topic in Claude, ChatGPT, or Codex, the Agent can search that paper directly without you uploading it again or remembering where it lives.
+> **A typical loop.** You open an existing folder full of notes, documents, and papers. StashBase gives you a searchable entry point quickly, then keeps converting and indexing the harder formats in the background. When you discuss a related topic in Claude, ChatGPT, or Codex, the Agent can search that folder directly without you uploading files again or remembering exactly where each source lives.
 
-As more local files become readable and searchable, they become reusable context. Over time, that context naturally becomes a knowledge base.
+## Search and Read: expose context to Agents
+
+The index is not the end-user experience by itself. StashBase exposes search and read through MCP so Claude, ChatGPT, Codex, and other MCP-capable clients can use the same local context directly.
+
+That interface keeps StashBase at the infrastructure layer. It does not replace the Agent, and it does not require the user to move into a new workspace. StashBase makes local files usable as Agent context; the Agent applies that context to the task at hand.
 
 ---
 
-# 4. Principles
+# 5. Principles
 
 **Agent-native.** Whatever a person can read and recall, an Agent should be able to read and search too: human-facing files become usable context, and what a person would recall from memory an Agent retrieves by meaning. The goal is not to make people manage files harder — it is to make the same content first-class for Agents.
 
@@ -76,13 +98,13 @@ As more local files become readable and searchable, they become reusable context
 
 **Local-first.** Data stays on the user's computer by default. Cloud can add sync, sharing, or hosting, but the core workflow does not depend on it.
 
-**Open.** StashBase does not lock context inside one AI product. Through MCP, the same local context can be used by Claude, ChatGPT, Codex, and other clients.
+**Open.** StashBase does not lock context inside one AI product, and it does not require users to adopt a new built-in Agent. Through MCP, the same local context can be used by Claude, ChatGPT, Codex, and other clients.
 
-**Small surface.** StashBase avoids inventing a new container model. The user chooses folders; StashBase converts, indexes, retrieves, and reindexes. Everything else should justify itself against that core loop.
+**Small surface.** StashBase does not ask users to learn a new workspace or knowledge-base model. The user chooses local folders; StashBase converts and indexes the files inside them, then exposes them to Agents through search and read. Everything else should justify itself against that core loop.
 
 ---
 
-# 5. Why We're Different
+# 6. Why We're Different
 
 StashBase is not another Agent, and it does not try to replace Claude Code, Codex, ChatGPT, or Cursor.
 
@@ -101,14 +123,11 @@ StashBase does not own your knowledge or ask you to move into a new workspace. I
 
 ---
 
-# 6. Where It's Going
+# 7. Where It's Going
 
 **Who it's for first.** Developers and technical founders who already use Claude Code, Codex, and Cursor. They know that better context makes Agents dramatically more useful. StashBase brings that workflow from code to local files.
 
-**V1.** The first version focuses on two core capabilities:
-
-- **Convert**: turn PDFs into Agent-readable text and images into OCR text for search.
-- **Index**: build semantic and keyword indexes so Agents can search that content.
+**V1.** The first version focuses on the four core capabilities defined above: Convert, Index, Search, and Read.
 
 MCP makes the same local context available to multiple Agents. Windows, cloud sync, mobile, and team collaboration can come later, but they do not change the core model: make local files readable and searchable for Agents.
 
