@@ -241,6 +241,10 @@ const AUTOSAVE_DEBOUNCE_MS = 1200;
 const POLL_PENDING_MS = 1500;
 const POLL_IDLE_MS = 8000;
 
+function sameRenameTarget(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
 function libraryStatusFromActiveFolder(s: State): LibraryFolderStatus {
   if (s.indexWarning || s.preparationFailures.length > 0) return 'failed';
   const semanticPending = s.embedderHasKey !== false && s.pendingSemanticNames.size > 0;
@@ -1433,8 +1437,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
     if (
-      stateRef.current.files.some((f) => f.name === newName)
-      || stateRef.current.folders.some((f) => f.path === newName)
+      stateRef.current.files.some((f) => sameRenameTarget(f.name, newName) && !sameRenameTarget(f.name, oldName))
+      || stateRef.current.folders.some((f) => sameRenameTarget(f.path, newName))
     ) {
       toast('Rename failed: target exists', { level: 'error' });
       dispatch({ type: 'RENAMING', renaming: null });

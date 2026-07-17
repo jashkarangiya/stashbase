@@ -21,6 +21,7 @@ import {
   deleteFile,
   derivedArtifactsForSource,
   fileVersion,
+  isSameExistingPath,
   listFiles,
   listFolders,
   pathExists,
@@ -681,7 +682,9 @@ export async function moveLibraryFile(
     const content = viewerOnly ? null : readText(oldTarget.folderRel);
     if (!viewerOnly && content == null) throw routeError('not found', 404);
     if (viewerOnly && !pathExists(oldTarget.folderRel)) throw routeError('not found', 404);
-    if (pathExists(newTarget.folderRel)) throw routeError('target exists', 409);
+    if (pathExists(newTarget.folderRel) && !isSameExistingPath(oldTarget.folderRel, newTarget.folderRel)) {
+      throw routeError('target exists', 409);
+    }
 
     const oldDerivedArtifacts = derivedArtifactsForSource(oldTarget.folderRel);
     const renames: RenameEntry[] = [{ kind: 'file', old: oldTarget.folderRel, new: newTarget.folderRel }];

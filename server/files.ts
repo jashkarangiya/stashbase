@@ -129,6 +129,60 @@ function assertCreatablePathInsideFolder(absPath: string, label = 'path'): void 
   }
 }
 
+function sameFilesystemEntry(a: string, b: string): boolean {
+  try {
+    const aStat = fs.statSync(a);
+    const bStat = fs.statSync(b);
+    return aStat.dev === bStat.dev && aStat.ino === bStat.ino;
+  } catch {
+    return false;
+  }
+}
+
+function samePathCaseAlias(from: string, to: string): boolean {
+  return from.toLowerCase() === to.toLowerCase()
+    && sameFilesystemEntry(from, to);
+}
+
+function caseOnlySameEntryRename(from: string, to: string): boolean {
+  return from !== to
+    && from.toLowerCase() === to.toLowerCase()
+    && sameFilesystemEntry(from, to);
+}
+
+function uniqueRenameHop(target: string): string {
+  const dir = path.dirname(target);
+  const base = path.basename(target);
+  for (let i = 0; i < 100; i += 1) {
+    const candidate = path.join(dir, `.${base}.stashbase-rename-${process.pid}-${Date.now()}-${i}`);
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error('could not reserve temporary rename path');
+}
+
+function renameAbsPreservingCase(from: string, to: string): void {
+  if (!caseOnlySameEntryRename(from, to)) {
+    fs.renameSync(from, to);
+    return;
+  }
+  const hop = uniqueRenameHop(to);
+  fs.renameSync(from, hop);
+  try {
+    fs.renameSync(hop, to);
+  } catch (err) {
+    try { fs.renameSync(hop, from); } catch { /* preserve original error */ }
+    throw err;
+  }
+}
+
+export function isSameExistingPath(oldRel: string, newRel: string): boolean {
+  let oldAbs: string;
+  let newAbs: string;
+  try { oldAbs = resolveSafe(oldRel); newAbs = resolveSafe(newRel); }
+  catch { return false; }
+  return samePathCaseAlias(oldAbs, newAbs);
+}
+
 export function saveText(relPath: string, content: string): void {
   saveBytes(relPath, Buffer.from(content, 'utf8'));
 }
@@ -196,12 +250,12 @@ export function renameOnDisk(oldRel: string, newRel: string): void {
   }
   assertRealPathInsideFolder(o, 'source file');
   assertCreatablePathInsideFolder(n, 'target file');
-  if (fs.existsSync(n)) {
+  if (fs.existsSync(n) && !samePathCaseAlias(o, n)) {
     throw new Error('target already exists');
   }
   fs.mkdirSync(path.dirname(n), { recursive: true });
   assertCreatablePathInsideFolder(n, 'target file');
-  fs.renameSync(o, n);
+  renameAbsPreservingCase(o, n);
   // Notes carry an implicit "<stem>_files/" attachment bundle (browser
   // "Save Page As Complete" output for HTML, paste/drag image targets
   // for both formats). When the note itself is renamed, keep the
@@ -305,8 +359,8 @@ function renameBundleSibling(oldNoteRel: string, newNoteRel: string): void {
   try {
     if (!fs.statSync(oldAbs).isDirectory()) return;
   } catch { return; /* no bundle to follow */ }
-  if (fs.existsSync(newAbs)) return; // target taken — leave alone, surface as orphan
-  fs.renameSync(oldAbs, newAbs);
+  if (fs.existsSync(newAbs) && !samePathCaseAlias(oldAbs, newAbs)) return; // target taken — leave alone, surface as orphan
+  renameAbsPreservingCase(oldAbs, newAbs);
 }
 
 function deleteBundleSibling(noteRel: string): void {

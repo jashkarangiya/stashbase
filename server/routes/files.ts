@@ -18,6 +18,7 @@ import {
   detectFormat,
   fileVersion,
   getCurrentFolderBasename,
+  isSameExistingPath,
   listFilesAndFolders,
   pathExists,
   readText,
@@ -354,7 +355,9 @@ export function mount(app: express.Express): void {
     const content = viewerOnly ? null : readText(oldName);
     if (!viewerOnly && content == null) return res.status(404).json({ error: 'not found' });
     if (viewerOnly && !pathExists(oldName)) return res.status(404).json({ error: 'not found' });
-    if (pathExists(newName)) return res.status(409).json({ error: 'target exists' });
+    if (pathExists(newName) && !isSameExistingPath(oldName, newName)) {
+      return res.status(409).json({ error: 'target exists' });
+    }
     const oldDerivedArtifacts = derivedArtifactsForSource(oldName);
 
     // Cascade is opt-out per call — the client confirms via a dialog
