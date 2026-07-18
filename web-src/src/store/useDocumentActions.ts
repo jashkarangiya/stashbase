@@ -25,6 +25,7 @@ interface DocumentActionDependencies {
   loadFiles: (expectedFolderPath?: string) => Promise<State['files']>;
   refreshIndexState: (folderPath?: string) => Promise<void>;
   toast: Toast;
+  primeFind: (query: string, opts: { wholeWord: boolean; caseSensitive: boolean }) => void;
 }
 
 function isDocxName(name: string): boolean {
@@ -39,7 +40,7 @@ export function useDocumentActions(
   dispatch: Dispatch,
 ) {
   const { editor, saveInFlight, saveTimer, state } = refs;
-  const { loadFiles, refreshIndexState, toast } = dependencies;
+  const { loadFiles, refreshIndexState, toast, primeFind } = dependencies;
 
   const flushSave = useCallback(async () => {
     const inFlight = saveInFlight.current;
@@ -221,17 +222,12 @@ export function useDocumentActions(
     dispatch({ type: 'PENDING_HIGHLIGHT', highlight: hit });
     if (hit.openFindBar && hit.chunkText) {
       const currentState = state.current;
-      dispatch({
-        type: 'FIND_SET',
-        patch: {
-          query: hit.chunkText,
-          wholeWord: currentState.wholeWord,
-          caseSensitive: keywordFindCaseSensitive(hit.chunkText, currentState.caseStrict),
-        },
+      primeFind(hit.chunkText, {
+        wholeWord: currentState.wholeWord,
+        caseSensitive: keywordFindCaseSensitive(hit.chunkText, currentState.caseStrict),
       });
-      dispatch({ type: 'FIND_OPEN' });
     }
-  }, [dispatch, selectFile, state]);
+  }, [dispatch, primeFind, selectFile, state]);
 
   const openInNewTab = useCallback(async (name: string, expectedFolder?: string) => {
     const targetFolder = expectedFolder ?? state.current.folderPath;
