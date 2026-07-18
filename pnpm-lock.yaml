@@ -56,6 +56,9 @@ importers:
       github-slugger:
         specifier: ^2.0.0
         version: 2.0.0
+      highlight.js:
+        specifier: ^11.11.1
+        version: 11.11.1
       mammoth:
         specifier: ^1.12.0
         version: 1.12.0
@@ -71,6 +74,9 @@ importers:
       marked-gfm-heading-id:
         specifier: ^4.1.4
         version: 4.1.4(marked@18.0.3)
+      marked-highlight:
+        specifier: ^2.2.4
+        version: 2.2.4(marked@18.0.3)
       multer:
         specifier: ^1.4.5-lts.1
         version: 1.4.5-lts.2
@@ -1770,6 +1776,10 @@ packages:
     resolution: {integrity: sha512-ej4AhfhfL2Q2zpMmLo7U1Uv9+PyhIZpgQLGT1F9miIGmiCJIoCgSmczFdrc97mWT4kVY72KA+WnnhJ5pghSvSg==}
     engines: {node: '>= 0.4'}
 
+  highlight.js@11.11.1:
+    resolution: {integrity: sha512-Xwwo44whKBVCYoliBQwaPvtd/2tYFkRQtXDWj1nackaV2JPXx3L0+Jvd8/qCJ2p+ML0/XVkJ2q+Mr+UVdpJK5w==}
+    engines: {node: '>=12.0.0'}
+
   hono@4.12.18:
     resolution: {integrity: sha512-RWzP96k/yv0PQfyXnWjs6zot20TqfpfsNXhOnev8d1InAxubW93L11/oNUc3tQqn2G0bSdAOBpX+2uDFHV7kdQ==}
     engines: {node: '>=16.9.0'}
@@ -2069,6 +2079,11 @@ packages:
     resolution: {integrity: sha512-CspnvVfHSkb/znqdPS4jUR8HtCjq3M/DnrsJCrfLBLvdrgbemmoINKpeWKQYkBiXAoBGejw0cV7xzqrPdup3WA==}
     peerDependencies:
       marked: '>=13 <19'
+
+  marked-highlight@2.2.4:
+    resolution: {integrity: sha512-PZxisNMJDduSjc0q6uvjsnqqHCXc9s0eyzxDO9sB1eNGJnd/H1/Fu+z6g/liC1dfJdFW4SftMwMlLvsBhUPrqQ==}
+    peerDependencies:
+      marked: '>=4 <19'
 
   marked@18.0.3:
     resolution: {integrity: sha512-7VT90JOkDeaRWpfjOReRGPEKn0ecdARBkDGL+tT1wZY0efPPqkUxLUSmzy/C7TIylQYJC9STISEsCHrqb/7VIA==}
@@ -4632,6 +4647,8 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
+  highlight.js@11.11.1: {}
+
   hono@4.12.18: {}
 
   hosted-git-info@4.1.0:
@@ -4906,6 +4923,10 @@ snapshots:
   marked-gfm-heading-id@4.1.4(marked@18.0.3):
     dependencies:
       github-slugger: 2.0.0
+      marked: 18.0.3
+
+  marked-highlight@2.2.4(marked@18.0.3):
+    dependencies:
       marked: 18.0.3
 
   marked@18.0.3: {}

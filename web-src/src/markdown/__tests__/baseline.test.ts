@@ -51,7 +51,9 @@ test('document renderer preserves links, images, escapes, entities, and code', (
   assert.match(document, /<a href="https:\/\/example\.com">link<\/a>/);
   assert.match(document, /<img src="image\.png" alt="alt"\s*\/>/);
   assert.match(document, /\*literal\* &amp; <code>inline<\/code>/);
-  assert.match(document, /<pre><code class="language-ts">const answer = 42;\n<\/code><\/pre>/);
+  // `language-ts` is a registered common language, so the block now
+  // carries static Highlight.js spans; content and structure still hold.
+  assert.match(document, /<pre><code class="language-ts">[\s\S]*?const[\s\S]*?42[\s\S]*?;\n<\/code><\/pre>/);
   assert.match(document, /<pre><code>indented code\n<\/code><\/pre>/);
 });
 
