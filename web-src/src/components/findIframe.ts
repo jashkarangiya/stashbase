@@ -1,16 +1,18 @@
 /**
- * Find-in-iframe driver. Walks text nodes in a Document, computes Range
- * objects for each substring match, paints them with the CSS Custom
- * Highlight API. One Range gets the "current" highlight (used by the
- * counter + scrollIntoView); the rest get a duller "match" tint.
+ * Find-in-iframe driver. Matches the query against the concatenated
+ * text of the document's visible text nodes — so a match may span
+ * element boundaries (inline markup, highlighted-code token spans) —
+ * and paints each match Range with the CSS Custom Highlight API. One
+ * Range gets the "current" highlight (used by the counter +
+ * scrollIntoView); the rest get a duller "match" tint.
  *
  * Realm-aware: every Range / Highlight is built against the supplied
  * window so the highlight registers in that document's `CSS.highlights`
  * registry — not the parent's. Used by `MarkdownPreview` where the
  * parent reaches into a `sandbox="allow-same-origin"` iframe directly;
- * the same algorithm is mirrored in `server/html.ts`'s injected
- * bootstrap for the sandboxed `HtmlPreview` (which the parent cannot
- * touch, so the iframe runs its own copy).
+ * `server/html.ts`'s injected bootstrap for the sandboxed `HtmlPreview`
+ * (which the parent cannot touch, so the iframe runs its own copy)
+ * carries a simpler per-text-node variant of the same approach.
  *
  * Browser support: CSS Custom Highlight API ships in Chromium 105+,
  * which covers every Electron version we target. No fallback needed.
@@ -46,39 +48,7 @@ export function makeIframeFindController(
     const re = buildRegex(query, wholeWord, caseSensitive);
     if (!re) return clearAndReport(win);
 
-    // TreeWalker over text nodes, skipping <script> / <style> / hidden
-    // subtrees — same exclusion set Chrome's find uses. `acceptNode`
-    // walks up to find an excluded ancestor; cheap because most pages
-    // have shallow exclusion chains.
-    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
-      acceptNode(node: Node) {
-        const t = node.parentElement?.tagName;
-        if (t === 'SCRIPT' || t === 'STYLE' || t === 'NOSCRIPT') {
-          return NodeFilter.FILTER_REJECT;
-        }
-        if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
-        return NodeFilter.FILTER_ACCEPT;
-      },
-    });
-
-    for (let n: Node | null = walker.nextNode(); n; n = walker.nextNode()) {
-      const text = n.nodeValue ?? '';
-      if (!text) continue;
-      re.lastIndex = 0;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(text)) != null) {
-        const r = doc.createRange();
-        try {
-          r.setStart(n, m.index);
-          r.setEnd(n, m.index + m[0].length);
-        } catch { continue; }
-        matches.push(r);
-        // Guard against zero-width matches (regex degenerate case) so
-        // exec doesn't spin forever.
-        if (m.index === re.lastIndex) re.lastIndex++;
-      }
-    }
-
+    matches = collectMatches(doc, re);
     if (matches.length === 0) {
       paint(win, [], null);
       return { current: 0, total: 0 };
@@ -112,37 +82,6 @@ export function makeIframeFindController(
     });
   }
 
-  function rebuild(out: Range[]): void {
-    const doc = getDoc();
-    if (!doc || !query) return;
-    const re = buildRegex(query, wholeWord, caseSensitive);
-    if (!re) return;
-    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
-      acceptNode(node: Node) {
-        const t = node.parentElement?.tagName;
-        if (t === 'SCRIPT' || t === 'STYLE' || t === 'NOSCRIPT') {
-          return NodeFilter.FILTER_REJECT;
-        }
-        if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
-        return NodeFilter.FILTER_ACCEPT;
-      },
-    });
-    for (let n: Node | null = walker.nextNode(); n; n = walker.nextNode()) {
-      const text = n.nodeValue ?? '';
-      re.lastIndex = 0;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(text)) != null) {
-        const r = doc.createRange();
-        try {
-          r.setStart(n, m.index);
-          r.setEnd(n, m.index + m[0].length);
-          out.push(r);
-        } catch { /* node mutated under us — skip */ }
-        if (m.index === re.lastIndex) re.lastIndex++;
-      }
-    }
-  }
-
   return {
     setQuery(q, opts) {
       query = q;
@@ -165,6 +104,65 @@ export function makeIframeFindController(
 function clearAndReport(win: Window | null): MatchInfo {
   if (win) paint(win, [], null);
   return { current: 0, total: 0 };
+}
+
+type TextSegment = { node: Text; start: number };
+
+/** Runs the query over the concatenated text of the document's visible
+ *  text nodes and maps each match back to a (possibly multi-node)
+ *  Range. Block boundaries stay safe because the generated markup
+ *  keeps whitespace text nodes between blocks; adjacent inline
+ *  fragments join, which mirrors what the user visually reads.
+ *
+ *  TreeWalker skips <script> / <style> subtrees — same exclusion set
+ *  Chrome's find uses. */
+function collectMatches(doc: Document, re: RegExp): Range[] {
+  const segments: TextSegment[] = [];
+  let joined = '';
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
+    acceptNode(node: Node) {
+      const t = node.parentElement?.tagName;
+      if (t === 'SCRIPT' || t === 'STYLE' || t === 'NOSCRIPT') {
+        return NodeFilter.FILTER_REJECT;
+      }
+      if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  for (let n: Node | null = walker.nextNode(); n; n = walker.nextNode()) {
+    segments.push({ node: n as Text, start: joined.length });
+    joined += (n as Text).data;
+  }
+
+  const out: Range[] = [];
+  if (!joined) return out;
+  re.lastIndex = 0;
+  let seg = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(joined)) != null) {
+    // Guard against zero-width matches (regex degenerate case) so
+    // exec doesn't spin forever.
+    if (m.index === re.lastIndex) re.lastIndex++;
+    if (m[0].length === 0) continue;
+    seg = advanceTo(segments, seg, m.index);
+    const startSeg = segments[seg];
+    const endSeg = segments[advanceTo(segments, seg, m.index + m[0].length - 1)];
+    const r = doc.createRange();
+    try {
+      r.setStart(startSeg.node, m.index - startSeg.start);
+      r.setEnd(endSeg.node, m.index + m[0].length - endSeg.start);
+      out.push(r);
+    } catch { /* node mutated under us — skip */ }
+  }
+  return out;
+}
+
+/** Index of the segment containing global text offset `idx`. Matches
+ *  arrive in ascending order, so the scan resumes from `from`. */
+function advanceTo(segments: TextSegment[], from: number, idx: number): number {
+  let i = from;
+  while (i + 1 < segments.length && segments[i + 1].start <= idx) i++;
+  return i;
 }
 
 function firstVisibleRect(r: Range): DOMRect | null {

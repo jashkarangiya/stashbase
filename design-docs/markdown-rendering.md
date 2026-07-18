@@ -194,12 +194,12 @@ When an iframe document attaches, every image receives `data-stashbase-previewab
 
 Cmd/Ctrl+F inside the iframe prevents the browser's native find and opens the StashBase find bar. Cmd/Ctrl+G advances to the next result; Shift+Cmd/Ctrl+G moves to the previous result.
 
-Find walks body text nodes while excluding direct text children of `script`, `style`, and `noscript`. It supports literal matching, case sensitivity, and whole-word mode. Matches are stored as DOM `Range` objects and painted with the iframe window's CSS Custom Highlight registry:
+Find matches the query against the concatenated text of body text nodes, excluding direct text children of `script`, `style`, and `noscript`, and maps match offsets back to node positions through a segment index. A match may therefore span element boundaries — inline markup or highlighted-code token spans — and produce a multi-node `Range`. Block boundaries do not join into false matches because the generated markup keeps whitespace text nodes between blocks. It supports literal matching, case sensitivity, and whole-word mode. Matches are painted with the iframe window's CSS Custom Highlight registry:
 
 - `stash-find` paints non-current matches yellow.
 - `stash-find-current` paints the active match blue with white text.
 
-Next/previous navigation wraps and centers the active range in the iframe. When a content reload finishes while the find bar is open, the current query is scheduled again against the new document. Chromium's CSS Custom Highlight API is required; the Electron versions targeted by the app provide it.
+Next/previous navigation wraps and centers the active range in the iframe. When a content reload finishes while the find bar is open, the current query is scheduled again against the new document. A keyword-search hit that pre-arms the bar primes the controller through three paths: registration-time priming when the viewer mounts, the load-time re-apply when content reloads, and a direct controller call when the hit targets the already-open file (neither of the first two fires there). Chromium's CSS Custom Highlight API is required; the Electron versions targeted by the app provide it.
 
 ## 12. Search-result chunk highlight
 
