@@ -11,18 +11,17 @@ import {
   resolveFolderRoot,
 } from '../folder.ts';
 import { getApiKey } from '../app-config.ts';
-import { hasNoExtractableText, shouldIndexFilePath } from '../indexable.ts';
-import { derivedPathsForPdf, displayPathForHit, maybeConvertPdf } from '../pdf.ts';
+import { derivedPathsForPdf, maybeConvertPdf } from '../pdf.ts';
 import { derivedNotePathForImage, maybeConvertImage } from '../image.ts';
 import { derivedHtmlPathForDocx, maybeConvertDocx } from '../docx.ts';
-import { getConversionSchedulerSnapshot, getInFlightConversions, isConversionPending, isConversionTextUnavailable, promoteConversion } from '../conversion.ts';
+import { isConversionPending, isConversionTextUnavailable, promoteConversion } from '../conversion.ts';
 import { isDocxFile, isImageFile } from '../format.ts';
-import { clearRecord, listFailed, readAll as readConversionStatus, readProgress, type ConversionProgress } from '../conversion-status.ts';
-import { getFsChangeCounter } from '../watcher.ts';
-import { clearIndexWarning, getIndexWarning, indexer, syncFolderNow } from '../state.ts';
+import { clearRecord, readAll as readConversionStatus } from '../conversion-status.ts';
+import { clearIndexWarning, indexer, syncFolderNow } from '../state.ts';
 import { noteTreeChanged } from '../watcher.ts';
 import { sendError } from '../http.ts';
 import { filesystemPath } from '../filesystem-path.ts';
+import { buildIndexStatus } from '../index-status.ts';
 import { runKeywordSearch } from '../keyword-search.ts';
 import {
   remapKeywordFilesForDisplay,
@@ -97,55 +96,6 @@ function requireExistingFileInFolder(folderRoot: string, rel: string): string {
     throw err;
   }
   return abs;
-}
-
-export function preparationFailuresForFolder(folderRoot: string): Array<{ path: string; lastError: string; attempts: number }> {
-  const root = filesystemPath.absolute(folderRoot);
-  const out: Array<{ path: string; lastError: string; attempts: number }> = [];
-  for (const { path: sourcePath, entry } of listFailed()) {
-    const rel = filesystemPath.relative(root, sourcePath);
-    if (rel == null) continue;
-    if (!fs.existsSync(sourcePath)) {
-      clearRecord(sourcePath);
-      continue;
-    }
-    out.push({ path: rel, lastError: entry.lastError ?? '', attempts: entry.attempts });
-  }
-  return out;
-}
-
-type SchedulerSnapshot = ReturnType<typeof getConversionSchedulerSnapshot>;
-
-export function conversionProgressForFolder(
-  folderRoot: string,
-  snapshot: SchedulerSnapshot = getConversionSchedulerSnapshot(),
-): Record<string, ConversionProgress> {
-  const root = filesystemPath.absolute(folderRoot);
-  const out: Record<string, ConversionProgress> = {};
-  for (const task of snapshot.tasks) {
-    const rel = filesystemPath.relative(root, task.key);
-    if (rel == null) continue;
-    if (task.state === 'queued') {
-      out[rel] = { phase: 'queued', lane: task.lane, tasksAhead: task.tasksAhead ?? 0 };
-      continue;
-    }
-    const progress = readProgress(task.key);
-    if (progress) out[rel] = progress;
-  }
-  return out;
-}
-
-export function conversionVersionsForFolder(
-  folderRoot: string,
-  snapshot: SchedulerSnapshot = getConversionSchedulerSnapshot(),
-): Record<string, number> {
-  const root = filesystemPath.absolute(folderRoot);
-  const out: Record<string, number> = {};
-  for (const [sourcePath, version] of Object.entries(snapshot.versions)) {
-    const rel = filesystemPath.relative(root, sourcePath);
-    if (rel != null) out[rel] = version;
-  }
-  return out;
 }
 
 export function reprocessFileInFolder(relPath: string, folderName?: string): 'conversion' | 'index' {
@@ -329,58 +279,8 @@ export function mount(app: express.Express): void {
   // conversions for the conversion indicator.
   app.get('/api/index-status', async (req, res) => {
     try {
-      const { folderRoot: cur } = requireRequestFolder(parseFolderParam(req.query.folder));
-      const curRoot = filesystemPath.absolute(cur);
-      const status = await indexer.status(curRoot);
-      const semanticEnabled = !!getApiKey();
-      // Convert absolute paths back to folder-relative for the UI.
-      // The daemon should already apply the same admission rules Node
-      // pushes via `set_rules`, but status is a user-facing indicator:
-      // defensively re-check Node's source-of-truth path rules here so
-      // a non-indexable source (PDF/image original, hidden scratch dir,
-      // old daemon rules) cannot pulse "indexing…" forever. The second
-      // Node-side filter is content-semantic and deliberately stays out
-      // of the daemon: files with no extractable text chunk to nothing,
-      // never enter Milvus, and would otherwise remain pending forever.
-      const pendingSet = new Set<string>();
-      for (const sourcePath of status.pending) {
-        const rel = filesystemPath.relative(curRoot, sourcePath);
-        if (rel == null) continue;
-        if (!shouldIndexFilePath(rel)) continue;
-        if (hasNoExtractableText(filesystemPath.join(cur, rel))) continue;
-        const visible = displayPathForHit(rel, cur);
-        if (visible) pendingSet.add(visible);
-      }
-      const pending = semanticEnabled ? [...pendingSet].sort() : [];
-      const orphaned = status.orphaned
-        .map((p) => filesystemPath.relative(curRoot, p))
-        .filter((p): p is string => p != null);
-      // File preparation status: folder-scoped. `pendingConversions`
-      // feeds search-readiness accounting, while `preparationFailures`
-      // surfaces durable preparation failures. `/api/files/reprocess`
-      // dispatches by extension: PDF/image/DOCX sources re-run extraction,
-      // other files clear the failure row and reconcile the folder.
-      const preparationFailures = preparationFailuresForFolder(curRoot);
-      const schedulerSnapshot = getConversionSchedulerSnapshot();
-      const pendingConversions = getInFlightConversions(curRoot);
-      res.json({
-        folder: curRoot,
-        ...status,
-        semanticEnabled,
-        ...(semanticEnabled ? {} : { semanticDisabledReason: 'OpenAI API key required' }),
-        pending,
-        pendingCount: pending.length,
-        orphaned,
-        orphanedCount: orphaned.length,
-        visibleIndexingSettled: !semanticEnabled || pending.length === 0,
-        pendingConversions,
-        conversionProgress: conversionProgressForFolder(curRoot, schedulerSnapshot),
-        conversionRevision: schedulerSnapshot.revision,
-        conversionVersions: conversionVersionsForFolder(curRoot, schedulerSnapshot),
-        preparationFailures,
-        treeVersion: getFsChangeCounter(),
-        indexWarning: getIndexWarning(curRoot),
-      });
+      const { folderRoot } = requireRequestFolder(parseFolderParam(req.query.folder));
+      res.json(await buildIndexStatus(folderRoot));
     } catch (err: unknown) {
       sendError(res, err);
     }
