@@ -261,7 +261,7 @@ Retrieval is how Agents and the UI find relevant local context.
 StashBase supports two retrieval paths:
 
 - **Semantic search**: dense vector retrieval, combined with keyword signal through MFS/Milvus.
-- **Keyword search**: literal search over source text plus AppData-derived PDF/OCR/DOCX text, useful when embeddings are unavailable or exact matching is needed.
+- **Keyword search**: literal search over source text plus AppData-derived PDF/OCR/DOCX text, useful when embeddings are unavailable or exact matching is needed. `server/keyword-search.ts` owns the desktop keyword-search implementation: ripgrep JSON parsing for source text, AppData-derived text scanning for convertible sources, UTF-8 to UTF-16 match-range mapping, app-side whole-token filtering, snippet windowing, PDF page hints, and result merging. `server/routes/indexing.ts` owns HTTP request validation, folder scoping, and display-path remapping.
 
 ## 6.2 Scope
 
