@@ -24,14 +24,6 @@ import { fileURLToPath } from 'node:url';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { WebSocketServer } from 'ws';
 import {
-  attachAgentWebSocket,
-  killActiveAgent,
-} from './agent.ts';
-import {
-  attachCodexWebSocket,
-  killActiveCodex,
-} from './codex-agent.ts';
-import {
   attachAgentRuntime,
   isAgentAccessMode,
   registerAgentAdapter,
@@ -65,28 +57,14 @@ import { runShutdownCleanup } from './shutdown-cleanup.ts';
 import { mount as mountSessionsRoutes } from './routes/sessions.ts';
 import { mount as mountCodexSessionsRoutes } from './routes/codex-sessions.ts';
 import { mount as mountAgentSessionsRoutes } from './routes/agent-sessions.ts';
-import { claudeHistoryActions } from './routes/sessions.ts';
-import { codexHistoryActions } from './routes/codex-sessions.ts';
+import { BUILT_IN_AGENT_ADAPTERS } from './agent-adapters.ts';
 
 const log = logger('server');
 
 // Compatibility adapters preserve the established Claude SDK and Codex
 // app-server behaviour behind one panel contract.  Their native protocols
 // stay in their bridge modules; new renderer code should use the contract.
-registerAgentAdapter({
-  id: 'claude', label: 'Claude Code', vendor: 'Anthropic',
-  capabilities: { connection: true, prompts: true, interrupt: true, transcript: true, approvals: true, history: true, modes: true, effort: true, steering: false, titleHint: false },
-  attach: (ws, options) => attachAgentWebSocket(ws, options.windowId, options.effort, options.resume, options.access),
-  stop: killActiveAgent,
-  history: claudeHistoryActions(),
-});
-registerAgentAdapter({
-  id: 'codex', label: 'Codex', vendor: 'OpenAI',
-  capabilities: { connection: true, prompts: true, interrupt: true, transcript: true, approvals: true, history: true, modes: true, effort: true, steering: true, titleHint: true },
-  attach: (ws, options) => attachCodexWebSocket(ws, options.windowId, options.effort, options.resume, options.access),
-  stop: killActiveCodex,
-  history: codexHistoryActions(),
-});
+for (const adapter of BUILT_IN_AGENT_ADAPTERS) registerAgentAdapter(adapter);
 
 // Converters push their derived notes straight into the index on
 // completion — there is no fs-watcher intermediary anymore. Wired here

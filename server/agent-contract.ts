@@ -97,7 +97,7 @@ export interface AgentRuntimeDescriptor {
 const adapters = new Map<AgentId, AgentAdapter>();
 const runtimeFailures = new Map<AgentId, string>();
 
-function nativeRuntimeExecutable(id: AgentId): string | null {
+export function agentExecutableFor(id: AgentId): string | null {
   const config = id === 'claude'
     ? { name: 'claude', envNames: ['STASHBASE_CLAUDE_BIN', 'CLAUDE_CODE_BIN'], logLabel: 'Claude Code' }
     : { name: 'codex', envNames: ['STASHBASE_CODEX_BIN', 'CODEX_CLI_BIN', 'CODEX_CLI_PATH'], logLabel: 'Codex' };
@@ -108,6 +108,26 @@ export function registerAgentAdapter(adapter: AgentAdapter): void {
   adapters.set(adapter.id, adapter);
 }
 
+/** Pure descriptor builder used by discovery and its contract tests. */
+export function runtimeDescriptorFor(adapter: AgentAdapter, executable = agentExecutableFor(adapter.id)): AgentRuntimeDescriptor {
+  const cli = CLIS[adapter.id];
+  const installed = executable !== null;
+  const failure = runtimeFailures.get(adapter.id);
+  const state: AgentRuntimeState = !installed ? 'unavailable' : failure ? 'failed' : 'available';
+  return {
+    id: adapter.id,
+    label: adapter.label,
+    vendor: adapter.vendor,
+    installHint: cli.installHint,
+    launchCommand: launchCommandFor(cli),
+    endpoint: '/ws/agent',
+    installed,
+    state,
+    ...(failure ? { error: failure } : {}),
+    capabilities: adapter.capabilities,
+  };
+}
+
 export function agentAdapter(id: string): AgentAdapter | null {
   return id === 'claude' || id === 'codex' ? adapters.get(id) ?? null : null;
 }
@@ -116,25 +136,7 @@ export function agentAdapter(id: string): AgentAdapter | null {
  * upgraded while StashBase is open is reflected without a bundled-version
  * assumption. */
 export function discoverAgentRuntimes(): AgentRuntimeDescriptor[] {
-  return [...adapters.values()].map((adapter) => {
-    const cli = CLIS[adapter.id];
-    const executable = nativeRuntimeExecutable(adapter.id);
-    const installed = executable !== null;
-    const failure = runtimeFailures.get(adapter.id);
-    const state: AgentRuntimeState = !installed ? 'unavailable' : failure ? 'failed' : 'available';
-    return {
-      id: adapter.id,
-      label: adapter.label,
-      vendor: adapter.vendor,
-      installHint: cli.installHint,
-      launchCommand: launchCommandFor(cli),
-      endpoint: '/ws/agent',
-      installed,
-      state,
-      ...(failure ? { error: failure } : {}),
-      capabilities: adapter.capabilities,
-    };
-  });
+  return [...adapters.values()].map((adapter) => runtimeDescriptorFor(adapter));
 }
 
 export function attachAgentRuntime(id: string, ws: WebSocket, options: AgentConnectionOptions): void {
@@ -144,7 +146,7 @@ export function attachAgentRuntime(id: string, ws: WebSocket, options: AgentConn
     ws.close();
     return;
   }
-  if (!nativeRuntimeExecutable(adapter.id)) {
+  if (!agentExecutableFor(adapter.id)) {
     ws.send(JSON.stringify({ t: 'error', message: `${adapter.label} CLI is not available.` }));
     ws.close();
     return;
