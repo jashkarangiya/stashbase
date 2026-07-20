@@ -7,7 +7,10 @@
  * Chrome-row agent icons select or toggle existing chats; this panel's
  * per-agent `+` button is the explicit new-chat control.
  */
+import * as React from 'react';
+import type { ReactNode } from 'react';
 import { AgentView } from './AgentView';
+import { LazyLoadBoundary } from './ErrorBoundary';
 import { agentMeta, isAgentKind } from '../agentCatalog';
 import { useApp } from '../store/AppContext';
 
@@ -15,6 +18,26 @@ import { useApp } from '../store/AppContext';
 function AgentGlyph({ agent }: { agent: string }) {
   const Icon = agentMeta(agent).Icon;
   return <Icon className="chat-tab-icon" />;
+}
+
+export function ChatSessionBoundary({
+  tabId,
+  active,
+  children,
+}: {
+  tabId: string;
+  active: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <LazyLoadBoundary
+      className="chat-pane status"
+      label="chat session"
+      resetKey={`${tabId}:${active ? 'active' : 'inactive'}`}
+    >
+      {children}
+    </LazyLoadBoundary>
+  );
 }
 
 export function ChatPane() {
@@ -62,12 +85,14 @@ export function ChatPane() {
             role="tabpanel"
             aria-hidden={tab.id !== activeId}
           >
-            <AgentView
-              active={tab.id === activeId}
-              id={tab.id}
-              title={tab.title}
-              agent={isAgentKind(tab.agent) ? tab.agent : 'claude'}
-            />
+            <ChatSessionBoundary tabId={tab.id} active={tab.id === activeId}>
+              <AgentView
+                active={tab.id === activeId}
+                id={tab.id}
+                title={tab.title}
+                agent={isAgentKind(tab.agent) ? tab.agent : 'claude'}
+              />
+            </ChatSessionBoundary>
           </div>
         ))}
         {tabs.length === 0 && (

@@ -62,6 +62,7 @@ export class CodexRpcPeer {
   }
 
   receiveLine(line: string): void {
+    if (this.closed) return;
     let message: JsonObject;
     try {
       message = JSON.parse(line) as JsonObject;

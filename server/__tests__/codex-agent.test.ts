@@ -7,6 +7,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WebSocket } from 'ws';
+import { clearAgentRuntimeFailure } from '../agent-contract.ts';
 import { codexAccessOptions, isStashbaseWorkspaceEdit, isWorkspaceFileChange, permanentlyDeleteCodexThread } from '../codex-agent.ts';
 import { CodexRpcPeer } from '../codex-rpc-transport.ts';
 import { CodexSession } from '../codex-session-runtime.ts';
@@ -64,7 +65,8 @@ test('Codex RPC peer rejects pending work when its owner closes', async () => {
   await assert.rejects(pending, /session closed/);
 });
 
-test('stale Codex process events cannot release a replacement process generation', () => {
+test('stale Codex process events and stdout cannot affect a replacement generation', (t) => {
+  t.after(() => clearAgentRuntimeFailure('codex'));
   const first = new FakeCodexProcess();
   const second = new FakeCodexProcess();
   const processes = [first, second];
@@ -81,19 +83,45 @@ test('stale Codex process events cannot release a replacement process generation
     spawnAppServer(cwd: string): void;
     proc: ChildProcessWithoutNullStreams | null;
     rpc: CodexRpcPeer | null;
+    busy: boolean;
+    activeTurnId: string | null;
   };
 
-  runtime.spawnAppServer('/tmp');
+  runtime.spawnAppServer(os.tmpdir());
+  const staleRpc = runtime.rpc;
   first.emit('error', new Error('first process failed'));
-  runtime.spawnAppServer('/tmp');
+  runtime.spawnAppServer(os.tmpdir());
   const replacementRpc = runtime.rpc;
+  runtime.busy = true;
+  runtime.activeTurnId = 'replacement-turn';
+
+  staleRpc?.receiveLine(JSON.stringify({
+    method: 'turn/completed',
+    params: { turn: { id: 'stale-turn', status: 'completed' } },
+  }));
 
   first.emit('close', 1, null);
 
   assert.equal(runtime.proc, second as unknown as ChildProcessWithoutNullStreams);
   assert.equal(runtime.rpc, replacementRpc);
+  assert.equal(runtime.busy, true);
+  assert.equal(runtime.activeTurnId, 'replacement-turn');
   session.dispose();
   assert.equal(second.killed, true);
+});
+
+test('closed Codex RPC peers ignore inbound requests and notifications', () => {
+  const received: string[] = [];
+  const peer = new CodexRpcPeer(() => {}, {
+    onRequest: ({ method }) => received.push(method),
+    onNotification: (method) => received.push(method),
+  });
+
+  peer.close();
+  peer.receiveLine(JSON.stringify({ id: 1, method: 'approval/request', params: {} }));
+  peer.receiveLine(JSON.stringify({ method: 'turn/completed', params: {} }));
+
+  assert.deepEqual(received, []);
 });
 
 test('Codex Delete Chat uses the native irreversible thread/delete operation', async () => {

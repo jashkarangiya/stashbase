@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { createElement, type ReactElement } from 'react';
 import test from 'node:test';
+import { ChatSessionBoundary } from '../components/ChatPane';
 import { LazyLoadBoundary, loadWithRetry } from '../components/ErrorBoundary';
 
 test('lazy module loading retries one transient failure', async () => {
@@ -44,4 +46,22 @@ test('lazy load boundary clears a captured error when its resource identity chan
     LazyLoadBoundary.getDerivedStateFromProps({ ...props, resetKey: state.resetKey }, state),
     null,
   );
+});
+
+test('each chat session gets an independently resettable error boundary', () => {
+  const child = createElement('span', null, 'session');
+  const element = ChatSessionBoundary({
+    tabId: 'chat-1',
+    active: true,
+    children: child,
+  }) as ReactElement<{
+    children: unknown;
+    className: string;
+    resetKey: string;
+  }>;
+
+  assert.equal(element.type, LazyLoadBoundary);
+  assert.equal(element.props.className, 'chat-pane status');
+  assert.equal(element.props.resetKey, 'chat-1:active');
+  assert.equal(element.props.children, child);
 });

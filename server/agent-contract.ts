@@ -149,7 +149,7 @@ export function attachAgentRuntime(id: string, ws: WebSocket, options: AgentConn
     ws.close();
     return;
   }
-  runtimeFailures.delete(adapter.id);
+  clearAgentRuntimeFailure(adapter.id);
   adapter.attach(ws, options);
 }
 
@@ -160,4 +160,8 @@ export function stopAgentRuntime(id: AgentId, windowId?: string): void {
 export function reportAgentRuntimeFailure(id: AgentId, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
   runtimeFailures.set(id, message.slice(0, 500));
+}
+
+export function clearAgentRuntimeFailure(id: AgentId): void {
+  runtimeFailures.delete(id);
 }
