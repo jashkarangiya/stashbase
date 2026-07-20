@@ -46,6 +46,7 @@ const pdfWorker = PDFWorker.create({ port: new PdfWorker() });
 const PDF_FIT_SIDE_PADDING = 48;
 const PDF_MIN_SCALE = 0.5;
 const PDF_MAX_SCALE = 3;
+const PDFJS_ASSET_BASE = '/pdfjs-assets';
 
 /**
  * PDF viewer built on pdfjs-dist's programmatic API. Renders every
@@ -157,7 +158,19 @@ export function PdfPreview({ name, showConversionBanner = true }: { name: string
     setRetryBusy(false);
     setRetryStarted(false);
     setRetryError(null);
-    loadingTask = getDocument({ url: fileUrl, worker: pdfWorker });
+    loadingTask = getDocument({
+      url: fileUrl,
+      worker: pdfWorker,
+      cMapUrl: `${PDFJS_ASSET_BASE}/cmaps/`,
+      cMapPacked: true,
+      standardFontDataUrl: `${PDFJS_ASSET_BASE}/standard_fonts/`,
+      wasmUrl: `${PDFJS_ASSET_BASE}/wasm/`,
+      useWorkerFetch: true,
+      // Some creator-generated PDFs embed subset TrueType fonts whose
+      // browser FontFace rendering maps glyphs incorrectly in Chromium.
+      // Let pdf.js draw glyph outlines itself instead.
+      disableFontFace: true,
+    });
     loadingTask.promise.then(
       (pdf) => {
         if (cancelled) { void pdf.destroy(); return; }

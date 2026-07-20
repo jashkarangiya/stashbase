@@ -104,6 +104,7 @@ const RESOURCES_ROOT = process.env.STASHBASE_RESOURCES_PATH
   ? path.resolve(process.env.STASHBASE_RESOURCES_PATH)
   : APP_ROOT;
 const WEB_BUILD_DIR = path.resolve(APP_ROOT, 'web', 'dist-app');
+const PDFJS_DIST_DIR = path.resolve(APP_ROOT, 'node_modules', 'pdfjs-dist');
 
 // One-time migration from the old global-provider schema. Idempotent.
 migrateLegacyEmbedderConfig();
@@ -192,6 +193,16 @@ app.use((req, res, next) => {
   if (ALLOWED_ORIGINS.has(origin)) return next();
   res.status(403).json({ error: 'cross-origin request rejected', code: 'BAD_ORIGIN' });
 });
+
+// pdf.js fetches CMaps, fallback fonts, and WASM by URL at render time.
+// Serve the bundled package assets from the app server so dev, packaged,
+// and Electron CSP all use the same same-origin resource path.
+for (const dir of ['cmaps', 'standard_fonts', 'wasm']) {
+  app.use(
+    `/pdfjs-assets/${dir}`,
+    express.static(path.join(PDFJS_DIST_DIR, dir), { fallthrough: false, redirect: false }),
+  );
+}
 
 // Cheap identity probe for Electron's startup arbiter. A random process
 // can be listening on :8090 and even answer `/api/folder`; the main

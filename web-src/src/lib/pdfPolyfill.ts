@@ -1,15 +1,16 @@
 /**
- * Polyfill `Map.prototype.getOrInsert` / `getOrInsertComputed` (the TC39
- * "upsert" proposal). pdfjs 5.7 calls `getOrInsertComputed` in its render
- * path but ships no polyfill; Electron 39's V8 (Chromium ~140) hasn't
- * shipped the method yet, so `page.render()` throws
- * `this[#methodPromises].getOrInsertComputed is not a function` and the
- * canvas stays blank. (Node 26's V8 has it, which is why nothing failed
- * server-side.) Importing this module installs the method on both the
- * main thread and the pdf worker scope — see `pdfWorker.ts`.
+ * Polyfill newer JavaScript runtime APIs pdfjs 5.7 uses in its render path.
+ * Electron 39's V8 (Chromium ~140) lacks Map upsert and Math.sumPrecise,
+ * so `page.render()` can throw before the canvas is painted. Importing this
+ * module installs the methods on both the main thread and the pdf worker
+ * scope — see `pdfWorker.ts`.
  *
- * Remove once Electron's bundled Chromium ships native Map upsert.
+ * Remove once Electron's bundled Chromium ships these APIs.
  */
+interface Math {
+  sumPrecise?: (values: Iterable<number>) => number;
+}
+
 type AnyMap = Map<unknown, unknown> & {
   getOrInsert?: (key: unknown, value: unknown) => unknown;
   getOrInsertComputed?: (key: unknown, fn: (key: unknown) => unknown) => unknown;
@@ -43,3 +44,24 @@ function install(proto: AnyMap): void {
 
 install(Map.prototype as AnyMap);
 install(WeakMap.prototype as unknown as AnyMap);
+
+if (typeof Math.sumPrecise !== 'function') {
+  Object.defineProperty(Math, 'sumPrecise', {
+    value(values: Iterable<number>) {
+      let sum = 0;
+      let compensation = 0;
+      for (const value of values) {
+        const next = sum + value;
+        if (Math.abs(sum) >= Math.abs(value)) {
+          compensation += (sum - next) + value;
+        } else {
+          compensation += (value - next) + sum;
+        }
+        sum = next;
+      }
+      return sum + compensation;
+    },
+    writable: true,
+    configurable: true,
+  });
+}
