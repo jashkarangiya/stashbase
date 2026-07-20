@@ -73,6 +73,10 @@ export function reducer(s: State, a: Action): State {
               searchHits: null,
               keywordResult: null,
               searchError: null,
+              // Scope names a subfolder of the previous folder; type
+              // filters are per-folder session state too.
+              searchScope: null,
+              searchTypes: [],
             }
           : {}),
       };
@@ -387,6 +391,11 @@ export function reducer(s: State, a: Action): State {
       return { ...s, caseStrict: a.strict, keywordResult: null };
     case 'SEARCH_WHOLE_WORD':
       return { ...s, wholeWord: a.on, keywordResult: null };
+    case 'SEARCH_SCOPE':
+      // Scope and type filters change both modes' result sets.
+      return { ...s, searchScope: a.scope, searchHits: null, keywordResult: null };
+    case 'SEARCH_TYPES':
+      return { ...s, searchTypes: a.types, searchHits: null, keywordResult: null };
     case 'INDEX_WARNING':
       return { ...s, indexWarning: a.warning };
     case 'PREPARATION_FAILURES':

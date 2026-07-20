@@ -98,7 +98,7 @@ daemon adapters cross these modules. Identity, containment, migration, and proto
 
 One installation has **one library**: the set of opened folders indexed into one collection and exposed by one MCP server.
 
-MCP search defaults to the whole library. Calls can narrow scope by folder root or path prefix. The in-app search UI is scoped to the current window's folder.
+MCP search defaults to the whole library. Calls can narrow scope by folder root or path prefix. The in-app search UI is scoped to the current window's folder and can narrow further to one subfolder and to file-type categories.
 
 On server boot, StashBase binds every library folder into the daemon and then reconciles them in the background. The Welcome screen also reconciles library folders with a short cooldown and polls folder status when it is idle. While a folder is actively opening, Welcome status polling and reconcile are deferred so navigation does not compete with preparation work.
 
@@ -261,13 +261,13 @@ Retrieval is how Agents and the UI find relevant local context.
 StashBase supports two retrieval paths:
 
 - **Semantic search**: dense vector retrieval, combined with keyword signal through MFS/Milvus.
-- **Keyword search**: literal search over source text plus AppData-derived PDF/OCR/DOCX text, useful when embeddings are unavailable or exact matching is needed. `server/keyword-search.ts` owns the desktop keyword-search implementation: ripgrep JSON parsing for source text, AppData-derived text scanning for convertible sources, UTF-8 to UTF-16 match-range mapping, app-side whole-token filtering, snippet windowing, PDF page hints, and result merging. `server/routes/indexing.ts` owns HTTP request validation, folder scoping, and display-path remapping.
+- **Keyword search**: literal search over source text plus AppData-derived PDF/OCR/DOCX text, useful when embeddings are unavailable or exact matching is needed. `server/keyword-search.ts` owns the desktop keyword-search implementation: ripgrep JSON parsing for source text, AppData-derived text scanning for convertible sources, UTF-8 to UTF-16 match-range mapping, app-side whole-token filtering, snippet windowing, PDF page hints, subfolder scoping, file-type category filtering, and result merging. `server/routes/indexing.ts` owns HTTP request validation, folder scoping, escape-safe `path_prefix` resolution, `types` validation, and display-path remapping.
 
 ## 6.2 Scope
 
 Search defaults to the whole library for MCP callers. It can be narrowed by folder root or path prefix.
 
-The desktop UI search is scoped to the current folder because the UI is showing one folder at a time.
+The desktop UI search is scoped to the current folder because the UI is showing one folder at a time. The Search panel can narrow further: a subfolder scope (folder-relative, resolved escape-safe against the active folder) and file-type category chips (`shared/search-types.ts` defines the `notes` / `pdf` / `image` / `docx` vocabulary; `server/format.ts` maps categories to source extensions). Both narrowing knobs apply to semantic and keyword modes and compose. The semantic path passes the extension filter to the daemon, which over-fetches from MFS (bounded), filters hits by source suffix, and truncates back to `top_k` before returning, so filtering happens before the caller-visible top-k cut; a very sparse type can still return fewer than `top_k` hits. The keyword path restricts the ripgrep target and the derived-text walk to the scoped subtree and enabled categories. Display-path remapping is unchanged: filters act on source paths, and derived notes never surface.
 
 The desktop UI does not surface background conversion or indexing as general folder chrome. Folder views stay quiet while StashBase prepares content, and the in-folder `FOLDER` header does not show preparation badges. `server/index-status.ts` owns the folder-scoped readiness snapshot behind `/api/index-status`: semantic pending filtering, disabled-semantic copy, orphan counts, conversion progress and versions, durable preparation failures, tree-change versions, and index warnings. Open PDF and image previews show queued/running preparation state (including same-lane tasks ahead). DOCX opens directly from source and remains visible while a slim status row reports its independent searchable-text preparation; the AppData-derived route is only a fallback if direct rendering fails. Welcome library rows can show a lightweight folder-level failure marker because the files are not expanded there; inside a folder, durable failures are shown on the affected file row. The Search view summarizes library readiness because that is where incomplete preparation affects the user.
 

@@ -13,6 +13,7 @@ import {
   type KeywordMatch,
   type KeywordSearchResult,
 } from './search-display.ts';
+import type { SearchTypeCategory } from '../shared/search-types.ts';
 
 const RG_PER_FILE_CAP = 50;
 const RG_TOTAL_CAP = 500;
@@ -28,6 +29,11 @@ export interface KeywordSearchOpts {
    *  ripgrep's `--word-regexp`: its boundary semantics do not line up
    *  with the renderer and are especially poor for CJK text. */
   wholeWord: boolean;
+  /** Folder-relative subfolder to search instead of the whole folder.
+   *  Already validated by the route (escape-safe, existing directory). */
+  pathPrefix?: string;
+  /** File-type categories to include; empty/absent = every category. */
+  types?: readonly SearchTypeCategory[];
 }
 
 export async function runKeywordSearch(
@@ -35,9 +41,14 @@ export async function runKeywordSearch(
   folderRoot: string,
   opts: KeywordSearchOpts,
 ): Promise<KeywordSearchResult> {
+  const types = opts.types ?? [];
+  const wantsNotes = types.length === 0 || types.includes('notes');
+  const wantsConvertible = types.length === 0
+    || types.some((t) => t === 'pdf' || t === 'image' || t === 'docx');
+  const empty: KeywordSearchResult = { files: [], totalMatches: 0, truncated: false };
   return mergeKeywordResults(
-    await runRipgrep(query, folderRoot, opts),
-    searchDerivedMarkdown(query, folderRoot, opts),
+    wantsNotes ? await runRipgrep(query, folderRoot, opts) : empty,
+    wantsConvertible ? searchDerivedMarkdown(query, folderRoot, opts) : empty,
   );
 }
 
@@ -57,7 +68,7 @@ function runRipgrep(query: string, cwd: string, opts: KeywordSearchOpts): Promis
       '--glob', '*.html',
       '--glob', '*.htm',
     ];
-    args.push('-e', query, '.');
+    args.push('-e', query, opts.pathPrefix ? `./${opts.pathPrefix}` : '.');
     execFile(RESOLVED_RG_PATH, args, {
       cwd,
       maxBuffer: 32 * 1024 * 1024,
@@ -123,12 +134,15 @@ function searchDerivedMarkdown(query: string, folderRoot: string, opts: KeywordS
   let total = 0;
   let truncated = false;
   const caseSensitive = opts.caseStrict || /[A-Z]/.test(query);
+  const types = opts.types ?? [];
+  const walkRoot = opts.pathPrefix ? path.join(folderRoot, opts.pathPrefix) : folderRoot;
 
-  walkConvertibleSources(folderRoot, '', (rel, abs) => {
+  walkConvertibleSources(walkRoot, opts.pathPrefix ?? '', (rel, abs) => {
     if (total >= RG_TOTAL_CAP) {
       truncated = true;
       return;
     }
+    if (!convertibleMatchesTypes(rel, types)) return;
     const text = readDerivedSearchText(rel, abs);
     if (text == null) return;
     const lines = text.split(/\r?\n/);
@@ -194,6 +208,16 @@ function walkConvertibleSources(
       fn(rel, abs);
     }
   }
+}
+
+/** Category membership for the convertible-source walk. Empty types =
+ *  every convertible category (`notes` never reaches this leg). */
+function convertibleMatchesTypes(rel: string, types: readonly SearchTypeCategory[]): boolean {
+  if (types.length === 0) return true;
+  if (/\.pdf$/i.test(rel)) return types.includes('pdf');
+  if (isImageFile(rel)) return types.includes('image');
+  if (isDocxFile(rel)) return types.includes('docx');
+  return false;
 }
 
 function findLiteralRanges(line: string, query: string, caseSensitive: boolean): Array<[number, number]> {

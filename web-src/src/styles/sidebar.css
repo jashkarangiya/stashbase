@@ -686,6 +686,57 @@
       font-weight: 600;
     }
 
+    /* Scope select + file-type chips under the search input. Both are
+     * quiet by default and highlight only when narrowing is active. */
+    .search-filters {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px;
+      padding: 0 12px 8px;
+    }
+    .search-scope {
+      max-width: 100%;
+      padding: 2px 4px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--muted);
+      font: inherit;
+      font-size: 11px;
+      outline: none;
+    }
+    .search-scope:focus {
+      border-color: var(--accent);
+    }
+    .search-type-chips {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+    .search-type-chip {
+      appearance: none;
+      height: 20px;
+      padding: 0 7px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 11px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .search-type-chip:hover {
+      background: var(--hover);
+      color: var(--fg);
+    }
+    .search-type-chip.active {
+      background: var(--active);
+      border-color: var(--border);
+      color: var(--fg);
+    }
+
     /* Brief glow when something programmatically focuses the search
      * input (empty-tab landing → "Search notes", ⌘O hotkey). Without
      * this the focus border alone is easy to miss when the user's

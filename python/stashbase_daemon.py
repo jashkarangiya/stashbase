@@ -1089,6 +1089,19 @@ def op_delete_prefix(svc: StashbaseStore, args: dict) -> dict:
     return {"removed": removed}
 
 
+def _search_extension_filter(raw) -> tuple | None:
+    """Normalize the caller's extension list into a lowercase suffix
+    tuple for ``str.endswith``. None / empty / malformed input means
+    "no extension filter"."""
+    if not isinstance(raw, list):
+        return None
+    exts = tuple(
+        e.lower() for e in raw
+        if isinstance(e, str) and e.startswith(".") and len(e) > 1
+    )
+    return exts or None
+
+
 def op_search(svc: StashbaseStore, args: dict) -> dict:
     """Hybrid search in the single collection, optionally scoped to one
     ``folder``. MFS's ``hybrid_search`` already does dense + BM25 + RRF
@@ -1098,6 +1111,7 @@ def op_search(svc: StashbaseStore, args: dict) -> dict:
     query = args["query"].strip()
     folder = args.get("folder")
     explicit_prefix = args.get("path_prefix")
+    extensions = _search_extension_filter(args.get("extensions"))
     top_k_raw = int(args.get("top_k", 8))
     top_k = max(1, min(200, top_k_raw))
     if not query:
@@ -1119,11 +1133,18 @@ def op_search(svc: StashbaseStore, args: dict) -> dict:
     else:
         path_filter = None
 
+    # Extension filtering happens here, before the caller-visible top-k
+    # cut. MFS's hybrid_search only accepts a path prefix filter, so the
+    # store is over-fetched (bounded) and filtered by source suffix; the
+    # filtered list is then truncated back to top_k. A very sparse type
+    # can still return fewer than top_k hits.
+    fetch_k = top_k if extensions is None else min(200, max(top_k * 5, 50))
+
     try:
         if store.is_empty():
             return {"hits": []}
         qvec = embedder.embed([query])[0]
-        hits = store.hybrid_search(qvec, query, path_filter=path_filter, top_k=top_k)
+        hits = store.hybrid_search(qvec, query, path_filter=path_filter, top_k=fetch_k)
     except Exception as exc:
         sys.stderr.write(f"[stashbase] search store failed: {exc}\n")
         return {"hits": []}
@@ -1131,6 +1152,8 @@ def op_search(svc: StashbaseStore, args: dict) -> dict:
     out = []
     for h in hits:
         if h.is_dir:
+            continue
+        if extensions is not None and not h.source.lower().endswith(extensions):
             continue
         out.append({
             "path": h.source,
@@ -1142,6 +1165,8 @@ def op_search(svc: StashbaseStore, args: dict) -> dict:
             "score": h.score,
             "metadata": h.metadata or {},
         })
+        if len(out) >= top_k:
+            break
     return {"hits": out}
 
 

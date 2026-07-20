@@ -1,11 +1,13 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import type { KeywordHitFile, KeywordMatch, SearchHit } from '../api';
+import type { FileMeta, KeywordHitFile, KeywordMatch, SearchHit } from '../api';
 import { useApp } from '../store/AppContext';
+import type { SearchTypeCategory } from '../../../shared/search-types.ts';
 
 /**
  * The "search" sidebar view — owns the search input, the mode toggle
  * (≈ ↔ =) with conditional `Aa` / `Word` sub-filters when in keyword
- * mode, and the result list.
+ * mode, the subfolder-scope and file-type filter row, and the result
+ * list.
  *
  * Empty query → empty body (no "Recent searches" prompt yet — that's
  * deferred until we add a real history feature).
@@ -22,6 +24,7 @@ export function SearchPanel() {
   return (
     <div className="search-panel" id="sidebar-panel-search" role="tabpanel">
       <SearchBox />
+      <SearchFilters />
       <SearchStatusBanner />
       <div className="search-panel-body">
         {state.searchMode === 'semantic' && state.embedderHasKey === false ? (
@@ -36,6 +39,84 @@ export function SearchPanel() {
       </div>
     </div>
   );
+}
+
+const SEARCH_TYPE_CHIPS: Array<{ type: SearchTypeCategory; label: string; title: string }> = [
+  { type: 'notes', label: 'Notes', title: 'Markdown and HTML' },
+  { type: 'pdf', label: 'PDF', title: 'PDF documents' },
+  { type: 'image', label: 'Images', title: 'OCR-searchable images' },
+  { type: 'docx', label: 'DOCX', title: 'Word documents' },
+];
+
+/** Subfolder scope + file-type chips. Both narrow the NEXT search in
+ *  either mode and compose; no selection = whole folder, every type. */
+function SearchFilters() {
+  const { state, actions, dispatch } = useApp();
+  const scopes = subfolderScopes(state.files);
+  const staleScope = state.searchScope != null && !scopes.includes(state.searchScope);
+
+  function rerun(next: { scope?: string | null; types?: SearchTypeCategory[] }) {
+    if (state.filterQuery.trim()) void actions.runSearch(state.filterQuery, undefined, next);
+  }
+
+  function setScope(scope: string | null) {
+    dispatch({ type: 'SEARCH_SCOPE', scope });
+    rerun({ scope });
+  }
+
+  function toggleType(type: SearchTypeCategory) {
+    const types = state.searchTypes.includes(type)
+      ? state.searchTypes.filter((t) => t !== type)
+      : [...state.searchTypes, type];
+    dispatch({ type: 'SEARCH_TYPES', types });
+    rerun({ types });
+  }
+
+  return (
+    <div className="search-filters">
+      {(scopes.length > 0 || staleScope) && (
+        <select
+          className="search-scope"
+          value={state.searchScope ?? ''}
+          onChange={(e) => setScope(e.target.value || null)}
+          aria-label="Search scope"
+          title="Limit search to a subfolder"
+        >
+          <option value="">All folders</option>
+          {staleScope && <option value={state.searchScope!}>{state.searchScope}</option>}
+          {scopes.map((scope) => <option key={scope} value={scope}>{scope}</option>)}
+        </select>
+      )}
+      <div className="search-type-chips" role="group" aria-label="File types">
+        {SEARCH_TYPE_CHIPS.map(({ type, label, title }) => (
+          <button
+            key={type}
+            type="button"
+            className={'search-type-chip' + (state.searchTypes.includes(type) ? ' active' : '')}
+            aria-pressed={state.searchTypes.includes(type)}
+            title={title}
+            onClick={() => toggleType(type)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Every directory that contains a visible file, folder-relative,
+ *  sorted. Derived from the file list so the options always reflect
+ *  the live tree. */
+function subfolderScopes(files: FileMeta[]): string[] {
+  const dirs = new Set<string>();
+  for (const file of files) {
+    const parts = file.name.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      dirs.add(parts.slice(0, i).join('/'));
+    }
+  }
+  return [...dirs].sort((a, b) => a.localeCompare(b));
 }
 
 function SearchStatusBanner() {

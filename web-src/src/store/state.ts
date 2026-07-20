@@ -17,6 +17,7 @@ import type {
   SearchHit,
   Agent,
 } from '../api';
+import type { SearchTypeCategory } from '../../../shared/search-types.ts';
 
 export {
   CHAT_MAX_WIDTH,
@@ -265,6 +266,12 @@ export interface State {
   /** Only meaningful in keyword mode. `true` = `--word-regexp` so
    *  "agent" doesn't match "agents". Hidden in semantic mode. */
   wholeWord: boolean;
+  /** Folder-relative subfolder the next search is scoped to; null =
+   *  whole folder. Reset when the active folder changes. */
+  searchScope: string | null;
+  /** File-type categories the next search includes; empty = every
+   *  category. Applies to both modes and composes with `searchScope`. */
+  searchTypes: SearchTypeCategory[];
   /** `null` = not in search mode (query empty or cleared). `[]` = ran
    *  and got nothing. Non-empty array = ranked hits from `/api/search`.
    *  Populated only when `searchMode === 'semantic'`. */
@@ -364,6 +371,8 @@ export const initialState: State = {
   searchMode: 'semantic',
   caseStrict: false,
   wholeWord: false,
+  searchScope: null,
+  searchTypes: [],
   searchHits: null,
   keywordResult: null,
   searching: false,
@@ -453,6 +462,8 @@ export type Action =
   | { type: 'SIDEBAR_VIEW'; view: 'files' | 'search' }
   | { type: 'SEARCH_CASE_STRICT'; strict: boolean }
   | { type: 'SEARCH_WHOLE_WORD'; on: boolean }
+  | { type: 'SEARCH_SCOPE'; scope: string | null }
+  | { type: 'SEARCH_TYPES'; types: SearchTypeCategory[] }
   | { type: 'INDEX_WARNING'; warning: IndexWarning | null }
   | { type: 'PREPARATION_FAILURES'; failures: PreparationFailure[] }
   | { type: 'CTX_MENU'; menu: CtxMenu | null }

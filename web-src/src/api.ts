@@ -21,6 +21,7 @@ import type {
   SyncResult,
   UploadResult,
 } from './apiTypes';
+import type { SearchTypeCategory } from '../../shared/search-types.ts';
 import {
   encodePath,
   getWindowId,
@@ -149,9 +150,15 @@ export const api = {
     'POST',
     folder ? `/api/sync?folder=${encodeURIComponent(folder)}` : '/api/sync',
   ),
-  search: (query: string, top_k = 8, opts?: { folder?: string }) =>
-    send<{ hits: SearchHit[] }>('POST', '/api/search', { query, top_k, folder: opts?.folder }),
-  keywordSearch: (query: string, opts?: { caseStrict?: boolean; wholeWord?: boolean; folder?: string }) => {
+  search: (query: string, top_k = 8, opts?: { folder?: string; pathPrefix?: string; types?: readonly SearchTypeCategory[] }) =>
+    send<{ hits: SearchHit[] }>('POST', '/api/search', {
+      query,
+      top_k,
+      folder: opts?.folder,
+      path_prefix: opts?.pathPrefix,
+      types: opts?.types?.length ? opts.types : undefined,
+    }),
+  keywordSearch: (query: string, opts?: { caseStrict?: boolean; wholeWord?: boolean; folder?: string; pathPrefix?: string; types?: readonly SearchTypeCategory[] }) => {
     const qs = new URLSearchParams({ q: query });
     if (opts?.caseStrict) qs.set('case_strict', '1');
     if (opts?.wholeWord) qs.set('whole_word', '1');
@@ -159,6 +166,8 @@ export const api = {
     // sessions don't fall back to the server's single `currentFolder`
     // singleton and search the wrong folder's tree.
     if (opts?.folder) qs.set('folder', opts.folder);
+    if (opts?.pathPrefix) qs.set('path_prefix', opts.pathPrefix);
+    if (opts?.types?.length) qs.set('types', opts.types.join(','));
     return getJson<KeywordSearchResult>(`/api/keyword-search?${qs.toString()}`);
   },
   indexStatus: (folder?: string) =>

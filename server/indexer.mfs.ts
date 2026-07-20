@@ -314,10 +314,11 @@ export class MfsIndexer implements Indexer {
     };
   }
 
-  async search(query: string, topK: number, folder?: string, pathPrefix?: string): Promise<SearchHit[]> {
+  async search(query: string, topK: number, folder?: string, pathPrefix?: string, extensions?: string[]): Promise<SearchHit[]> {
     const args: Record<string, unknown> = { query, top_k: topK };
     if (folder) args.folder = normalizeDaemonPath(folder);
     if (pathPrefix) args.path_prefix = normalizeDaemonPath(pathPrefix);
+    if (extensions && extensions.length > 0) args.extensions = extensions;
     const res = await getDaemon().call<{ hits: DaemonHit[] }>('search', args);
     return res.hits.map((h) => ({
       fileName: normalizeDaemonPath(h.path),

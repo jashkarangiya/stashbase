@@ -125,6 +125,8 @@ test('loading a different folder clears stale search state', () => {
     searching: true,
     searchHits: [{ fileName: 'old.md', chunkIndex: 0, content: 'old', heading: '', score: 1 }],
     searchError: 'stale',
+    searchScope: 'notes/archive',
+    searchTypes: ['pdf'],
   });
   const next = reducer(state, {
     type: 'FILES_LOADED',
@@ -139,4 +141,30 @@ test('loading a different folder clears stale search state', () => {
   assert.equal(next.searchHits, null);
   assert.equal(next.keywordResult, null);
   assert.equal(next.searchError, null);
+  assert.equal(next.searchScope, null);
+  assert.deepEqual(next.searchTypes, []);
+});
+
+test('scope and type filter changes clear both modes\' results', () => {
+  const hits = [{ fileName: 'a.md', chunkIndex: 0, content: 'x', heading: '', score: 1 }];
+  const keyword = { query: 'x', folder: 'f', files: [], totalMatches: 0, truncated: false };
+
+  const scoped = reducer(
+    freshState({ searchHits: hits, keywordResult: keyword }),
+    { type: 'SEARCH_SCOPE', scope: 'notes' },
+  );
+  assert.equal(scoped.searchScope, 'notes');
+  assert.equal(scoped.searchHits, null);
+  assert.equal(scoped.keywordResult, null);
+
+  const typed = reducer(
+    freshState({ searchHits: hits, keywordResult: keyword }),
+    { type: 'SEARCH_TYPES', types: ['pdf', 'docx'] },
+  );
+  assert.deepEqual(typed.searchTypes, ['pdf', 'docx']);
+  assert.equal(typed.searchHits, null);
+  assert.equal(typed.keywordResult, null);
+
+  const cleared = reducer(scoped, { type: 'SEARCH_SCOPE', scope: null });
+  assert.equal(cleared.searchScope, null);
 });

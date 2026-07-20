@@ -21,6 +21,8 @@ import { clearIndexWarning, indexer, syncFolderNow } from '../state.ts';
 import { noteTreeChanged } from '../watcher.ts';
 import { sendError } from '../http.ts';
 import { filesystemPath } from '../filesystem-path.ts';
+import { searchExtensionsForTypes } from '../format.ts';
+import { isSearchTypeCategory, type SearchTypeCategory } from '../../shared/search-types.ts';
 import { buildIndexStatus } from '../index-status.ts';
 import { runKeywordSearch } from '../keyword-search.ts';
 import {
@@ -206,7 +208,10 @@ export function mount(app: express.Express): void {
   // Hybrid (vector + BM25) search, scoped to the current open folder.
   // Cross-folder search lives behind the MCP `search_library` tool (different
   // mental model: "AI searching all my notes" vs "I'm searching the library
-  // I'm currently editing").
+  // I'm currently editing"). Optional narrowing: `path_prefix` (folder-
+  // relative subfolder, resolved escape-safe) and `types` (file-type
+  // categories mapped to source extensions, applied daemon-side before
+  // the final top-k cut).
   app.post('/api/search', async (req, res) => {
     try {
       const query = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
@@ -220,8 +225,14 @@ export function mount(app: express.Express): void {
       }
       const explicit = parseFolderParam(req.body?.folder);
       const { folderRoot } = requireRequestFolder(explicit);
+      const types = parseSearchTypes(req.body?.types);
+      if (types == null) return res.status(400).json({ error: 'unknown types value' });
+      const prefixAbs = resolveScopePrefix(folderRoot, req.body?.path_prefix);
+      if (prefixAbs === false) return res.status(400).json({ error: 'path_prefix must be a folder-relative subfolder' });
       const root = filesystemPath.absolute(folderRoot);
-      const hits = await indexer.search(query, topK, root);
+      const hits = await indexer.search(
+        query, topK, root, prefixAbs, searchExtensionsForTypes(types) ?? undefined,
+      );
       // Daemon hits arrive as absolute paths; translate fileName back to
       // folder-relative for the sidebar (which only knows the current
       // folder). Then `displayPathForHit` rewrites a derived note to its
@@ -258,7 +269,21 @@ export function mount(app: express.Express): void {
       const { folderRoot: folderDir } = requireRequestFolder(explicit);
       const caseStrict = req.query.case_strict === '1' || req.query.case_strict === 'true';
       const wholeWord = req.query.whole_word === '1' || req.query.whole_word === 'true';
-      const result = await runKeywordSearch(query, folderDir, { caseStrict, wholeWord });
+      const types = parseSearchTypes(
+        typeof req.query.types === 'string' && req.query.types
+          ? req.query.types.split(',')
+          : undefined,
+      );
+      if (types == null) return res.status(400).json({ error: 'unknown types value' });
+      const rawPrefix = typeof req.query.path_prefix === 'string' ? req.query.path_prefix : undefined;
+      const prefixAbs = resolveScopePrefix(folderDir, rawPrefix);
+      if (prefixAbs === false) return res.status(400).json({ error: 'path_prefix must be a folder-relative subfolder' });
+      const result = await runKeywordSearch(query, folderDir, {
+        caseStrict,
+        wholeWord,
+        pathPrefix: prefixAbs ? (filesystemPath.relative(filesystemPath.absolute(folderDir), prefixAbs) ?? undefined) : undefined,
+        types,
+      });
       // ripgrep's `*.md` glob may also match legacy hidden dot-prefixed
       // derived notes (`.paper.pdf.md` / `.shot.png.md`). Apply the same
       // remap-or-drop rule as the semantic routes so a hit's row points
@@ -325,5 +350,35 @@ export function mount(app: express.Express): void {
       sendError(res, err);
     }
   });
+}
+
+/** Validates a `types` request value into search categories. Absent →
+ *  empty list (no filter); any unknown entry → null (caller 400s). */
+function parseSearchTypes(raw: unknown): SearchTypeCategory[] | null {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) return null;
+  const out: SearchTypeCategory[] = [];
+  for (const entry of raw) {
+    const value = typeof entry === 'string' ? entry.trim() : entry;
+    if (!isSearchTypeCategory(value)) return null;
+    out.push(value);
+  }
+  return out;
+}
+
+/** Resolves a folder-relative subfolder scope to an absolute directory
+ *  inside `folderRoot`. Absent/empty → undefined (folder-wide search);
+ *  escaping, missing, or non-directory values → false (caller 400s). */
+function resolveScopePrefix(folderRoot: string, raw: unknown): string | undefined | false {
+  if (raw == null) return undefined;
+  if (typeof raw !== 'string') return false;
+  const rel = raw.trim().replace(/^\/+|\/+$/g, '');
+  if (!rel) return undefined;
+  try {
+    const abs = filesystemPath.resolveUnder(folderRoot, rel, { access: 'existing' });
+    return fs.statSync(abs).isDirectory() ? abs : false;
+  } catch {
+    return false;
+  }
 }
 // ---------- recent-files walk ----------

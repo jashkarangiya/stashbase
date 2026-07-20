@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import test from 'node:test';
+import { matchesSearchTypes, searchExtensionsForTypes } from './format.ts';
 import {
   hasWholeTokenBoundaries,
   normalizeRipgrepSubmatches,
@@ -36,4 +37,20 @@ test('packaged ripgrep path prefers app.asar.unpacked when present', () => {
   const candidate = path.join('/tmp', 'App.app', 'Contents', 'Resources', 'app.asar', 'node_modules', 'rg');
 
   assert.equal(resolveSpawnableRipgrepPath(candidate), candidate);
+});
+
+test('search type categories map to source extensions', () => {
+  assert.deepEqual(searchExtensionsForTypes(['pdf']), ['.pdf']);
+  assert.deepEqual(searchExtensionsForTypes(['notes']), ['.md', '.markdown', '.html', '.htm']);
+  assert.deepEqual(searchExtensionsForTypes(['docx', 'docx']), ['.docx']);
+  assert.equal(searchExtensionsForTypes([]), null);
+  assert.equal(searchExtensionsForTypes(['notes', 'pdf', 'image', 'docx']), null);
+});
+
+test('type membership checks extensions case-insensitively', () => {
+  assert.equal(matchesSearchTypes('a/Report.PDF', ['pdf']), true);
+  assert.equal(matchesSearchTypes('a/report.pdf', ['notes']), false);
+  assert.equal(matchesSearchTypes('shot.jpeg', ['image']), true);
+  assert.equal(matchesSearchTypes('doc.docx', ['pdf', 'docx']), true);
+  assert.equal(matchesSearchTypes('note.md', []), true);
 });

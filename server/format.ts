@@ -22,6 +22,8 @@
  * cycle that the packaged bundle can't resolve correctly.
  */
 
+import { SEARCH_TYPE_CATEGORIES, type SearchTypeCategory } from '../shared/search-types.ts';
+
 /** Structured note formats — indexed directly (the file is the source). */
 export type FileFormat = 'md' | 'html';
 
@@ -123,6 +125,33 @@ export function isDocxFile(name: string): boolean {
  *  notes; it lets the conversion path own their index entry. */
 export function isConvertibleSource(name: string): boolean {
   return /\.pdf$/i.test(name) || isImageFile(name) || isDocxFile(name);
+}
+
+const IMAGE_EXTS: readonly string[] = ['png', 'jpg', 'jpeg', 'webp'];
+
+const SEARCH_TYPE_EXTENSIONS: Record<SearchTypeCategory, readonly string[]> = {
+  notes: NOTE_EXTS,
+  pdf: ['pdf'],
+  image: IMAGE_EXTS,
+  docx: ['docx'],
+};
+
+/** Lowercase dot-prefixed source extensions for a set of search
+ *  categories. Returns null when the set is empty or covers every
+ *  category — both mean "no extension filter". */
+export function searchExtensionsForTypes(types: readonly SearchTypeCategory[]): string[] | null {
+  const unique = [...new Set(types)];
+  if (unique.length === 0 || unique.length === SEARCH_TYPE_CATEGORIES.length) return null;
+  return unique.flatMap((t) => SEARCH_TYPE_EXTENSIONS[t].map((ext) => `.${ext}`));
+}
+
+/** True when `name`'s extension belongs to one of the given categories. */
+export function matchesSearchTypes(name: string, types: readonly SearchTypeCategory[]): boolean {
+  if (types.length === 0) return true;
+  const exts = searchExtensionsForTypes(types);
+  if (exts == null) return true;
+  const lower = name.toLowerCase();
+  return exts.some((ext) => lower.endsWith(ext));
 }
 
 function pathBasename(name: string): string {

@@ -29,6 +29,7 @@ import {
   type PendingHighlight,
   type State,
 } from './state';
+import type { SearchTypeCategory } from '../../../shared/search-types.ts';
 import type { EditorHandle, FindController } from './actionTypes';
 import { useDocumentActions } from './useDocumentActions';
 import { useFeedbackActions } from './useFeedbackActions';
@@ -81,7 +82,12 @@ export interface AppActions {
   runSearch: (
     query: string,
     mode?: 'semantic' | 'keyword',
-    opts?: { caseStrict?: boolean; wholeWord?: boolean },
+    opts?: {
+      caseStrict?: boolean;
+      wholeWord?: boolean;
+      scope?: string | null;
+      types?: SearchTypeCategory[];
+    },
   ) => Promise<void>;
   /** Clear the active folder's background-index warning. */
   dismissIndexWarning: () => Promise<void>;

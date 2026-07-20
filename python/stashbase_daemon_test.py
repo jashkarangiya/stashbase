@@ -193,6 +193,55 @@ class StashbaseDaemonTests(unittest.TestCase):
             self.assertFalse(result["reused"])
             self.assertEqual(fake.deleted, ["C:/Users/Alice/Docs/File.md"])
 
+    def test_search_filters_extensions_before_top_k(self) -> None:
+        hit = lambda source: types.SimpleNamespace(
+            is_dir=False, source=source, chunk_index=0, chunk_text="t",
+            start_line=1, end_line=2, content_type="text", score=1.0, metadata={},
+        )
+        requested = []
+
+        class FakeStore:
+            def is_empty(self):
+                return False
+
+            def hybrid_search(self, _qvec, _query, path_filter, top_k):  # noqa: ANN001
+                requested.append(top_k)
+                return [
+                    hit("/lib/a.md"), hit("/lib/b.pdf"), hit("/lib/c.md"),
+                    hit("/lib/d.PDF"), hit("/lib/e.docx"), hit("/lib/f.pdf"),
+                ]
+
+        class FakeEmbedder:
+            def embed(self, texts):  # noqa: ANN001
+                return [[0.0] for _ in texts]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = stashbase_daemon.StashbaseStore(tmp)
+            svc.stores = lambda: [(None, FakeEmbedder(), FakeStore())]
+
+            filtered = stashbase_daemon.op_search(svc, {
+                "query": "q", "top_k": 2, "extensions": [".pdf"],
+            })
+            self.assertEqual(
+                [h["path"] for h in filtered["hits"]],
+                ["/lib/b.pdf", "/lib/d.PDF"],
+            )
+
+            unfiltered = stashbase_daemon.op_search(svc, {"query": "q", "top_k": 2})
+            self.assertEqual(len(unfiltered["hits"]), 2)
+
+            # Filtered call over-fetches; unfiltered keeps the caller's k.
+            self.assertEqual(requested, [50, 2])
+
+    def test_search_extension_filter_normalizes_suffixes(self) -> None:
+        f = stashbase_daemon._search_extension_filter
+        self.assertEqual(f([".md", ".PDF"]), (".md", ".pdf"))
+        self.assertIsNone(f(None))
+        self.assertIsNone(f([]))
+        self.assertIsNone(f("not-a-list"))
+        self.assertIsNone(f(["md", ".", 42]))
+        self.assertEqual(f(["md", ".docx"]), (".docx",))
+
     def test_termination_signals_skip_missing_sighup(self) -> None:
         fake_signal = types.SimpleNamespace(SIGTERM=15, SIGINT=2)
 

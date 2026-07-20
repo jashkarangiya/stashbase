@@ -96,9 +96,11 @@ export interface Indexer {
    *  to chunks whose `source` starts with that prefix — useful when an
    *  agent wants to ask "only inside cs183b/transcripts/". When both
    *  are passed, `pathPrefix` takes precedence (it's more specific).
-   *  Returns at most `topK` hits ordered by descending score, with
-   *  `fileName` absolute. */
-  search(query: string, topK: number, folder?: string, pathPrefix?: string): Promise<SearchHit[]>;
+   *  `extensions?` restricts hits to sources with one of the given
+   *  lowercase dot-prefixed extensions; the daemon applies it before
+   *  final top-k selection. Returns at most `topK` hits ordered by
+   *  descending score, with `fileName` absolute. */
+  search(query: string, topK: number, folder?: string, pathPrefix?: string, extensions?: string[]): Promise<SearchHit[]>;
 
   /** Walk the library and compute the content-hash diff against the
    *  index. `folder?` scopes the walk; omitted = whole library. Paths
