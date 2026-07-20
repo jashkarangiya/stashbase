@@ -1,9 +1,10 @@
 /**
  * Find-in-iframe driver. Matches the query against the concatenated
  * text of the document's visible text nodes — so a match may span
- * element boundaries (inline markup, highlighted-code token spans) —
- * and paints each match Range with the CSS Custom Highlight API. One
- * Range gets the "current" highlight (used by the counter +
+ * inline element boundaries (formatting markup, highlighted-code token
+ * spans) but never a block boundary or `<br>`, where a separator is
+ * inserted — and paints each match Range with the CSS Custom Highlight
+ * API. One Range gets the "current" highlight (used by the counter +
  * scrollIntoView); the rest get a duller "match" tint.
  *
  * Realm-aware: every Range / Highlight is built against the supplied
@@ -108,31 +109,74 @@ function clearAndReport(win: Window | null): MatchInfo {
 
 type TextSegment = { node: Text; start: number };
 
-/** Runs the query over the concatenated text of the document's visible
- *  text nodes and maps each match back to a (possibly multi-node)
- *  Range. Block boundaries stay safe because the generated markup
- *  keeps whitespace text nodes between blocks; adjacent inline
- *  fragments join, which mirrors what the user visually reads.
- *
- *  TreeWalker skips <script> / <style> subtrees — same exclusion set
- *  Chrome's find uses. */
-function collectMatches(doc: Document, re: RegExp): Range[] {
-  const segments: TextSegment[] = [];
+/** Minimal structural view of a DOM subtree. `Element` and `Text`
+ *  satisfy it directly; tests build literal fixtures without a
+ *  browser document. */
+export interface CorpusNode {
+  nodeType: number;
+  tagName?: string;
+  data?: string;
+  firstChild: CorpusNode | null;
+  nextSibling: CorpusNode | null;
+}
+
+const EXCLUDED_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT']);
+
+/** Block-level elements the sanitizer can emit. Crossing one inserts a
+ *  separator so text in different blocks cannot join into one match. */
+const BLOCK_TAGS = new Set([
+  'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'CAPTION', 'DD', 'DETAILS',
+  'DIV', 'DL', 'DT', 'FIGCAPTION', 'FIGURE', 'H1', 'H2', 'H3', 'H4', 'H5',
+  'H6', 'HR', 'LI', 'MAIN', 'OL', 'P', 'PRE', 'SECTION', 'SUMMARY',
+  'TABLE', 'TBODY', 'TD', 'TFOOT', 'TH', 'THEAD', 'TR', 'UL',
+]);
+
+/** The find input is single-line, so a query can never contain this
+ *  character and no match can ever span a separator. */
+const BLOCK_SEPARATOR = '\n';
+
+/** Flattens visible text into one searchable string plus a map back to
+ *  the source text nodes. Adjacent inline fragments (formatting markup,
+ *  highlighted-code token spans) join, mirroring what the user visually
+ *  reads; block-level boundaries and `<br>` insert a separator so raw
+ *  HTML like `<p>foo</p><p>bar</p>` cannot match "foobar". Skips
+ *  <script> / <style> subtrees — same exclusion set Chrome's find uses. */
+export function buildFindCorpus(root: CorpusNode): { joined: string; segments: Array<{ node: CorpusNode; start: number }> } {
+  const segments: Array<{ node: CorpusNode; start: number }> = [];
   let joined = '';
-  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
-    acceptNode(node: Node) {
-      const t = node.parentElement?.tagName;
-      if (t === 'SCRIPT' || t === 'STYLE' || t === 'NOSCRIPT') {
-        return NodeFilter.FILTER_REJECT;
-      }
-      if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
-      return NodeFilter.FILTER_ACCEPT;
-    },
-  });
-  for (let n: Node | null = walker.nextNode(); n; n = walker.nextNode()) {
-    segments.push({ node: n as Text, start: joined.length });
-    joined += (n as Text).data;
-  }
+  const separate = () => {
+    if (joined && !joined.endsWith(BLOCK_SEPARATOR)) joined += BLOCK_SEPARATOR;
+  };
+  const visit = (node: CorpusNode): void => {
+    if (node.nodeType === 3) {
+      if (!node.data) return;
+      segments.push({ node, start: joined.length });
+      joined += node.data;
+      return;
+    }
+    if (node.nodeType !== 1) return;
+    const tag = node.tagName ?? '';
+    if (EXCLUDED_TAGS.has(tag)) return;
+    if (tag === 'BR') {
+      separate();
+      return;
+    }
+    const block = BLOCK_TAGS.has(tag);
+    if (block) separate();
+    for (let child = node.firstChild; child; child = child.nextSibling) visit(child);
+    if (block) separate();
+  };
+  visit(root);
+  return { joined, segments };
+}
+
+/** Runs the query over the flattened corpus and maps each match back to
+ *  a (possibly multi-node) Range. */
+function collectMatches(doc: Document, re: RegExp): Range[] {
+  const corpus = buildFindCorpus(doc.body as unknown as CorpusNode);
+  const joined = corpus.joined;
+  // Every corpus node with nodeType 3 in a live document is a Text node.
+  const segments = corpus.segments as unknown as TextSegment[];
 
   const out: Range[] = [];
   if (!joined) return out;

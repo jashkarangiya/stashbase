@@ -194,7 +194,7 @@ When an iframe document attaches, every image receives `data-stashbase-previewab
 
 Cmd/Ctrl+F inside the iframe prevents the browser's native find and opens the StashBase find bar. Cmd/Ctrl+G advances to the next result; Shift+Cmd/Ctrl+G moves to the previous result.
 
-Find matches the query against the concatenated text of body text nodes, excluding direct text children of `script`, `style`, and `noscript`, and maps match offsets back to node positions through a segment index. A match may therefore span element boundaries — inline markup or highlighted-code token spans — and produce a multi-node `Range`. Block boundaries do not join into false matches because the generated markup keeps whitespace text nodes between blocks. It supports literal matching, case sensitivity, and whole-word mode. Matches are painted with the iframe window's CSS Custom Highlight registry:
+Find matches the query against the concatenated text of body text nodes, excluding `script`, `style`, and `noscript` subtrees, and maps match offsets back to node positions through a segment index. A match may therefore span inline element boundaries — formatting markup or highlighted-code token spans — and produce a multi-node `Range`. Traversal inserts a newline separator when it crosses a block-level element or `<br>`, and the single-line find input can never contain a newline, so text in different blocks — including adjacent raw-HTML blocks with no whitespace between them — cannot join into one match. It supports literal matching, case sensitivity, and whole-word mode. Matches are painted with the iframe window's CSS Custom Highlight registry:
 
 - `stash-find` paints non-current matches yellow.
 - `stash-find-current` paints the active match blue with white text.
