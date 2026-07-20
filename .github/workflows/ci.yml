@@ -47,6 +47,9 @@ jobs:
       - name: Test conversion scheduler
         run: pnpm test:conversion-scheduler
 
+      - name: Test library file transactions
+        run: pnpm test:library-files
+
       - name: Test agent adapters
         run: pnpm test:agent
 

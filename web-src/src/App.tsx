@@ -227,7 +227,11 @@ function AppBody() {
         <MainPane />
         {chatMounted && <ChatSplitter />}
         {chatMounted && (
-          <LazyLoadBoundary className="chat-pane-shell" label="Agent chat">
+          <LazyLoadBoundary
+            className="chat-pane-shell"
+            label="Agent chat"
+            resetKey={`${state.activeChatTabId ?? 'none'}:${state.chatOpen ? 'open' : 'closed'}`}
+          >
             <Suspense fallback={<aside className="chat-pane-shell" aria-label="Agent chat" />}>
               <LazyChatPane />
             </Suspense>

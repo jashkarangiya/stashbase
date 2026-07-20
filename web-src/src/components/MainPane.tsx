@@ -30,6 +30,7 @@ export function MainPane() {
   const saveStatus = activeTab?.saveStatus ?? { text: '', cls: '' };
   const hasTabs = state.tabs.length > 0;
   const emptyTab = !!activeTab && !cur;
+  const resourceResetKey = cur ? `${cur.name}:${cur.version ?? ''}` : undefined;
 
   return (
     <main className={'main' + (hasTabs ? '' : ' no-file') + (cur ? ' fmt-' + cur.format : '')}>
@@ -55,7 +56,7 @@ export function MainPane() {
         )}
         {emptyTab && <EmptyTabLanding />}
         {cur && !editMode && cur.format === 'md' && (
-          <LazyLoadBoundary className="doc-loading" label="Markdown preview">
+          <LazyLoadBoundary className="doc-loading" label="Markdown preview" resetKey={resourceResetKey}>
             <Suspense fallback={<div className="doc-loading">Loading preview…</div>}>
               <LazyMarkdownPreview name={cur.name} content={cur.content} />
             </Suspense>
@@ -65,7 +66,7 @@ export function MainPane() {
           <HtmlPreview name={cur.name} />
         )}
         {cur && cur.format === 'docx' && (
-          <LazyLoadBoundary className="docx-preview-loading" label="document preview">
+          <LazyLoadBoundary className="docx-preview-loading" label="document preview" resetKey={resourceResetKey}>
             <Suspense fallback={<div className="docx-preview-loading">Opening document…</div>}>
               <LazyDocxPreview name={cur.name} />
             </Suspense>
@@ -77,7 +78,7 @@ export function MainPane() {
           // implementation detail (search hits remap back to the PDF;
           // the derived note must never surface as content). The
           // preparation failure banner + Reprocess live inside PdfPreview.
-          <LazyLoadBoundary className="pdf-loading" label="PDF preview">
+          <LazyLoadBoundary className="pdf-loading" label="PDF preview" resetKey={resourceResetKey}>
             <Suspense fallback={<div className="pdf-loading">Loading PDF…</div>}>
               <LazyPdfPreview name={cur.name} />
             </Suspense>
@@ -92,7 +93,7 @@ export function MainPane() {
           // read-only viewers. The editor is a single CodeMirror pane
           // (no source+preview split); save is scheduled on every edit.
           <div className="md-editor">
-            <LazyLoadBoundary className="doc-loading" label="Markdown editor">
+            <LazyLoadBoundary className="doc-loading" label="Markdown editor" resetKey={resourceResetKey}>
               <Suspense fallback={<div className="doc-loading">Loading editor…</div>}>
                 <LazyCodeEditor
                   key={cur.name}

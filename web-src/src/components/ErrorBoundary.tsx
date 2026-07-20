@@ -19,10 +19,12 @@ interface LazyLoadBoundaryProps {
   children: ReactNode;
   className: string;
   label: string;
+  resetKey?: string;
 }
 
 interface LazyLoadBoundaryState {
   error: Error | null;
+  resetKey?: string;
 }
 
 export async function loadWithRetry<T>(
@@ -51,9 +53,20 @@ export function lazyWithRetry<T extends ComponentType<any>>(
 }
 
 export class LazyLoadBoundary extends Component<LazyLoadBoundaryProps, LazyLoadBoundaryState> {
-  state: LazyLoadBoundaryState = { error: null };
+  constructor(props: LazyLoadBoundaryProps) {
+    super(props);
+    this.state = { error: null, resetKey: props.resetKey };
+  }
 
-  static getDerivedStateFromError(error: Error): LazyLoadBoundaryState {
+  static getDerivedStateFromProps(
+    props: LazyLoadBoundaryProps,
+    state: LazyLoadBoundaryState,
+  ): LazyLoadBoundaryState | null {
+    if (props.resetKey === state.resetKey) return null;
+    return { error: null, resetKey: props.resetKey };
+  }
+
+  static getDerivedStateFromError(error: Error): Pick<LazyLoadBoundaryState, 'error'> {
     return { error };
   }
 

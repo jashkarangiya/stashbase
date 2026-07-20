@@ -54,7 +54,7 @@ class CodexTurnCancelledError extends Error {
   }
 }
 
-class CodexSession {
+export class CodexSession {
   private closed = false;
   private ready = false;
   private appServerReady = false;
@@ -80,6 +80,7 @@ class CodexSession {
     resume?: string,
     private accessMode?: AgentAccessMode,
     private onDispose?: (session: CodexSession) => void,
+    private spawnProcess: typeof spawnCodexAppServerProcess = spawnCodexAppServerProcess,
   ) {
     this.windowId = normalizeWindowId(windowId);
     this.resumeThreadId = typeof resume === 'string' && resume.trim() ? resume.trim() : null;
@@ -127,43 +128,63 @@ class CodexSession {
   }
 
   private spawnAppServer(cwd: string): void {
-    const proc = spawnCodexAppServerProcess(cwd, { STASHBASE_WINDOW_ID: this.windowId });
+    const proc = this.spawnProcess(cwd, { STASHBASE_WINDOW_ID: this.windowId });
     this.proc = proc;
-    this.rpc = new CodexRpcPeer((line) => {
+    const rpc = new CodexRpcPeer((line) => {
       if (!proc.stdin.writable) throw new Error('Codex app-server is not running.');
       proc.stdin.write(`${line}\n`);
     }, {
       onRequest: ({ id, method, params }) => this.onServerRequest({ id, method, params }),
       onNotification: (method, params) => this.onNotification(method, params),
     });
+    this.rpc = rpc;
 
-    this.stdout = readline.createInterface({ input: proc.stdout });
-    this.stdout.on('line', (line) => this.rpc?.receiveLine(line));
+    const stdout = readline.createInterface({ input: proc.stdout });
+    this.stdout = stdout;
+    stdout.on('line', (line) => rpc.receiveLine(line));
 
-    this.stderr = readline.createInterface({ input: proc.stderr });
-    this.stderr.on('line', (line) => {
+    const stderr = readline.createInterface({ input: proc.stderr });
+    this.stderr = stderr;
+    stderr.on('line', (line) => {
       const clean = line.trim();
       if (clean) log.debug(clean);
     });
 
     proc.once('error', (err) => {
+      rpc.close(err);
+      if (!this.releaseAppServerGeneration(proc, rpc, stdout, stderr)) return;
       reportAgentRuntimeFailure('codex', err);
-      this.rpc?.close(err);
       if (!this.closed) {
         this.send({ t: 'error', message: errorMessage(err) });
         this.handleAppServerExit(true);
       }
     });
     proc.once('close', (code, signal) => {
-      this.proc = null;
-      this.rpc?.close(new Error(`Codex app-server exited with ${signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`}.`));
+      const error = new Error(`Codex app-server exited with ${signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`}.`);
+      rpc.close(error);
+      if (!this.releaseAppServerGeneration(proc, rpc, stdout, stderr)) return;
       if (!this.closed) {
-        const error = new Error(`Codex app-server exited with ${signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`}.`);
         reportAgentRuntimeFailure('codex', error);
         this.send({ t: 'error', message: error.message });
         this.handleAppServerExit(true);
       }
     });
+  }
+
+  private releaseAppServerGeneration(
+    proc: ChildProcessWithoutNullStreams,
+    rpc: CodexRpcPeer,
+    stdout: readline.Interface,
+    stderr: readline.Interface,
+  ): boolean {
+    if (this.proc !== proc || this.rpc !== rpc) return false;
+    this.proc = null;
+    this.rpc = null;
+    if (this.stdout === stdout) this.stdout = null;
+    if (this.stderr === stderr) this.stderr = null;
+    stdout.close();
+    stderr.close();
+    return true;
   }
 
   private onMessage(text: string): void {
@@ -604,22 +625,24 @@ class CodexSession {
       this.respond(pending.requestId, { decision: 'cancel' });
     }
     this.pendingApprovals.clear();
-    this.stdout?.close();
-    this.stderr?.close();
-    this.stdout = null;
-    this.stderr = null;
     this.disposeAppServer();
     try { this.ws.close(); } catch { /* already closed */ }
   }
 
   private disposeAppServer(): void {
     this.appServerReady = false;
-    this.rpc?.close(new Error('Codex session closed.'));
+    const rpc = this.rpc;
+    const proc = this.proc;
+    const stdout = this.stdout;
+    const stderr = this.stderr;
     this.rpc = null;
-    if (this.proc) {
-      try { this.proc.kill('SIGTERM'); } catch { /* already gone */ }
-      this.proc = null;
-    }
+    this.proc = null;
+    this.stdout = null;
+    this.stderr = null;
+    rpc?.close(new Error('Codex session closed.'));
+    stdout?.close();
+    stderr?.close();
+    if (proc) try { proc.kill('SIGTERM'); } catch { /* already gone */ }
   }
 
   private handleAppServerExit(isError: boolean): void {
