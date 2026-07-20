@@ -80,6 +80,7 @@ const MARKDOWN_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
     td: ['colspan', 'rowspan', 'headers', 'align'],
     th: ['colspan', 'rowspan', 'headers', 'scope', 'align'],
     section: ['class', 'data-footnotes'],
+    span: ['class'],
     sup: ['class'],
     svg: ['class', 'viewbox', 'width', 'height', 'aria-hidden'],
     path: ['d'],
@@ -92,6 +93,9 @@ const MARKDOWN_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
     h2: ['sr-only'],
     div: [/^markdown-alert(?:-(?:note|tip|important|warning|caution))?$/],
     p: ['markdown-alert-title'],
+    // Highlight.js token vocabulary: `hljs-<scope>` plus v11 sub-scope
+    // classes (bare words with trailing underscores, e.g. `function_`).
+    span: [/^hljs-[a-z0-9_-]+$/, /^[a-z][a-z0-9-]*_{1,2}$/],
     svg: ['octicon', 'mr-2', /^octicon-[a-z-]+$/],
   },
   allowedSchemes: ['http', 'https', 'mailto'],

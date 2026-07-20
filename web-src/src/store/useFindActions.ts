@@ -54,6 +54,21 @@ export function useFindActions(stateRef: MutableRefObject<State>, dispatch: Disp
     dispatch({ type: 'FIND_OPEN' });
   }, [dispatch]);
 
+  /** Arms and opens the find bar with a full query state, then runs the
+   *  live controller. A keyword hit that targets the already-open file
+   *  never remounts the viewer and never reloads content, so neither
+   *  registration-time priming nor the load-time re-apply fires there;
+   *  this direct call is what makes such hits show matches immediately. */
+  const primeFind = useCallback((query: string, opts: { wholeWord: boolean; caseSensitive: boolean }) => {
+    dispatch({
+      type: 'FIND_SET',
+      patch: { query, wholeWord: opts.wholeWord, caseSensitive: opts.caseSensitive },
+    });
+    dispatch({ type: 'FIND_OPEN' });
+    const controller = findControllerRef.current;
+    if (controller) void applyMatchInfo(controller.setQuery(query, opts));
+  }, [applyMatchInfo, dispatch]);
+
   const closeFind = useCallback(() => {
     findControllerRef.current?.close();
     dispatch({ type: 'FIND_CLOSE' });
@@ -104,6 +119,7 @@ export function useFindActions(stateRef: MutableRefObject<State>, dispatch: Disp
     findPrev,
     focusSearch,
     openFind,
+    primeFind,
     registerFindController,
     registerSearchInput,
     setFindQuery,

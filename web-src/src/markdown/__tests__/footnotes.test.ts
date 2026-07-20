@@ -89,8 +89,12 @@ test('malformed, undefined, code, and fenced footnotes remain literal', () => {
   ].join('\n'));
 
   assert.match(document, /Undefined\[\^missing\], malformed \[\^\], and <code>code\[\^code\]<\/code>/);
-  assert.match(document, /fenced\[\^fence\]/);
-  assert.match(document, /\[\^fence\]: Not a definition\./);
+  // `md` is a highlighted common language, so the fenced block may carry
+  // static token spans; the footnote text must survive literally once
+  // markup is ignored, and must never become a live definition.
+  const fencedText = document.slice(document.indexOf('<body>')).replace(/<[^>]+>/g, '');
+  assert.match(fencedText, /fenced\[\^fence\]/);
+  assert.match(fencedText, /\[\^fence\]: Not a definition\./);
   assert.doesNotMatch(document, /data-footnotes/);
 });
 

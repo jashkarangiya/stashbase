@@ -26,8 +26,9 @@ h4 { font-size: 1.05em; }
 h5 { font-size: 0.95em; }
 h6 { font-size: 0.85em; color: rgba(55, 53, 47, 0.65); }
 p { margin: 0.9em 0; }
-a { color: #0e7490; text-decoration: underline; text-decoration-color: rgba(14, 116, 144, 0.4); }
+a { color: #0e7490; text-decoration: underline; text-decoration-color: rgba(14, 116, 144, 0.4); overflow-wrap: anywhere; }
 a:hover { text-decoration-color: rgba(14, 116, 144, 0.85); }
+a:focus-visible { outline: 2px solid #0e7490; outline-offset: 2px; border-radius: 2px; }
 sup:has([data-footnote\\:ref]) { font-size: 0.75em; line-height: 0; vertical-align: super; }
 [data-footnote\\:ref] { padding: 0 0.12em; text-decoration: none; }
 .footnotes {
@@ -49,6 +50,7 @@ code {
   background: rgba(140, 149, 159, 0.1);
   color: rgb(55, 53, 47);
   padding: 0.15em 0.4em; border-radius: 4px;
+  overflow-wrap: anywhere;
 }
 pre {
   background: rgb(248, 250, 252); padding: 14px 18px; border-radius: 6px;
@@ -77,10 +79,47 @@ blockquote {
 .markdown-alert-caution { --alert-color: #cf222e; --alert-background: #ffebe9; }
 ul, ol { padding-left: 1.6em; margin: 0.9em 0; }
 li { margin: 0.35em 0; }
-table { border-collapse: collapse; margin: 0.5em 0; font-size: 0.95em; }
+li:has(> input[type="checkbox"]),
+li:has(> p:first-child > input[type="checkbox"]) { list-style: none; }
+li > input[type="checkbox"],
+li > p:first-child > input[type="checkbox"] {
+  margin: 0 0.5em 0.15em -1.3em; vertical-align: middle; accent-color: #0e7490;
+}
+table {
+  border-collapse: collapse; margin: 0.5em 0; font-size: 0.95em;
+  display: block; width: max-content; max-width: 100%; overflow-x: auto;
+}
 th, td { border: 1px solid rgb(236, 238, 241); padding: 6px 10px; }
 th { background: rgb(248, 250, 252); font-weight: 600; }
 img { max-width: 100%; height: auto; border-radius: 3px; }
 img[data-stashbase-previewable="true"] { cursor: zoom-in; }
 hr { border: 0; border-top: 1px solid rgb(236, 238, 241); margin: 1em 0; }
+kbd {
+  display: inline-block; padding: 0.15em 0.45em;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.8em; line-height: 1.3; vertical-align: middle;
+  background: rgb(248, 250, 252);
+  border: 1px solid rgb(212, 218, 226); border-bottom-width: 2px; border-radius: 4px;
+}
+mark { background: rgba(255, 212, 0, 0.35); padding: 0 0.15em; border-radius: 2px; }
+abbr[title] { text-decoration: underline dotted; cursor: help; }
+details { margin: 0.9em 0; }
+summary { cursor: pointer; font-weight: 600; }
+summary:focus-visible { outline: 2px solid #0e7490; outline-offset: 2px; border-radius: 2px; }
+
+/* Highlight.js token palette — static spans only, tuned to the light
+ * preview theme (GitHub-Primer-like hues on the existing pre background). */
+.hljs-comment, .hljs-quote { color: #57606a; font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-doctag, .hljs-template-tag { color: #cf222e; }
+.hljs-title, .hljs-title.class_, .hljs-title.function_, .hljs-section { color: #8250df; }
+.hljs-string, .hljs-regexp, .hljs-char.escape_ { color: #0a3069; }
+.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet,
+.hljs-selector-class, .hljs-selector-id, .hljs-meta, .hljs-link { color: #0550ae; }
+.hljs-attr, .hljs-attribute, .hljs-property, .hljs-params,
+.hljs-selector-attr, .hljs-selector-pseudo, .hljs-variable, .hljs-template-variable, .hljs-operator { color: #953800; }
+.hljs-name, .hljs-tag, .hljs-built_in, .hljs-type { color: #116329; }
+.hljs-addition { color: #116329; background: #dafbe1; }
+.hljs-deletion { color: #82071e; background: #ffebe9; }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
 `;

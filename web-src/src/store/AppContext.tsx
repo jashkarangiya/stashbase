@@ -263,6 +263,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     findPrev,
     focusSearch,
     openFind,
+    primeFind,
     registerFindController,
     registerSearchInput,
     setFindQuery,
@@ -459,7 +460,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     toggleEditMode,
   } = useDocumentActions(
     { state: stateRef, editor: editorRef, saveTimer, saveInFlight },
-    { loadFiles, refreshIndexState, toast },
+    { loadFiles, refreshIndexState, toast, primeFind },
     dispatch,
   );
   const {

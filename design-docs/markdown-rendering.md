@@ -66,7 +66,12 @@ const documentMarkdown = new Marked({
   gfm: true,
   breaks: false,
 });
-documentMarkdown.use(markedFootnote({ prefixId: 'footnote:' }), gfmHeadingId(), markedAlert());
+documentMarkdown.use(
+  markedFootnote({ prefixId: 'footnote:' }),
+  gfmHeadingId(),
+  markedAlert(),
+  markedHighlight({ highlight: highlightFencedCode }),
+);
 const inlineMarkdown = new Marked({ gfm: true, breaks: true });
 ```
 
@@ -89,9 +94,9 @@ Document preview removes valid, explicitly closed leading YAML frontmatter befor
 
 The document parser also uses `marked-alert` for standard GitHub alert blockquotes: `NOTE`, `TIP`, `IMPORTANT`, `WARNING`, and `CAUTION`. Their package-native icon and title markup survives the sanitizer; the outer alert receives a readable landmark label and preview-local color treatment. Alert parsing and styling are document-only, so Agent-message Markdown keeps the source blockquote syntax.
 
-Fenced-code language labels are retained as `language-*` classes. No syntax-highlighting pass runs over those classes.
+Fenced-code language labels are retained as `language-*` classes. `marked-highlight` runs a static Highlight.js pass (the `highlight.js/lib/common` language set) over fenced blocks whose label names a registered language, emitting `hljs-*` token spans at render time; no script ever runs inside the iframe. The highlight callback returns the input unchanged for unlabelled or unregistered languages — `marked-highlight` only trusts output that differs from its input, so those blocks keep marked's own escaping and render as plain readable code. Highlight.js runs with `ignoreIllegals` inside a `try/catch`, so hostile or malformed code can never break rendering. Highlighting exists only on the document parser; Agent-message code blocks stay unhighlighted.
 
-Marked passes raw HTML into the parsed body, then `sanitize-html` applies a document-oriented allowlist before the preview document is assembled. It preserves ordinary structural and presentational elements, including tables, links, images, `details`, `summary`, `kbd`, `mark`, `sub`, and `sup`, plus the restricted SVG elements and classes emitted by `marked-alert`. It removes scripts, styles, frames and embedded content, forms, metadata, event-handler and inline-style attributes, frame targets, and non-HTTP(S) image protocols. Relative URLs remain valid; links additionally allow `mailto:`. Task-list inputs are normalized to disabled checkboxes. The renderer has no implementations for wikilinks, embeds, math, Mermaid, definition lists, emoji shortcodes, MDX, or explicit heading-attribute syntax.
+Marked passes raw HTML into the parsed body, then `sanitize-html` applies a document-oriented allowlist before the preview document is assembled. It preserves ordinary structural and presentational elements, including tables, links, images, `details`, `summary`, `kbd`, `mark`, `sub`, and `sup`, plus the restricted SVG elements and classes emitted by `marked-alert`. `span` carries a `class` attribute restricted to the Highlight.js token vocabulary (`hljs-*` plus the bare v11 sub-scope classes with trailing underscores such as `function_`); every other span class is stripped. It removes scripts, styles, frames and embedded content, forms, metadata, event-handler and inline-style attributes, frame targets, and non-HTTP(S) image protocols. Relative URLs remain valid; links additionally allow `mailto:`. Task-list inputs are normalized to disabled checkboxes. The renderer has no implementations for wikilinks, embeds, math, Mermaid, definition lists, emoji shortcodes, MDX, or explicit heading-attribute syntax.
 
 ## 5. Heading IDs and anchors
 
@@ -123,12 +128,13 @@ The iframe does not inherit the host page's styles, so all Markdown typography i
 - The body uses a `16px/1.7` system sans-serif stack with CJK fallbacks.
 - Content is centered with a maximum width of `820px` and `32px 56px 80px` padding.
 - Headings use a compact line height, bold weight, and increasing top margins; H1 and H2 have bottom borders.
-- Links use an underlined teal color with a stronger underline on hover.
+- Links use an underlined teal color with a stronger underline on hover, wrap safely at any point, and get a visible keyboard-focus outline.
 - Footnote references use compact superscript links. The trailing footnote section uses smaller muted text, highlights the targeted entry, and gives references and backlinks a visible keyboard-focus outline.
-- Inline code and code blocks use the system monospace stack and warm/light-gray surfaces.
-- Code blocks scroll horizontally.
+- Inline code and code blocks use the system monospace stack and warm/light-gray surfaces; inline code wraps rather than overflowing.
+- Code blocks scroll horizontally. Highlighted token spans use a preview-local light palette (Primer-like hues) defined next to the other preview styles.
 - Blockquotes use a dark left border. GitHub alert blocks use preview-local colored borders, backgrounds, icons, and readable titles.
-- Lists, tables, table headers, images, and horizontal rules receive preview-local spacing and borders.
+- Lists, tables, table headers, images, and horizontal rules receive preview-local spacing and borders. Wide tables scroll horizontally inside the reading column instead of overflowing it. Task-list items drop their bullet and style the checkbox with the preview accent color.
+- `kbd`, `mark`, `abbr`, and `details`/`summary` receive polished preview-local styles; `summary` shows a pointer cursor and a visible keyboard-focus outline.
 - Images are limited to the reading-column width and keep their aspect ratio.
 - Images marked previewable use a zoom-in cursor.
 
@@ -188,12 +194,12 @@ When an iframe document attaches, every image receives `data-stashbase-previewab
 
 Cmd/Ctrl+F inside the iframe prevents the browser's native find and opens the StashBase find bar. Cmd/Ctrl+G advances to the next result; Shift+Cmd/Ctrl+G moves to the previous result.
 
-Find walks body text nodes while excluding direct text children of `script`, `style`, and `noscript`. It supports literal matching, case sensitivity, and whole-word mode. Matches are stored as DOM `Range` objects and painted with the iframe window's CSS Custom Highlight registry:
+Find matches the query against the concatenated text of body text nodes, excluding `script`, `style`, and `noscript` subtrees, and maps match offsets back to node positions through a segment index. A match may therefore span inline element boundaries — formatting markup or highlighted-code token spans — and produce a multi-node `Range`. Traversal inserts a newline separator when it crosses a block-level element or `<br>`, and the single-line find input can never contain a newline, so text in different blocks — including adjacent raw-HTML blocks with no whitespace between them — cannot join into one match. It supports literal matching, case sensitivity, and whole-word mode. Matches are painted with the iframe window's CSS Custom Highlight registry:
 
 - `stash-find` paints non-current matches yellow.
 - `stash-find-current` paints the active match blue with white text.
 
-Next/previous navigation wraps and centers the active range in the iframe. When a content reload finishes while the find bar is open, the current query is scheduled again against the new document. Chromium's CSS Custom Highlight API is required; the Electron versions targeted by the app provide it.
+Next/previous navigation wraps and centers the active range in the iframe. When a content reload finishes while the find bar is open, the current query is scheduled again against the new document. A keyword-search hit that pre-arms the bar primes the controller through three paths: registration-time priming when the viewer mounts, the load-time re-apply when content reloads, and a direct controller call when the hit targets the already-open file (neither of the first two fires there). Chromium's CSS Custom Highlight API is required; the Electron versions targeted by the app provide it.
 
 ## 12. Search-result chunk highlight
 
