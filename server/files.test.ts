@@ -3,7 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import {
+  AUDIO_SOURCE_EXTENSIONS,
+  DOCX_EXTENSIONS,
+  IMAGE_SOURCE_EXTENSIONS,
+  PDF_EXTENSIONS,
+} from '../shared/file-formats.ts';
 import { validateEditableFileWrite } from './file-save.ts';
+import { detectViewerFormat, isConvertibleSource } from './format.ts';
 import { runWithFolderRoot } from './folder.ts';
 import {
   createFolder,
@@ -80,6 +87,26 @@ test('editable file writes apply portable path, hidden-derived, and format polic
   assert.throws(() => validateEditableFileWrite('report.pdf'), /unsupported editable format/);
 });
 
+test('server convertible membership follows the shared extension catalog', () => {
+  for (const extension of PDF_EXTENSIONS) {
+    assert.equal(isConvertibleSource(`document.${extension}`), true);
+    assert.equal(detectViewerFormat(`document.${extension}`), 'pdf');
+  }
+  for (const extension of IMAGE_SOURCE_EXTENSIONS) {
+    assert.equal(isConvertibleSource(`image.${extension}`), true);
+    assert.equal(detectViewerFormat(`image.${extension}`), 'image');
+  }
+  for (const extension of DOCX_EXTENSIONS) {
+    assert.equal(isConvertibleSource(`document.${extension}`), true);
+    assert.equal(detectViewerFormat(`document.${extension}`), 'docx');
+    assert.equal(isConvertibleSource(`~$document.${extension}`), false);
+  }
+  for (const extension of AUDIO_SOURCE_EXTENSIONS) {
+    assert.equal(isConvertibleSource(`recording.${extension}`), true);
+    assert.equal(detectViewerFormat(`recording.${extension}`), 'audio');
+  }
+});
+
 test('createFolder applies writable protected-segment policy', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stashbase-create-folder-'));
   try {
@@ -112,6 +139,26 @@ test('folder listing hides note bundles and legacy derived artifacts', async () 
     await runWithFolderRoot(root, () => {
       assert.deepEqual(listFiles().map((entry) => entry.name), ['note.md', 'paper.pdf']);
       assert.deepEqual(listFolders().map((entry) => entry.path), []);
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('audio sources do not hide same-stem user Markdown as legacy derived output', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stashbase-audio-hidden-note-'));
+  try {
+    fs.writeFileSync(path.join(root, 'meeting.mp3'), 'audio bytes');
+    fs.writeFileSync(path.join(root, '.meeting.md'), '# Private meeting note');
+    fs.writeFileSync(path.join(root, '.meeting.mp3.md'), '# Explicitly named note');
+
+    await runWithFolderRoot(root, () => {
+      assert.deepEqual(listFiles().map((entry) => entry.name), [
+        '.meeting.md',
+        '.meeting.mp3.md',
+        'meeting.mp3',
+      ]);
+      assert.doesNotThrow(() => validateEditableFileWrite('.meeting.mp3.md'));
     });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

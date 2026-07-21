@@ -13,6 +13,7 @@ import {
   type State,
 } from './state';
 import type { ToastOptions } from './useFeedbackActions';
+import { hasAggregatePreparationFailure } from './fileReadiness';
 
 const SEMANTIC_SEARCH_CANDIDATES = 30;
 const POLL_PENDING_MS = 1500;
@@ -109,6 +110,7 @@ export function useSearchActions(
         !semanticEnabled
         || (indexReady && (s.visibleIndexingSettled ?? newPending.size === 0));
       let newConv = s.pendingConversions ?? [];
+      const newBlocked = s.blockedConversions ?? [];
       // Fold in optimistically-marked imports the server hasn't started
       // reporting yet (it registers the conversion only after responding
       // to the upload). Hand off once the server tracks a path; expire
@@ -177,6 +179,9 @@ export function useSearchActions(
       const convChanged =
         newConv.length !== prev.pendingConversions.length
         || newConv.some((p, i) => p !== prev.pendingConversions[i]);
+      const blockedChanged =
+        newBlocked.length !== prev.blockedConversions.length
+        || newBlocked.some((p, i) => p !== prev.blockedConversions[i]);
       // `treeVersion` covers writes the indexer's `pending` set wouldn't
       // catch — non-indexable files (`.json`, `.csv`, empty dirs) and
       // fast embeds whose pending flips empty between polls. First
@@ -187,6 +192,7 @@ export function useSearchActions(
       lastTreeVersion.current = newTreeVersion;
       dispatch({ type: 'PENDING_SEMANTIC_NAMES', names: newPending });
       if (convChanged) dispatch({ type: 'PENDING_CONVERSIONS', paths: newConv });
+      if (blockedChanged) dispatch({ type: 'BLOCKED_CONVERSIONS', paths: newBlocked });
       const incomingProgress = s.conversionProgress ?? {};
       if (!shallowEqualConversionProgress(prev.conversionProgress, incomingProgress)) {
         dispatch({ type: 'CONVERSION_PROGRESS', progress: incomingProgress });
@@ -212,7 +218,7 @@ export function useSearchActions(
         dispatch({ type: 'PREPARATION_FAILURES', failures: incomingFailures });
       }
       const canRefreshVisibleFiles = stateRef.current.folderPath === folderPathAtStart;
-      if (canRefreshVisibleFiles && (pendingChanged || convChanged || treeChanged)) {
+      if (canRefreshVisibleFiles && (pendingChanged || convChanged || blockedChanged || treeChanged)) {
         if (treeChanged) {
           const expectedFolderPath = folderPathAtStart;
           void loadFilesFromServer(expectedFolderPath)
@@ -244,7 +250,7 @@ export function useSearchActions(
         dispatch({
           type: 'LIBRARY_FOLDER_STATUS',
           path: folderPathAtStart,
-          status: incomingIndexWarning || incomingFailures.length > 0
+          status: incomingIndexWarning || hasAggregatePreparationFailure(incomingFailures)
             ? 'failed'
             : busy ? 'preparing' : 'ready',
         });
@@ -289,6 +295,7 @@ export function useSearchActions(
         openGen.current += 1;
         dispatch({ type: 'PENDING_SEMANTIC_NAMES', names: new Set() });
         dispatch({ type: 'PENDING_CONVERSIONS', paths: [] });
+        dispatch({ type: 'BLOCKED_CONVERSIONS', paths: [] });
         dispatch({ type: 'CONVERSION_PROGRESS', progress: {} });
         dispatch({ type: 'CONVERSION_SCHEDULER_STATE', revision: 0, versions: {} });
         dispatch({ type: 'INDEX_WARNING', warning: null });

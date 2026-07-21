@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import type { KeywordHitFile, KeywordMatch, SearchHit } from '../api';
 import { useApp } from '../store/AppContext';
+import { openSettings } from './SettingsModal';
 
 /**
  * The "search" sidebar view — owns the search input, the mode toggle
@@ -48,11 +49,18 @@ function SearchStatusBanner() {
   for (const path of state.pendingConversions) semanticPendingPaths.add(path);
   const semanticPendingCount = semanticPendingPaths.size;
   const pendingCount = isSemantic ? semanticPendingCount : conversionPendingCount;
-  const failureCount = state.preparationFailures.length;
+  const failedCount = state.preparationFailures.filter((problem) => problem.status !== 'cancelled').length;
+  const cancelledCount = state.preparationFailures.length - failedCount;
+  const failureCount = failedCount + cancelledCount;
+  const blockedCount = state.blockedConversions.length;
   const total = state.files.length;
-  const readyCount = Math.max(0, total - pendingCount - failureCount);
-
-  if (isSemantic && semanticDisabled) return null;
+  const unavailablePaths = new Set([
+    ...state.pendingConversions,
+    ...state.preparationFailures.map((failure) => failure.path),
+    ...state.blockedConversions,
+    ...(isSemantic ? [...state.pendingSemanticNames] : []),
+  ]);
+  const readyCount = Math.max(0, total - unavailablePaths.size);
 
   if (isSemantic && state.indexWarning) {
     return (
@@ -75,14 +83,37 @@ function SearchStatusBanner() {
     return (
       <div className="search-status-banner warning">
         <div className="search-status-copy">
-          <div className="search-status-title">Some files could not be prepared for search.</div>
+          <div className="search-status-title">
+            {failedCount > 0 ? 'Some files could not be prepared for search.' : 'Some file preparation was cancelled.'}
+          </div>
           <div className="search-status-detail">
-            {failureCount} file{failureCount === 1 ? '' : 's'} need attention.
+            {[
+              failedCount > 0 ? `${failedCount} failed` : '',
+              cancelledCount > 0 ? `${cancelledCount} cancelled` : '',
+            ].filter(Boolean).join(' · ')}. Open a file to retry it.
           </div>
         </div>
       </div>
     );
   }
+
+  if (blockedCount > 0) {
+    return (
+      <div className="search-status-banner warning">
+        <div className="search-status-copy">
+          <div className="search-status-title">Transcription setup required</div>
+          <div className="search-status-detail">
+            {readyCount} file{readyCount === 1 ? ' is' : 's are'} ready to search. {blockedCount} audio file{blockedCount === 1 ? '' : 's'} need transcription setup.
+          </div>
+        </div>
+        <div className="search-status-actions">
+          <button type="button" onClick={() => openSettings('transcription')}>Open Settings</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (isSemantic && semanticDisabled) return null;
 
   if (pendingCount > 0) {
     const readyLabel = `${readyCount} file${readyCount === 1 ? '' : 's'} ${readyCount === 1 ? 'is' : 'are'} ready to search.`;
@@ -316,6 +347,8 @@ function KeywordFileGroup({ file, query }: { file: KeywordHitFile; query: string
           void actions.selectFileWithHighlight(file.path, {
             startLine: file.matches[0]?.line,
             chunkText: query,
+            audioSeekText: file.matches[0]?.text,
+            audioSeekMs: file.matches[0]?.audioTimestampMs,
             openFindBar: true,
             pdfPage: file.matches[0]?.pdfPage,
           });
@@ -343,6 +376,8 @@ function KeywordMatchRow({ file, match, query }: { file: KeywordHitFile; match: 
         void actions.selectFileWithHighlight(file.path, {
           startLine: match.line,
           chunkText: query,
+          audioSeekText: match.text,
+          audioSeekMs: match.audioTimestampMs,
           openFindBar: true,
           pdfPage: match.pdfPage,
         });

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import test from 'node:test';
 import {
+  audioTimestampForTranscriptLine,
   hasWholeTokenBoundaries,
   normalizeRipgrepSubmatches,
   resolveSpawnableRipgrepPath,
@@ -30,6 +31,20 @@ test('keyword snippets keep highlighted ranges inside the visible window', () =>
   assert.ok(snippet.text.startsWith('…'));
   assert.ok(snippet.text.endsWith('…'));
   assert.equal(snippet.text.slice(snippet.ranges[0][0], snippet.ranges[0][1]), 'MATCH');
+});
+
+test('audio keyword snippets retain their exact timestamp when the match is far into a long line', () => {
+  const prefix = '- [00:01:35.250] ';
+  const line = `${prefix}${'context '.repeat(50)}REPEATED PHRASE`;
+  const start = line.indexOf('REPEATED PHRASE');
+  const snippet = snippetForLine(line, [[start, start + 'REPEATED PHRASE'.length]]);
+
+  assert.ok(snippet.text.startsWith(`${prefix.trimEnd()} … `));
+  assert.equal(
+    snippet.text.slice(snippet.ranges[0][0], snippet.ranges[0][1]),
+    'REPEATED PHRASE',
+  );
+  assert.equal(audioTimestampForTranscriptLine(line), 95_250);
 });
 
 test('packaged ripgrep path prefers app.asar.unpacked when present', () => {
