@@ -238,6 +238,13 @@ StashBase uses MFS as the indexing layer and Milvus Lite as the local vector sto
 
 The index stores chunks, embeddings, source paths, line ranges, and file hashes. Paths are absolute so search results can be handed directly to an Agent's file tools.
 
+MFS collect-all operations are adapted at the Python boundary for the local
+Milvus Lite store. They read one unbounded scalar-query snapshot because local
+segment order is not a global primary-key order and therefore cannot safely
+drive pymilvus's primary-key cursor. Remote Milvus URIs retain MFS's native
+iterator. This keeps status, reconcile, subtree cleanup, and row moves complete
+after the collection grows beyond one iterator page.
+
 ## 5.2 Embedding
 
 The current embedder is OpenAI `text-embedding-3-small`.

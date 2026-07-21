@@ -338,6 +338,36 @@ Review invariants:
 - History idle timers cannot dispose a client while its reference count is non-zero.
 - Approval policy remains in `server/codex-approval.ts`; transport and process modules do not decide which actions are allowed.
 
+## 8.4 Semantic index daemon lifecycle
+
+- The Python daemon owns one local Milvus Lite collection and loads it once
+  after the first keyed folder bind. Upserts and vector-preserving copies
+  request a synchronous flush before acknowledgement; a flush warning leaves
+  the derived write recoverable by later flush/reopen and reconcile
+  (`python/stashbase_daemon.py:588-640`,
+  `python/stashbase_daemon.py:744-765`).
+- Local collect-all reads use one scalar-query snapshot. MFS's native
+  `query_iterator` advances with the last primary key in a page, while the
+  bundled local adapter may return multiple immutable segments without global
+  primary-key ordering. The sidecar applies the local-only snapshot adapter
+  before opening the store; remote Milvus URIs keep MFS's iterator
+  (`python/stashbase_daemon.py:366-405`,
+  `python/stashbase_daemon.py:593-603`).
+- Daemon status is computed by comparing the current disk walk with the
+  complete indexed-source set. Missing indexed rows become pending; rows whose
+  source no longer exists become orphaned. The snapshot is explanatory state,
+  while reconcile remains the operation that changes storage
+  (`python/stashbase_daemon.py:1423-1451`).
+
+Review invariants:
+
+- A collect-all storage read cannot use a primary-key cursor unless the storage
+  response is globally primary-key ordered.
+- A successfully flushed row must participate in the next complete status or
+  reconcile snapshot; collection size and segment layout cannot hide it.
+- A no-op reconcile must not re-embed content merely because index metadata
+  pagination omitted an existing row.
+
 When reviewing code that touches conversion, indexing, sync, search, folder membership, or AppData cleanup, check these invariants:
 
 - Completion is explicit. A partial artifact cannot be mistaken for done.
@@ -491,3 +521,29 @@ Current contract:
 - If removal's bounded wait expires while a non-cooperative conversion is still
   exiting, that task checks membership again after retirement and requeues when
   the folder was already reopened; this closes the cancel/reconcile timing gap.
+
+## 9.7 Indexed Rows Disappearing From Reconcile
+
+The vector store can contain durable rows that an incomplete metadata scan does
+not return. Reconcile must not interpret a pagination gap as missing data.
+
+Representative failure:
+
+- The collection spans more than one 1,000-row page and several immutable
+  segments.
+- A cursor records the last primary key from a page even though the page is not
+  globally primary-key ordered.
+- Later segments contain lower primary keys, so status omits their sources and
+  reports already-indexed files as pending.
+- Startup reconcile embeds and upserts those files again while the visible
+  indexed count appears stuck.
+
+Current contract:
+
+- Local collect-all index reads use one storage snapshot and do not infer a
+  cursor from segment iteration order.
+- Status and hash diff consume that complete source set; a stored row is not
+  marked pending because it lives after an iterator boundary.
+- The regression gate creates separately flushed segments across the 1,000-row
+  boundary and requires every source to remain visible
+  (`python/stashbase_daemon_test.py:19-89`).
