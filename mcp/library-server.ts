@@ -99,6 +99,12 @@ export function createLibraryMcpServer(opts: LibraryMcpServerOptions): Server {
     return `path=${encodeURIComponent(pathParam)}`;
   }
 
+  function filePathArg(args: Record<string, unknown>): unknown {
+    return typeof args.path === 'string' && args.path.trim()
+      ? args.path
+      : args.file_path;
+  }
+
   async function listDirectoryViaWeb(pathValue: unknown): Promise<unknown> {
     return webJson(`${webBase}/api/library/directory?${pathQuery(pathValue)}`, { headers: webHeaders() });
   }
@@ -216,7 +222,7 @@ export function createLibraryMcpServer(opts: LibraryMcpServerOptions): Server {
     }
 
     if (req.params.name === 'read_file') {
-      const result = await viaWeb('read_file', () => readFileViaWeb(args.path));
+      const result = await viaWeb('read_file', () => readFileViaWeb(filePathArg(args)));
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
@@ -314,8 +320,8 @@ const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           path: { type: 'string', description: 'Absolute file path under one of your folders.' },
+          file_path: { type: 'string', description: 'Alias for path; accepted for Claude Read-style calls.' },
         },
-        required: ['path'],
       },
     },
     {

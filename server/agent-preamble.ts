@@ -26,7 +26,8 @@ export function buildStashbasePreamble(cwd: string): string {
     '',
     'Use the StashBase MCP tools when they fit:',
     '- `search_library` finds relevant library content by meaning across folders; pass `folder` or `path_prefix` to narrow the search.',
-    '- `read_file` reads files through StashBase; for PDFs it returns extracted Markdown when available.',
+    '- `mcp__stashbase__read_file` reads files through StashBase; for PDFs it returns extracted Markdown when available.',
+    '- For PDF, DOCX, and audio text context, prefer `mcp__stashbase__read_file` on the visible source path. Use Claude native `Read` only when the user explicitly needs the original source file or visual/binary detail.',
     '- `reindex` refreshes the index after you create, edit, delete, or move files so search reflects the latest content on disk.',
   ];
 

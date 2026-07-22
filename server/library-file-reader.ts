@@ -25,6 +25,17 @@ export interface LibraryFileRead {
   derived?: boolean;
 }
 
+export function isAgentReadableDerivedTextReady(
+  sourceAbs: string,
+  sourceFormat: 'pdf' | 'docx' | 'audio',
+): boolean {
+  if (isConversionTextUnavailable(sourceAbs) || isAudioTranscriptTextUnavailable(sourceAbs)) return false;
+  const derivedAbs = sourceFormat === 'docx'
+    ? derivedHtmlPathForDocx(sourceAbs)
+    : derivedNoteFor(sourceAbs);
+  return fs.existsSync(derivedAbs);
+}
+
 export async function agentContextFile(rawPath: unknown): Promise<AgentContextFile> {
   const target = normalizeLibraryFilePath(rawPath);
   const folderName = path.basename(target.folderRoot);

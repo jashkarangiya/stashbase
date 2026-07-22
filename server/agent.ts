@@ -49,13 +49,15 @@ import {
   type SpawnedProcess,
 } from '@anthropic-ai/claude-agent-sdk';
 import { logger, errorMessage } from './log.ts';
-import { getCurrentFolder, runWithWindowId } from './folder.ts';
+import { getCurrentFolder, memberRootForAbs, runWithWindowId } from './folder.ts';
 import { buildStashbasePreamble } from './agent-preamble.ts';
 import { agentCliEnv, agentCliNeedsShell, commandDir, resolveAgentCli } from './agent-cli.ts';
 import { ensureClaudeBridgeFile } from './agent-rules.ts';
 import { noteTreeChanged } from './watcher.ts';
 import { isAgentAccessMode, reportAgentRuntimeFailure, type AgentAccessMode } from './agent-contract.ts';
 import type { AgentClientEvent, AgentServerEvent } from './agent-contract.ts';
+import { detectViewerFormat } from './format.ts';
+import { isAgentReadableDerivedTextReady } from './library-file-reader.ts';
 
 const log = logger('agent');
 
@@ -104,6 +106,55 @@ function needsPrompt(name: string): boolean {
   return false;
 }
 
+type AgentReadableDerivedFormat = 'pdf' | 'docx' | 'audio';
+
+function agentReadableDerivedFormat(format: string | null): AgentReadableDerivedFormat | null {
+  return format === 'pdf' || format === 'docx' || format === 'audio' ? format : null;
+}
+
+function nativeReadPath(input: Record<string, unknown>, cwd: string): string | null {
+  const raw = typeof input.file_path === 'string'
+    ? input.file_path
+    : typeof input.path === 'string'
+      ? input.path
+      : '';
+  if (!raw.trim()) return null;
+  try {
+    return filesystemPath.absolute(raw.trim(), cwd);
+  } catch {
+    return null;
+  }
+}
+
+function nativeDerivedReadRedirect(
+  name: string,
+  input: Record<string, unknown>,
+  cwd: string,
+  alreadyRedirected: Set<string>,
+): PermissionResult | null {
+  if (name !== 'Read') return null;
+  const abs = nativeReadPath(input, cwd);
+  if (!abs) return null;
+  const folderRoot = memberRootForAbs(abs);
+  if (!folderRoot) return null;
+  const rel = filesystemPath.relative(folderRoot, abs);
+  if (!rel) return null;
+  const sourceFormat = agentReadableDerivedFormat(detectViewerFormat(rel));
+  if (!sourceFormat || !isAgentReadableDerivedTextReady(abs, sourceFormat)) return null;
+  const key = filesystemPath.identity(abs);
+  if (alreadyRedirected.has(key)) return null;
+  alreadyRedirected.add(key);
+  const textKind = sourceFormat === 'docx'
+    ? 'derived HTML'
+    : sourceFormat === 'audio'
+      ? 'transcript Markdown'
+      : 'extracted Markdown';
+  return {
+    behavior: 'deny',
+    message: `StashBase has ${textKind} ready for this ${sourceFormat.toUpperCase()}. Use mcp__stashbase__read_file with {"path":"${abs}"} to read that Agent-readable text. Use native Read only if you specifically need the original source file.`,
+  };
+}
+
 /** Minimal pushable async-iterable — the streaming-input channel the SDK
  *  consumes. We `push()` a user message per prompt; the generator the SDK
  *  awaits yields them as they arrive, and stays open (so the session is
@@ -149,6 +200,7 @@ class AgentSession {
   private q: Query | null = null;
   private pending = new Map<string, Pending>();
   private closed = false;
+  private nativeDerivedReadRedirected = new Set<string>();
   /** The SDK session_id, captured from the init message. Sent to the
    *  client so the history dropdown can mark this session active. */
   private sessionId: string | null = null;
@@ -341,6 +393,11 @@ class AgentSession {
     input: Record<string, unknown>,
     opts: { signal: AbortSignal; suggestions?: PermissionUpdate[]; toolUseID: string; title?: string },
   ): Promise<PermissionResult> {
+    const cwd = getCurrentFolder();
+    if (cwd) {
+      const redirect = nativeDerivedReadRedirect(name, input, cwd, this.nativeDerivedReadRedirected);
+      if (redirect) return Promise.resolve(redirect);
+    }
     if (!needsPrompt(name)) {
       return Promise.resolve({ behavior: 'allow', updatedInput: input });
     }
