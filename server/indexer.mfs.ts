@@ -126,6 +126,7 @@ export class MfsIndexer implements Indexer {
       apiKey: cfg.apiKey,
       model: cfg.model,
       dimension: cfg.dimension,
+      baseUrl: cfg.baseUrl,
     });
     if (cfg.apiKey) {
       try { await this.reconcileLegacySourceSpelling(source); }
@@ -136,7 +137,7 @@ export class MfsIndexer implements Indexer {
       }
     }
     this.folderReady.delete(key);
-    const bindingKey = `${cfg.provider}:${cfg.model ?? ''}:${cfg.dimension ?? ''}`;
+    const bindingKey = `${cfg.provider}:${cfg.model ?? ''}:${cfg.dimension ?? ''}:${cfg.baseUrl ?? ''}`;
     if (this.loggedBindings.get(key) === bindingKey) {
       log.debug(`bound ${source} → ${cfg.provider}`);
     } else {

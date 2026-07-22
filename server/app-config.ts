@@ -28,11 +28,32 @@ export interface RecentFolder {
   descriptionUpdatedAt?: string;
 }
 
-/** V1 is OpenAI-only. Kept as a one-member type so the surrounding
- *  config plumbing reads clearly and a future provider re-introduction
- *  has an obvious seam. */
-export type EmbedderProvider = 'openai';
+export type EmbedderProvider = 'openai' | 'openrouter';
 export type TranscriptionModelId = LocalTranscriptionModelId;
+
+export interface EmbedderConfig {
+  provider: EmbedderProvider;
+  apiKey?: string;
+  model: string;
+  dimension: number;
+  baseUrl?: string;
+}
+
+const EMBEDDER_DEFAULTS: Record<EmbedderProvider, Omit<EmbedderConfig, 'provider' | 'apiKey'>> = {
+  openai: {
+    model: 'text-embedding-3-small',
+    dimension: 1536,
+  },
+  openrouter: {
+    model: 'openai/text-embedding-3-small',
+    dimension: 1536,
+    baseUrl: 'https://openrouter.ai/api/v1',
+  },
+};
+
+export function isEmbedderProvider(value: unknown): value is EmbedderProvider {
+  return value === 'openai' || value === 'openrouter';
+}
 
 export interface AppConfigFile {
   /** NOTE: the legacy `folderHome` field is no longer read or written — the
@@ -45,12 +66,17 @@ export interface AppConfigFile {
    *  `recentFolders` on the next write. */
   recentVaults?: RecentFolder[];
   apiKey?: string;
-  /** Embedder provider is library-wide (one collection family per
-   *  provider on the daemon). `openaiKey` is a leftover from the very
-   *  first global-config schema — its content moved into the top-level
-   *  `apiKey` on read; we keep the type loose so legacy reads don't
-   *  trip the parser. */
-  embedder?: { provider?: EmbedderProvider; openaiKey?: string };
+  /** Library-wide embedding endpoint. `apiKey` at the top level and
+   *  `openaiKey` are legacy OpenAI-only fields; new writes use
+   *  `embedder.apiKey` so OpenRouter can be selected without overloading
+   *  the old name. */
+  embedder?: {
+    provider?: EmbedderProvider;
+    apiKey?: string;
+    openaiKey?: string;
+    model?: string;
+    baseUrl?: string;
+  };
   /** Legacy last-used agent field. No longer written or read by the
    *  chat panel; kept so old config files parse without churn. */
   terminalCli?: string;
@@ -143,23 +169,52 @@ export function writeAppConfigStrict(cfg: AppConfigFile): void {
 }
 
 export function getApiKey(): string | undefined {
-  const k = readAppConfig().apiKey;
-  return k && typeof k === 'string' && k.trim() ? k : undefined;
+  return getEmbedderConfig().apiKey;
 }
 
-/** Persist (or clear, when `key` is falsy) the user's OpenAI key. */
-export function setApiKey(key: string | undefined): void {
+export function getEmbedderConfig(): EmbedderConfig {
   const cfg = readAppConfig();
-  if (key && key.trim()) cfg.apiKey = key.trim();
+  const provider = isEmbedderProvider(cfg.embedder?.provider) ? cfg.embedder.provider : 'openai';
+  const defaults = EMBEDDER_DEFAULTS[provider];
+  const rawKey = cfg.embedder?.apiKey
+    ?? (provider === 'openai' ? cfg.apiKey ?? cfg.embedder?.openaiKey : undefined);
+  const apiKey = typeof rawKey === 'string' && rawKey.trim() ? rawKey.trim() : undefined;
+  const model = defaults.model;
+  const baseUrl = defaults.baseUrl;
+  return {
+    provider,
+    apiKey,
+    model,
+    dimension: defaults.dimension,
+    ...(baseUrl ? { baseUrl } : {}),
+  };
+}
+
+/** Persist (or clear, when `key` is falsy) the active embedding key. */
+export function setApiKey(key: string | undefined, provider: EmbedderProvider = getEmbedderConfig().provider): void {
+  setEmbedderConfig({ provider, apiKey: key });
+}
+
+export function setEmbedderConfig(next: { provider: EmbedderProvider; apiKey?: string }): EmbedderConfig {
+  const cfg = readAppConfig();
+  const defaults = EMBEDDER_DEFAULTS[next.provider];
+  cfg.embedder = {
+    ...(cfg.embedder ?? {}),
+    provider: next.provider,
+    model: defaults.model,
+    ...(defaults.baseUrl ? { baseUrl: defaults.baseUrl } : {}),
+  };
+  if (next.apiKey && next.apiKey.trim()) cfg.embedder.apiKey = next.apiKey.trim();
+  else delete cfg.embedder.apiKey;
+  delete cfg.embedder.openaiKey;
+  if (next.provider === 'openai' && cfg.embedder.apiKey) cfg.apiKey = cfg.embedder.apiKey;
   else delete cfg.apiKey;
   writeAppConfigStrict(cfg);
+  return getEmbedderConfig();
 }
 
-/** The embedder provider. V1 is fixed to OpenAI — there's no switching,
- *  so this is a constant. Kept as a function so call sites that surface
- *  "which provider" in info payloads don't need to special-case. */
 export function getEmbedderProvider(): EmbedderProvider {
-  return 'openai';
+  return getEmbedderConfig().provider;
 }
 
 export interface TranscriptionPreferences {
@@ -208,10 +263,13 @@ export function migrateLegacyEmbedderConfig(): void {
   const cfg = readAppConfig();
   if (!cfg.embedder?.openaiKey) return;
   const oldKey = cfg.embedder.openaiKey;
-  if (typeof oldKey === 'string' && oldKey.trim() && !cfg.apiKey) {
+  if (typeof oldKey === 'string' && oldKey.trim() && !cfg.embedder.apiKey && !cfg.apiKey) {
+    cfg.embedder.apiKey = oldKey.trim();
     cfg.apiKey = oldKey.trim();
   }
+  cfg.embedder.provider = 'openai';
+  cfg.embedder.model = EMBEDDER_DEFAULTS.openai.model;
   delete cfg.embedder.openaiKey;
   writeAppConfig(cfg);
-  log.info('migrated legacy embedder.openaiKey into top-level apiKey');
+  log.info('migrated legacy embedder.openaiKey into active embedder config');
 }

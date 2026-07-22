@@ -16,7 +16,7 @@ import { MfsIndexer } from './indexer.mfs.ts';
 import type { Indexer, EmbedderRuntimeConfig } from './indexer.ts';
 import { getCurrentFolder, getRecentFolders, onClose, onSwitch, runWithWindowId } from './folder.ts';
 import { filesystemPath } from './filesystem-path.ts';
-import { getApiKey } from './app-config.ts';
+import { getEmbedderConfig } from './app-config.ts';
 import { syncIndex, type SyncResult } from './sync.ts';
 import { getDaemon } from './mfs-daemon.ts';
 import { clearStaleMilvusLock } from './stale-lock.ts';
@@ -70,14 +70,20 @@ export async function deleteFolderRuntimeState(folderRoot: string): Promise<void
   folderSyncGeneration.delete(root);
 }
 
-/** Resolve the runtime embedder config (V1 = OpenAI only). Returns null
+/** Resolve the runtime embedder config. Returns null
  *  when no API key is set — the caller still binds the folder (so it's
  *  registered) but indexing stays disabled until the user adds a key
  *  (graceful no-key degrade). */
 function resolveEmbedder(): EmbedderRuntimeConfig | null {
-  const apiKey = getApiKey();
-  if (!apiKey) return null;
-  return { provider: 'openai', apiKey };
+  const cfg = getEmbedderConfig();
+  if (!cfg.apiKey) return null;
+  return {
+    provider: cfg.provider,
+    apiKey: cfg.apiKey,
+    model: cfg.model,
+    dimension: cfg.dimension,
+    baseUrl: cfg.baseUrl,
+  };
 }
 
 /** Configure + spawn the daemon, then bind every folder in Your Folders.
@@ -106,7 +112,7 @@ export async function bootBindAllFolders(): Promise<void> {
     return;
   }
   log.info(`boot bind: ${roots.length} folder(s)`);
-  const cfg = resolveEmbedder() ?? { provider: 'openai' as const };
+  const cfg = resolveEmbedder() ?? { provider: getEmbedderConfig().provider };
   for (const root of roots) {
     try {
       await indexer.bindFolder(root, cfg);
@@ -134,7 +140,7 @@ export async function reconcileLibraryFolders(reason: string): Promise<void> {
 }
 
 /** Tear down the Python daemon after global runtime config changes.
- *  `forgetBindings` is important for OpenAI key changes: bindings replay
+ *  `forgetBindings` is important for embedding key changes: bindings replay
  *  during daemon startup carry credentials, so stale entries could
  *  recreate the embedder with the old key before the fresh bind lands. */
 export async function resetIndexerRuntime(opts: { forgetBindings?: boolean } = {}): Promise<void> {
@@ -152,7 +158,7 @@ function claimStaleLockSweep(storeRoot: string): boolean {
   return true;
 }
 
-/** Bind the indexer to a folder using the OpenAI embedder. Called on
+/** Bind the indexer to a folder using the configured embedder. Called on
  *  every folder switch (idempotent). Doesn't trigger sync — caller's
  *  responsibility via `scheduleIndexerSync`. With no key the folder is
  *  still bound but indexing is disabled. */
@@ -171,9 +177,9 @@ export async function bindIndexerForFolder(folderAbs: string): Promise<void> {
     }
   }
   const cfg = resolveEmbedder();
-  const runtime = cfg ?? { provider: 'openai' as const };
+  const runtime = cfg ?? { provider: getEmbedderConfig().provider };
   if (!cfg) {
-    log.warn(`embedder: no OpenAI key set — ${folderAbs} bound but indexing/search disabled until a key is added`);
+    log.warn(`embedder: no embedding key set — ${folderAbs} bound but indexing/search disabled until a key is added`);
   }
   await indexer.bindFolder(filesystemPath.absolute(folderAbs), runtime);
 }

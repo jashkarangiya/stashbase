@@ -35,7 +35,7 @@ export function validateEditableFileWrite(name: string): void {
 
 export async function upsertSavedFile(name: string, content: string): Promise<string | undefined> {
   if (!getApiKey()) {
-    log.info(`save: skipped index update for ${name} because no OpenAI key is configured`);
+    log.info(`save: skipped index update for ${name} because no embedding key is configured`);
     return undefined;
   }
   if (!content.trim()) {

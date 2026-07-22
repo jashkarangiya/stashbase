@@ -2147,6 +2147,80 @@
       flex-wrap: wrap;
     }
 
+    .embedding-provider-row {
+      display: inline-flex;
+      align-items: center;
+      max-width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      background: #fff;
+      margin: 2px 0 8px;
+    }
+
+    .embedding-provider-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 30px;
+      border: 0;
+      border-left: 1px solid var(--border);
+      background: transparent;
+      color: var(--fg);
+      font: inherit;
+      font-size: 12px;
+      padding: 0 10px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.12s, color 0.12s;
+    }
+
+    .embedding-provider-option:first-child {
+      border-left: 0;
+    }
+
+    .embedding-provider-option:hover:not(:disabled) {
+      background: var(--hover);
+      color: var(--fg);
+    }
+
+    .embedding-provider-option.selected {
+      background: rgba(var(--accent-rgb), 0.08);
+      color: var(--fg);
+      font-weight: 600;
+    }
+
+    .embedding-provider-option:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+
+    .embedding-provider-name {
+      font-weight: 500;
+    }
+
+    .embedding-provider-meta {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px 12px;
+      margin-bottom: 12px;
+    }
+
+    .embedding-key-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .embedding-key-status {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 32px;
+      min-width: 0;
+    }
+
     /* A hint that trails *below* the action row (secondary detail —
      * privacy note, storage location, …). Sits at the bottom. */
     .settings-hint-foot {

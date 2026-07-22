@@ -298,7 +298,7 @@ export interface State {
    *  daemon error, not just "no matches"). Kept separate so the panel
    *  shows the error instead of a misleading empty "No matches". */
   searchError: string | null;
-  /** Global OpenAI key availability. `null` = not checked yet. Semantic
+  /** Global embedding key availability. `null` = not checked yet. Semantic
    *  search is disabled when this is explicitly false. */
   embedderHasKey: boolean | null;
 

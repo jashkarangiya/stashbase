@@ -65,7 +65,7 @@ export function mount(app: express.Express): void {
       if (!query) return res.status(400).json({ error: 'query required' });
       if (!getApiKey()) {
         return res.status(412).json({
-          error: 'semantic search is disabled until you add an OpenAI API key',
+          error: 'semantic search is disabled until you add an embedding API key',
           code: 'EMBEDDER_KEY_REQUIRED',
         });
       }

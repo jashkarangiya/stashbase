@@ -109,8 +109,8 @@ export function mountFileMutationRoutes(app: express.Express): void {
           return 'Searchable text is being regenerated in the background.';
         }
         if (!getApiKey()) {
-          log.info(`rename: skipped index update for ${oldName} -> ${newName} because no OpenAI key is configured`);
-          return 'Semantic index was not updated because no OpenAI API key is configured.';
+          log.info(`rename: skipped index update for ${oldName} -> ${newName} because no embedding key is configured`);
+          return 'Semantic index was not updated because no embedding API key is configured.';
         }
         const tooLarge = contentSizeError(content ?? '');
         if (tooLarge) {

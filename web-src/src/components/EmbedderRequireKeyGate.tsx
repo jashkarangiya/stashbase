@@ -1,8 +1,8 @@
 /**
- * Mounted once at the app root: on every folder switch, if no OpenAI key
- * is on file, pop the `RequireApiKeyModal`. V1 is OpenAI-only — without
- * a key, indexing and search are disabled, so we nudge the user to add
- * one (they can defer with "Later"; it re-pops on the next folder open).
+ * Mounted once at the app root: on every folder switch, if no embedding
+ * key is on file, pop the `RequireApiKeyModal`. Without a key, indexing
+ * and search are disabled, so we nudge the user to add one (they can
+ * defer with "Later"; it re-pops on the next folder open).
  *
  * Two exits from the modal:
  *   • Save key — validates + persists, daemon hot-swap.
@@ -37,12 +37,13 @@ export function EmbedderRequireKeyGate() {
 
   return (
     <RequireApiKeyModal
-      onSaved={(warning) => {
-        setState((s) => (s ? { ...s, hasKey: true } : s));
+      initialProvider={state.provider}
+      onSaved={(provider, model, backfillStarted, warning) => {
+        setState((s) => (s ? { ...s, provider, model, hasKey: true } : s));
         dispatch({ type: 'EMBEDDER_KEY_STATE', hasKey: true });
         setOpen(false);
-        if (warning) actions.toast(`OpenAI key saved, but validation could not reach OpenAI: ${warning}`, { level: 'warning' });
-        void actions.markVisibleFilesPendingForSearch();
+        if (warning) actions.toast(`Embedding key saved, but validation could not reach the provider: ${warning}`, { level: 'warning' });
+        if (backfillStarted) void actions.markVisibleFilesPendingForSearch();
         void actions.refreshIndexState();
       }}
       onLater={() => setOpen(false)}

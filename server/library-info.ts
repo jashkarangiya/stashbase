@@ -12,7 +12,7 @@
 import path from 'node:path';
 import { getFolderHome, getRecentFolders } from './folder.ts';
 import { filesystemPath } from './filesystem-path.ts';
-import { getEmbedderProvider } from './app-config.ts';
+import { getEmbedderProvider, type EmbedderProvider } from './app-config.ts';
 
 export interface LibraryInfo {
   /** Absolute filesystem path of the default home (where new folders
@@ -25,7 +25,7 @@ export interface LibraryInfo {
   folders: Array<{
     path: string;
     name: string;
-    provider: 'openai';
+    provider: EmbedderProvider;
     description?: string;
     descriptionSource?: 'user' | 'ai';
     descriptionUpdatedAt?: string;

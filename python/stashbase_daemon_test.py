@@ -16,6 +16,44 @@ with contextlib.redirect_stdout(io.StringIO()):
 
 
 class StashbaseDaemonTests(unittest.TestCase):
+    def test_openrouter_embedder_uses_openai_compatible_endpoint(self) -> None:
+        class FakeOpenAIClient:
+            def __init__(self, **kwargs):
+                fake_openai.last_kwargs = kwargs
+
+        fake_openai = types.SimpleNamespace(
+            OpenAI=FakeOpenAIClient,
+            APITimeoutError=RuntimeError,
+            APIConnectionError=RuntimeError,
+            RateLimitError=RuntimeError,
+            InternalServerError=RuntimeError,
+            last_kwargs=None,
+        )
+        previous = sys.modules.get("openai")
+        sys.modules["openai"] = fake_openai
+        try:
+            embedder = stashbase_daemon.make_embedder(
+                "openrouter",
+                api_key="sk-or-v1-test",
+            )
+        finally:
+            if previous is None:
+                sys.modules.pop("openai", None)
+            else:
+                sys.modules["openai"] = previous
+
+        self.assertEqual(embedder.provider, "openrouter")
+        self.assertEqual(embedder.model_name, "openai/text-embedding-3-small")
+        self.assertEqual(embedder.dimension, 1536)
+        self.assertEqual(
+            fake_openai.last_kwargs,
+            {
+                "api_key": "sk-or-v1-test",
+                "timeout": 60.0,
+                "base_url": "https://openrouter.ai/api/v1",
+            },
+        )
+
     def test_index_listing_pages_past_1000_rows_without_primary_key_order(self) -> None:
         try:
             import milvus_lite  # noqa: F401

@@ -68,10 +68,11 @@ const CALL_TIMEOUT_MS = 10 * 60_000;
 const READY_TIMEOUT_MS = 90_000;
 
 export interface BindFolderArgs {
-  provider: 'openai';
+  provider: 'openai' | 'openrouter';
   apiKey?: string;
   model?: string;
   dimension?: number;
+  baseUrl?: string;
 }
 
 /** Singleton-ish handle. Use `getDaemon()` to access. */
@@ -117,6 +118,7 @@ class MfsDaemon extends EventEmitter {
       ...(cfg.apiKey ? { api_key: cfg.apiKey } : {}),
       ...(cfg.model ? { model: cfg.model } : {}),
       ...(cfg.dimension ? { dimension: cfg.dimension } : {}),
+      ...(cfg.baseUrl ? { base_url: cfg.baseUrl } : {}),
     });
   }
 
@@ -266,6 +268,7 @@ class MfsDaemon extends EventEmitter {
               ...(cfg.apiKey ? { api_key: cfg.apiKey } : {}),
               ...(cfg.model ? { model: cfg.model } : {}),
               ...(cfg.dimension ? { dimension: cfg.dimension } : {}),
+              ...(cfg.baseUrl ? { base_url: cfg.baseUrl } : {}),
             }).catch((err) => log.warn(`rebind ${folder} after respawn failed: ${(err as Error).message}`));
           }
         }

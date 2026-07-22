@@ -538,4 +538,4 @@ export function removeRecent(absPath: string): void {
 
 // ---------- API key (global) ----------
 
-/** Returns the user's stored OpenAI key, or undefined if none. */
+/** Returns the user's stored embedding key, or undefined if none. */

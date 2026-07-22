@@ -358,7 +358,7 @@ function SearchResults({ query }: { query: string }) {
   if (state.searchMode === 'semantic' && state.embedderHasKey === false) {
     return (
       <div className="empty-list">
-        <div>Semantic search needs an OpenAI API key.</div>
+        <div>Semantic search needs an embedding API key.</div>
         <div>Keyword search works without embeddings.</div>
       </div>
     );
@@ -369,7 +369,7 @@ function SearchResults({ query }: { query: string }) {
     if (state.searchError.startsWith('Semantic search is disabled')) {
       return (
         <div className="empty-list">
-          <div>Semantic search needs an OpenAI API key.</div>
+          <div>Semantic search needs an embedding API key.</div>
           <div>Keyword search works without embeddings.</div>
         </div>
       );

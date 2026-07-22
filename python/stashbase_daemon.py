@@ -108,26 +108,34 @@ print(json.dumps({"event": "starting", "pid": os.getpid()}), flush=True)
 
 # ---------------------------------------------------------------- embedder
 #
-# V1 ships a single embedder: OpenAI `text-embedding-3-small` (1536d).
-# There is no embedder switching and no local fallback — the whole library
-# uses one collection. Built lazily on the first bind that carries an
-# API key; the daemon may have zero embedders loaded at idle.
+# V1 ships a narrow embedder set: OpenAI directly, or OpenRouter as an
+# OpenAI-compatible endpoint for the same 1536d OpenAI embedding model.
+# There is no arbitrary model switching and no local fallback — the whole
+# library uses one collection. Built lazily on the first bind that carries
+# an API key; the daemon may have zero embedders loaded at idle.
 
-def make_embedder(provider: str = "openai", *, model=None, api_key=None, dimension=None):
-    """Build the OpenAI embedding provider satisfying MFS's protocol
+def make_embedder(provider: str = "openai", *, model=None, api_key=None, dimension=None, base_url=None):
+    """Build an OpenAI-compatible embedding provider satisfying MFS's protocol
     (`.embed(texts) -> list[list[float]]`, `.dimension`, `.model_name`).
 
     Rolled in-house — see `_OpenAIEmbedder`. ``provider`` is accepted for
-    protocol compatibility but must be ``openai`` (V1 has no other).
+    protocol compatibility and is intentionally limited to OpenAI/OpenRouter.
     """
-    if provider != "openai":
-        raise ValueError(f"unsupported embedder provider {provider!r}; V1 is openai-only")
+    if provider not in ("openai", "openrouter"):
+        raise ValueError(f"unsupported embedder provider {provider!r}")
     if not api_key:
-        raise ValueError("openai embedder requires api_key")
+        raise ValueError(f"{provider} embedder requires api_key")
+    if provider == "openrouter":
+        model = model or "openai/text-embedding-3-small"
+        base_url = base_url or "https://openrouter.ai/api/v1"
+    else:
+        model = model or "text-embedding-3-small"
     return _OpenAIEmbedder(
-        model=model or "text-embedding-3-small",
+        provider=provider,
+        model=model,
         api_key=api_key,
         dimension=dimension,
+        base_url=base_url,
     )
 
 
@@ -155,11 +163,16 @@ class _OpenAIEmbedder:
     _MAX_REQUEST_TOKENS = 250_000
     _MAX_BATCH_ITEMS = 128
 
-    def __init__(self, *, model: str, api_key: str, dimension: int | None = None,
+    def __init__(self, *, provider: str, model: str, api_key: str, dimension: int | None = None,
+                 base_url: str | None = None,
                  timeout: float = 60.0, max_retries: int = 3, base_delay: float = 1.5) -> None:
         import openai
         self._openai = openai
-        self._client = openai.OpenAI(api_key=api_key, timeout=timeout)
+        kwargs = {"api_key": api_key, "timeout": timeout}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self._client = openai.OpenAI(**kwargs)
+        self.provider = provider
         self.model_name = model
         self.dimension = dimension or self._NATIVE_DIMS.get(model, 1536)
         self._max_retries = max(1, max_retries)
@@ -219,7 +232,7 @@ class _OpenAIEmbedder:
                     raise
                 delay = self._base_delay * (2 ** attempt)
                 print(
-                    f"[stashbase] openai embed attempt {attempt + 1}/{self._max_retries} "
+                    f"[stashbase] {self.provider} embed attempt {attempt + 1}/{self._max_retries} "
                     f"failed ({type(err).__name__}); retrying in {delay:.1f}s",
                     file=sys.stderr,
                 )
@@ -685,20 +698,27 @@ class StashbaseStore:
         api_key=None,
         model=None,
         dimension=None,
+        base_url=None,
     ) -> dict:
         # First bind with a key builds the embedder + collection; later
         # binds reuse them. Without a key the root is still registered
         # but the collection isn't created — indexing stays disabled until
-        # the user supplies an OpenAI key (graceful no-key degrade).
+        # the user supplies an embedding key (graceful no-key degrade).
         if self._store is None and api_key:
-            embedder = make_embedder(provider, model=model, api_key=api_key, dimension=dimension)
+            embedder = make_embedder(
+                provider,
+                model=model,
+                api_key=api_key,
+                dimension=dimension,
+                base_url=base_url,
+            )
             self._ensure_store(embedder)
         requested = _norm_root(root)
         identity = root_identity or requested
         root = self._bound.setdefault(identity, requested)
         return {
             "root": root,
-            "provider": "openai",
+            "provider": getattr(self._embedder, "provider", provider),
             "model": getattr(self._embedder, "model_name", None),
             "dim": self._dim,
             "collection": _collection_name(self._dim) if self._dim else None,
@@ -732,7 +752,7 @@ class StashbaseStore:
         if self.root_for_path(path, path_identity=path_identity) is None or self._store is None:
             raise RuntimeError(
                 f"no bound root matches path '{path}'; call bind_root first "
-                "(or set an OpenAI API key)",
+                "(or set an embedding API key)",
             )
         return (self._embedder, self._store)
 
@@ -751,10 +771,10 @@ class StashbaseStore:
 
     def require_current(self):
         """Return ``(embedder, store, dim)``; raise if no embedder is
-        bound yet (e.g. no OpenAI key set)."""
+        bound yet (e.g. no embedding key set)."""
         if self._store is None:
             raise RuntimeError(
-                "no embedder bound; call bind_folder with an OpenAI API key first",
+                "no embedder bound; call bind_folder with an embedding API key first",
             )
         return self._embedder, self._store, self._dim
 
@@ -819,6 +839,7 @@ def op_bind_folder(svc: StashbaseStore, args: dict) -> dict:
         api_key=args.get("api_key"),
         model=args.get("model"),
         dimension=args.get("dimension"),
+        base_url=args.get("base_url"),
     )
 
 

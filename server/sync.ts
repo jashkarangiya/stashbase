@@ -209,16 +209,16 @@ async function cleanupConvertedRename(
 export async function syncIndex(indexer: Indexer, root: string, opts: SyncOptions = {}): Promise<SyncResult> {
   if (shouldStop(opts)) return emptyResult(true);
 
-  // No OpenAI key → semantic indexing is disabled by design (§5.3): the
+  // No embedding key → semantic indexing is disabled by design (§5.3): the
   // daemon has no embedder/store, so every upsert would throw "no bound
-  // root … set an OpenAI API key" and a whole-folder import would flood
+  // root … set an embedding API key" and a whole-folder import would flood
   // the log with one failure per file. Conversion discovery still
   // runs so PDFs/images can produce AppData derived text for keyword search
     // and future reindex.
   if (!getApiKey()) {
     cleanupMissingConvertedSources(root);
     discoverConvertedSources(root);
-    log.info(`no OpenAI key — skipping semantic index for "${root}" (conversion + keyword search unaffected)`);
+    log.info(`no embedding key — skipping semantic index for "${root}" (conversion + keyword search unaffected)`);
     return emptyResult();
   }
 

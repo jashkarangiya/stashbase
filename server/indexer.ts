@@ -30,15 +30,18 @@ export interface SearchHit {
 }
 
 export interface EmbedderRuntimeConfig {
-  /** V1 is OpenAI-only — no embedder switching. */
-  provider: 'openai';
-  /** OpenAI API key. Absent ⇒ the folder is registered but indexing
+  /** Supported embedding endpoints. OpenRouter is used only as an
+   *  OpenAI-compatible embeddings endpoint for the fixed 1536d model. */
+  provider: 'openai' | 'openrouter';
+  /** Provider API key. Absent ⇒ the folder is registered but indexing
    *  stays disabled until the user adds a key (graceful no-key degrade). */
   apiKey?: string;
-  /** Optional model override (default `text-embedding-3-small`). */
+  /** Optional model override. Defaults are provider-specific. */
   model?: string;
   /** Optional dimension override (default 1536). */
   dimension?: number;
+  /** Optional OpenAI-compatible base URL. Used by OpenRouter. */
+  baseUrl?: string;
 }
 
 export interface Indexer {

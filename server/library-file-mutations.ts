@@ -143,7 +143,7 @@ export async function moveLibraryFile(
         }
         indexWarning = 'Searchable text is being regenerated in the background.';
       } else if (!getApiKey()) {
-        indexWarning = 'Semantic index was not updated because no OpenAI API key is configured.';
+        indexWarning = 'Semantic index was not updated because no embedding API key is configured.';
       } else {
         const movedContent = readText(newTarget.folderRel) ?? content ?? '';
         const tooLarge = contentSizeError(movedContent);

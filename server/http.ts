@@ -99,24 +99,27 @@ function assetWindowIdFromPath(reqPath: string): string | undefined {
   }
 }
 
-export type OpenAIKeyCheck = { ok: true } | { ok: false; status: number; error: string };
-const OPENAI_KEY_CHECK_TIMEOUT_MS = 15_000;
+export type EmbedderKeyCheck = { ok: true } | { ok: false; status: number; error: string };
+const EMBEDDER_KEY_CHECK_TIMEOUT_MS = 15_000;
 
-/** Probe an OpenAI key against `/v1/models` — cheapest unauth check
- *  (no embed credits consumed). Single source of truth so the validate
- *  route, key-rotate route, and any future caller share the same
- *  network / parsing behaviour. `status` carries the HTTP status the
- *  caller should respond with: 400 when OpenAI rejected the key, 502
- *  when the check could not prove the key invalid (network / transient
- *  upstream failure). */
-export async function validateOpenAIKey(
+/** Probe an embedding API key against the provider's `/models` endpoint —
+ *  cheap auth validation with no embedding credits consumed. `status`
+ *  carries the HTTP status the caller should respond with: 400 when the
+ *  provider rejected the key, 502 when the check could not prove the key
+ *  invalid (network / transient upstream failure). */
+export async function validateEmbedderKey(
+  provider: 'openai' | 'openrouter',
   key: string,
   opts: { timeoutMs?: number } = {},
-): Promise<OpenAIKeyCheck> {
+): Promise<EmbedderKeyCheck> {
+  const providerName = provider === 'openrouter' ? 'OpenRouter' : 'OpenAI';
+  const modelsUrl = provider === 'openrouter'
+    ? 'https://openrouter.ai/api/v1/models'
+    : 'https://api.openai.com/v1/models';
   try {
-    const r = await fetch('https://api.openai.com/v1/models', {
+    const r = await fetch(modelsUrl, {
       headers: { Authorization: `Bearer ${key}` },
-      signal: AbortSignal.timeout(opts.timeoutMs ?? OPENAI_KEY_CHECK_TIMEOUT_MS),
+      signal: AbortSignal.timeout(opts.timeoutMs ?? EMBEDDER_KEY_CHECK_TIMEOUT_MS),
     });
     if (r.ok) return { ok: true };
     const detail = await r.text().catch(() => '');
@@ -124,17 +127,24 @@ export async function validateOpenAIKey(
       return {
         ok: false,
         status: 502,
-        error: `OpenAI key check could not complete (HTTP ${r.status}): ${detail.slice(0, 200)}`,
+        error: `${providerName} key check could not complete (HTTP ${r.status}): ${detail.slice(0, 200)}`,
       };
     }
     return {
       ok: false,
       status: 400,
-      error: `OpenAI rejected the key (HTTP ${r.status}): ${detail.slice(0, 200)}`,
+      error: `${providerName} rejected the key (HTTP ${r.status}): ${detail.slice(0, 200)}`,
     };
   } catch (err: unknown) {
     return { ok: false, status: 502, error: `network: ${errorMessage(err)}` };
   }
+}
+
+export async function validateOpenAIKey(
+  key: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<EmbedderKeyCheck> {
+  return validateEmbedderKey('openai', key, opts);
 }
 
 /** Open the OS file manager focused on the given absolute path. macOS

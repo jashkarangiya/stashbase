@@ -1,19 +1,37 @@
 /**
- * Settings → Embedding panel. V1 fixes the embedder to OpenAI, so this
- * is just the OpenAI API key: add / change / remove. With no key set,
- * indexing and search are disabled (files still save and preview); the
- * `RequireApiKeyModal` auto-pop on folder load lives in
+ * Settings → Embedding panel. The user can choose the direct OpenAI
+ * embedding endpoint or OpenRouter's OpenAI-compatible endpoint. With no
+ * key set, indexing and search are disabled (files still save and
+ * preview); the `RequireApiKeyModal` auto-pop on folder load lives in
  * `EmbedderRequireKeyGate` so it fires whether or not Settings is open.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, errorMessage, type EmbedderState } from '../../api';
+import { api, errorMessage, type EmbedderProvider, type EmbedderState } from '../../api';
 import { useApp } from '../../store/AppContext';
 import { KeyModal } from '../embedder/KeyModal';
 import { RemoveKeyModal } from '../embedder/RemoveKeyModal';
 
+const PROVIDERS: Record<EmbedderProvider, { label: string; model: string; placeholder: string; costHint: string }> = {
+  openai: {
+    label: 'OpenAI',
+    model: 'text-embedding-3-small',
+    placeholder: 'sk-...',
+    costHint: 'about $0.02 per million tokens',
+  },
+  openrouter: {
+    label: 'OpenRouter',
+    model: 'openai/text-embedding-3-small',
+    placeholder: 'sk-or-v1-...',
+    costHint: 'billed by OpenRouter',
+  },
+};
+
+const PROVIDER_ORDER: EmbedderProvider[] = ['openai', 'openrouter'];
+
 export function EmbeddingPanel() {
   const { state: appState, dispatch, actions } = useApp();
   const [state, setState] = useState<EmbedderState | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<EmbedderProvider>('openai');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadNonce, setLoadNonce] = useState(0);
   const [keyEditOpen, setKeyEditOpen] = useState(false);
@@ -34,7 +52,11 @@ export function EmbeddingPanel() {
     let cancelled = false;
     setLoadError(null);
     api.getEmbedder()
-      .then((s) => { if (!cancelled) setState(s); })
+      .then((s) => {
+        if (cancelled) return;
+        setState(s);
+        setSelectedProvider(s.provider);
+      })
       .catch((err: unknown) => {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
@@ -46,13 +68,14 @@ export function EmbeddingPanel() {
   const retryLoad = useCallback(() => setLoadNonce((n) => n + 1), []);
 
   async function onKeyChanged(key: string) {
-    const result = await api.changeApiKey(key);
+    const result = await api.changeApiKey(key, selectedProvider);
     if (!mountedRef.current) return;
     setKeyEditOpen(false);
-    setState((s) => (s ? { ...s, hasKey: true } : s));
+    setState((s) => (s ? { ...s, provider: result.provider, model: result.model, hasKey: true } : s));
+    setSelectedProvider(result.provider);
     dispatch({ type: 'EMBEDDER_KEY_STATE', hasKey: true });
-    if (result.warning) actions.toast(`OpenAI key saved, but validation could not reach OpenAI: ${result.warning}`, { level: 'warning' });
-    void actions.markVisibleFilesPendingForSearch();
+    if (result.warning) actions.toast(`Embedding key saved, but validation could not reach the provider: ${result.warning}`, { level: 'warning' });
+    if (result.backfillStarted) void actions.markVisibleFilesPendingForSearch();
     void actions.refreshIndexState();
   }
 
@@ -62,15 +85,16 @@ export function EmbeddingPanel() {
     setAddBusy(true);
     setAddError(null);
     try {
-      // changeApiKey rejects definite OpenAI auth failures server-side, so
-      // the success path only does one OpenAI validation round trip.
-      const result = await api.changeApiKey(trimmed);
+      // changeApiKey rejects definite provider auth failures server-side,
+      // so the success path only does one validation round trip.
+      const result = await api.changeApiKey(trimmed, selectedProvider);
       if (!mountedRef.current) return;
       setAddKey('');
-      setState((s) => (s ? { ...s, hasKey: true } : s));
+      setState((s) => (s ? { ...s, provider: result.provider, model: result.model, hasKey: true } : s));
+      setSelectedProvider(result.provider);
       dispatch({ type: 'EMBEDDER_KEY_STATE', hasKey: true });
-      if (result.warning) actions.toast(`OpenAI key saved, but validation could not reach OpenAI: ${result.warning}`, { level: 'warning' });
-      void actions.markVisibleFilesPendingForSearch();
+      if (result.warning) actions.toast(`Embedding key saved, but validation could not reach the provider: ${result.warning}`, { level: 'warning' });
+      if (result.backfillStarted) void actions.markVisibleFilesPendingForSearch();
       void actions.refreshIndexState();
     } catch (err: unknown) {
       if (!mountedRef.current) return;
@@ -90,7 +114,7 @@ export function EmbeddingPanel() {
     if (appState.searchMode === 'semantic' && appState.filterQuery.trim()) {
       dispatch({
         type: 'SEARCH_ERROR',
-        error: 'Semantic search is disabled until you add an OpenAI API key. Switch to keyword search to search without embeddings.',
+        error: 'Semantic search is disabled until you add an embedding API key. Switch to keyword search to search without embeddings.',
       });
     }
   }
@@ -108,36 +132,74 @@ export function EmbeddingPanel() {
     );
   }
   if (!state) return <div className="settings-panel-loading">Loading…</div>;
+  const selected = PROVIDERS[selectedProvider];
+  const activeProviderSelected = state.provider === selectedProvider;
+  const hasSelectedProviderKey = state.hasKey && activeProviderSelected;
 
   return (
     <>
       <div className="settings-panel">
         <div className="settings-section">
-          <div className="settings-section-title">OpenAI API key</div>
+          <div className="settings-section-title">Embedding</div>
           <div className="settings-section-hint">
-            StashBase indexes your content for semantic search using OpenAI embeddings
-            (<code>text-embedding-3-small</code>).
+            Used for semantic search. The model stays fixed so the local index remains compatible.
           </div>
-          {state.hasKey ? (
-            <div className="settings-actions-row">
-              <button
-                type="button"
-                className="settings-secondary-btn"
-                onClick={() => setKeyEditOpen(true)}
-              >Change key…</button>
-              <button
-                type="button"
-                className="settings-secondary-btn danger"
-                onClick={() => setKeyRemoveOpen(true)}
-              >Remove key…</button>
+          <div className="embedding-provider-row" role="radiogroup" aria-label="Embedding provider">
+            {PROVIDER_ORDER.map((provider) => {
+              const option = PROVIDERS[provider];
+              const selectedOption = provider === selectedProvider;
+              return (
+                <button
+                  key={provider}
+                  type="button"
+                  className={`embedding-provider-option${selectedOption ? ' selected' : ''}`}
+                  role="radio"
+                  aria-checked={selectedOption}
+                  disabled={addBusy}
+                  onClick={() => {
+                    setSelectedProvider(provider);
+                    setAddKey('');
+                    setAddError(null);
+                  }}
+                >
+                  <span className="embedding-provider-name">{option.label}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="settings-section-hint embedding-provider-meta">
+            {state.hasKey && <span>Current: {PROVIDERS[state.provider].label}</span>}
+            <span>Model: <code>{selected.model}</code></span>
+            <span>{selected.costHint}</span>
+          </div>
+          {hasSelectedProviderKey ? (
+            <div className="embedding-key-row">
+              <div className="embedding-key-status">Key configured</div>
+              <div className="settings-actions-row">
+                <button
+                  type="button"
+                  className="settings-secondary-btn"
+                  onClick={() => setKeyEditOpen(true)}
+                >Change key…</button>
+                <button
+                  type="button"
+                  className="settings-secondary-btn danger"
+                  onClick={() => setKeyRemoveOpen(true)}
+                >Remove key…</button>
+              </div>
             </div>
           ) : (
             <>
+              {state.hasKey && !activeProviderSelected && (
+                <div className="settings-section-hint">
+                  Save a {selected.label} key to switch from {PROVIDERS[state.provider].label}.
+                </div>
+              )}
               <div className="settings-field-row">
                 <input
                   type="password"
                   className="settings-text-input"
-                  placeholder="sk-…"
+                  placeholder={selected.placeholder}
                   autoComplete="off"
                   spellCheck={false}
                   value={addKey}
@@ -156,8 +218,7 @@ export function EmbeddingPanel() {
             </>
           )}
           <div className="settings-section-hint settings-hint-foot">
-            Stored locally in <code>~/.stashbase/config.json</code>. The key is used only for
-            embeddings — never chat or completions — and costs about $0.02 per million tokens.
+            Stored locally in <code>~/.stashbase/config.json</code>. Used only for embeddings, never chat.
           </div>
         </div>
       </div>
@@ -165,6 +226,9 @@ export function EmbeddingPanel() {
       {keyEditOpen && (
         <KeyModal
           mode="change"
+          provider={selectedProvider}
+          model={selected.model}
+          placeholder={selected.placeholder}
           onCancel={() => setKeyEditOpen(false)}
           onSaved={onKeyChanged}
         />

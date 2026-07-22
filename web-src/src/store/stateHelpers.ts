@@ -84,7 +84,7 @@ export function mostRecentChatTab(s: State, agent: string): ChatTab | null {
 }
 
 /** Visible files to mark as pending immediately after the user adds the
- *  first OpenAI key. The server may already be embedding by the time
+ *  first embedding key. The server may already be embedding by the time
  *  `/api/index-status` is polled, and the daemon serialises status behind
  *  embeds; this optimistic set keeps search-readiness accounting from
  *  temporarily undercounting the backfill. */

@@ -1,18 +1,26 @@
 /**
- * OpenAI key entry modal. The caller persists through `/api/embedder/key`,
- * which rejects definite OpenAI auth failures before writing config.
+ * Embedding key entry modal. The caller persists through
+ * `/api/embedder/key`, which rejects definite provider auth failures
+ * before writing config.
  * `mode='change'` only swaps the title + button text.
  */
 import { useEffect, useRef, useState } from 'react';
+import type { EmbedderProvider } from '../../api';
 import { errorMessage } from '../../api';
 import { ModalShell } from '../ModalShell';
 
 export function KeyModal({
   mode = 'enter',
+  provider,
+  model,
+  placeholder,
   onCancel,
   onSaved,
 }: {
   mode?: 'enter' | 'change';
+  provider: EmbedderProvider;
+  model: string;
+  placeholder: string;
   onCancel: () => void;
   onSaved: (key: string) => void | Promise<void>;
 }) {
@@ -29,8 +37,8 @@ export function KeyModal({
     setError(null);
     try {
       // The caller saves via changeApiKey, whose server route rejects
-      // definite OpenAI auth failures; don't preflight here or successful
-      // saves pay for two OpenAI validation calls.
+      // definite provider auth failures; don't preflight here or successful
+      // saves pay for two validation calls.
       await onSaved(trimmed);
     } catch (err: unknown) {
       setError(errorMessage(err));
@@ -40,17 +48,17 @@ export function KeyModal({
 
   return (
     <ModalShell onCancel={onCancel}>
-      <h3>{mode === 'change' ? 'Change API key' : 'OpenAI API key'}</h3>
+      <h3>{mode === 'change' ? 'Change API key' : `${providerLabel(provider)} API key`}</h3>
       <p className="modal-hint">
         {mode === 'change'
-          ? 'Replaces your OpenAI key. The embedder is unchanged, so the existing index stays valid — no re-indexing.'
-          : 'Used only for embeddings — never for chat or completions.'}
+          ? `Replaces your ${providerLabel(provider)} key for ${model}.`
+          : `Used only for embeddings with ${model} — never for chat or completions.`}
       </p>
       <input
         ref={inputRef}
         type="password"
         className="modal-input"
-        placeholder="sk-…"
+        placeholder={placeholder}
         autoComplete="off"
         value={key}
         onChange={(e) => setKey(e.target.value)}
@@ -73,4 +81,8 @@ export function KeyModal({
       </div>
     </ModalShell>
   );
+}
+
+function providerLabel(provider: EmbedderProvider): string {
+  return provider === 'openrouter' ? 'OpenRouter' : 'OpenAI';
 }

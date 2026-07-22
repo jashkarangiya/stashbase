@@ -384,7 +384,7 @@ export function useSearchActions(
         if (!embedder.hasKey) {
           dispatch({
             type: 'SEARCH_ERROR',
-            error: 'Semantic search is disabled until you add an OpenAI API key. Switch to keyword search to search without embeddings.',
+            error: 'Semantic search is disabled until you add an embedding API key. Switch to keyword search to search without embeddings.',
           });
           return;
         }

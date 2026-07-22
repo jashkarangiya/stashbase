@@ -210,6 +210,57 @@
       font-weight: 400;
     }
 
+    .embedder-modal-provider-row {
+      display: inline-flex;
+      align-items: center;
+      max-width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--bg);
+      margin: 0 0 8px;
+    }
+
+    .embedder-modal-provider-option {
+      min-height: 30px;
+      border: 0;
+      border-left: 1px solid var(--border);
+      background: transparent;
+      color: var(--fg);
+      font: inherit;
+      font-size: 12.5px;
+      font-weight: 500;
+      padding: 0 11px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.12s, color 0.12s;
+    }
+
+    .embedder-modal-provider-option:first-child {
+      border-left: 0;
+    }
+
+    .embedder-modal-provider-option:hover:not(:disabled) {
+      background: var(--hover);
+    }
+
+    .embedder-modal-provider-option.selected {
+      background: rgba(var(--accent-rgb), 0.08);
+      font-weight: 600;
+    }
+
+    .embedder-modal-provider-option:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+
+    .embedder-modal-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 12px;
+      margin-bottom: 10px;
+    }
+
     .modal-check {
       display: flex;
       align-items: center;

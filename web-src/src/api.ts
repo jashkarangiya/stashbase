@@ -8,6 +8,7 @@ import type {
   AgentsResponse,
   ApiKeySaveResult,
   EmbedderState,
+  EmbedderProvider,
   FileBody,
   FilesPayload,
   FolderState,
@@ -267,13 +268,13 @@ export const api = {
       file?: string;
       mode?: 'file' | 'clipboard';
     }>('POST', '/api/mcp/disconnect', { client }),
-  /** Rotate the global OpenAI key without touching the provider choice. */
-  changeApiKey: (openaiKey: string) =>
-    send<ApiKeySaveResult>('PUT', '/api/embedder/key', { openaiKey }),
-  /** Clear the global OpenAI key. Embedding and semantic search stay
+  /** Set or rotate the active embedding provider key. */
+  changeApiKey: (key: string, provider?: EmbedderProvider) =>
+    send<ApiKeySaveResult>('PUT', '/api/embedder/key', { key, provider }),
+  /** Clear the active embedding key. Embedding and semantic search stay
    *  disabled until a key is added back; keyword search is unaffected. */
   removeApiKey: () =>
-    send<{ hasKey: false }>('DELETE', '/api/embedder/key'),
+    send<{ hasKey: false; provider: EmbedderProvider; model: string }>('DELETE', '/api/embedder/key'),
 
   // Agent sessions (chat-panel History dropdown) ----------------
   /** All local agent sessions for the current folder, newest first. */

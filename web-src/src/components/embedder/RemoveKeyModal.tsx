@@ -1,7 +1,7 @@
 /**
- * Confirmation for removing the global OpenAI key. V1 is OpenAI-only,
- * so without a key indexing and search stop until the user adds one
- * back. The existing index is left untouched — nothing is deleted.
+ * Confirmation for removing the global embedding key.
+ * Without a key, indexing and search stop until the user adds one back.
+ * The existing index is left untouched — nothing is deleted.
  */
 import { useState } from 'react';
 import { errorMessage } from '../../api';

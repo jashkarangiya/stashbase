@@ -4,10 +4,9 @@
 # mfs-cli vendors most of what we need (pymilvus, langchain-text-splitters,
 # pyyaml, filelock, tree-sitter, numpy etc.) so we only have to add the bits
 # the sidecar uses directly:
-#   - openai:       V1's single fixed embedder (text-embedding-3-small),
-#                   imported directly by _OpenAIEmbedder. No local model —
-#                   onnxruntime/tokenizers were dropped when embedder
-#                   switching was removed (openai-only).
+#   - openai:       OpenAI-compatible embedding client for the fixed
+#                   text-embedding-3-small family. No local model —
+#                   onnxruntime/tokenizers stay out of the default sidecar.
 #   - numpy:        vector handling (also pulled transitively by pymilvus).
 #   - blake3:       content + chunk-id hashing (faster + streaming-
 #                   friendly than SHA256; mfs's Scanner is patched to

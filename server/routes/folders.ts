@@ -130,7 +130,7 @@ export function mount(app: express.Express): void {
           }
 
           if (!getApiKey()) {
-            log.info(`rename_folder: skipped index update for ${oldPath} -> ${newPath} because no OpenAI key is configured`);
+            log.info(`rename_folder: skipped index update for ${oldPath} -> ${newPath} because no embedding key is configured`);
             return;
           }
           // Cascade BEFORE the index call so files whose links we rewrite

@@ -36,9 +36,15 @@ export type FileFormat = 'md' | 'html' | 'pdf' | 'image' | 'docx' | 'audio';
 
 export interface ApiKeySaveResult {
   hasKey: true;
+  provider: EmbedderProvider;
+  model: string;
+  /** True only when adding the first active embedding key and the server
+   *  started a semantic backfill. Rotating a key keeps existing vectors
+   *  valid and should not make files look pending. */
+  backfillStarted?: boolean;
   /** Present when the key was saved but StashBase could not reach
-   *  OpenAI to validate it at save time. Indexing/search will surface the
-   *  real connectivity failure if it persists. */
+   *  the provider to validate it at save time. Indexing/search will
+   *  surface the real connectivity failure if it persists. */
   warning?: string;
 }
 
@@ -101,7 +107,7 @@ export interface IndexStatus {
   orphanedCount: number;
   orphaned: string[];
   upToDate: boolean;
-  /** False when semantic indexing/search is unavailable, e.g. no OpenAI key. */
+  /** False when semantic indexing/search is unavailable, e.g. no embedding key. */
   semanticEnabled?: boolean;
   /** Human-readable reason when semantic indexing/search is disabled. */
   semanticDisabledReason?: string;
@@ -235,12 +241,12 @@ export interface KeywordSearchResult {
   truncated: boolean;
 }
 
-/** V1 is OpenAI-only — no embedder switching. */
-export type EmbedderProvider = 'openai';
+export type EmbedderProvider = 'openai' | 'openrouter';
 
 export interface EmbedderState {
   provider: EmbedderProvider;
   hasKey: boolean;
+  model: string;
 }
 
 export interface McpHttpStatus {

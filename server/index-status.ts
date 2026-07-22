@@ -33,7 +33,7 @@ export async function buildIndexStatus(folderRoot: string): Promise<Record<strin
     folder: curRoot,
     ...status,
     semanticEnabled,
-    ...(semanticEnabled ? {} : { semanticDisabledReason: 'OpenAI API key required' }),
+    ...(semanticEnabled ? {} : { semanticDisabledReason: 'Embedding API key required' }),
     pending,
     pendingCount: pending.length,
     orphaned,

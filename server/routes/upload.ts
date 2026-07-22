@@ -312,7 +312,7 @@ async function processUploadedFiles(
       }
     })();
   } else if (toIndex.length) {
-    log.info(`upload: skipped indexing ${toIndex.length} file(s) because no OpenAI key is configured`);
+    log.info(`upload: skipped indexing ${toIndex.length} file(s) because no embedding key is configured`);
   }
   // Kick off conversions fire-and-forget. They handle their own async
   // failures internally; guard only against a synchronous throw at
