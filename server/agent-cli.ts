@@ -23,10 +23,18 @@ const CLI_SEARCH_DIRS = [
   '/bin',
 ];
 
+const WINDOWS_EXECUTABLE_EXTENSIONS = new Set(['.com', '.exe', '.cmd', '.bat']);
+
+export function isWindowsLaunchableAgentCliPath(file: string): boolean {
+  return WINDOWS_EXECUTABLE_EXTENSIONS.has(path.extname(file).toLowerCase());
+}
+
 function isExecutable(file: string): boolean {
   try {
     fs.accessSync(file, process.platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK);
-    if (process.platform === 'win32') return fs.statSync(file).isFile();
+    if (process.platform === 'win32') {
+      return fs.statSync(file).isFile() && isWindowsLaunchableAgentCliPath(file);
+    }
     return true;
   } catch {
     return false;
@@ -60,11 +68,11 @@ export function agentCliEnv(extraEnv: NodeJS.ProcessEnv = {}, extraDirs: string[
   } as NodeJS.ProcessEnv;
 }
 
-function executableCandidates(name: string): string[] {
-  if (process.platform !== 'win32') return [name];
+export function agentCliExecutableCandidates(name: string, platform: NodeJS.Platform = process.platform): string[] {
+  if (platform !== 'win32') return [name];
   const ext = path.extname(name);
   if (ext) return [name];
-  return [name, `${name}.exe`, `${name}.cmd`, `${name}.bat`];
+  return [`${name}.exe`, `${name}.cmd`, `${name}.bat`, `${name}.com`, name];
 }
 
 export function resolveAgentCli(spec: AgentCliSpec, warn?: (message: string) => void): string | null {
@@ -78,7 +86,7 @@ export function resolveAgentCli(spec: AgentCliSpec, warn?: (message: string) => 
   }
 
   for (const dir of agentCliPath().split(path.delimiter)) {
-    for (const name of executableCandidates(spec.name)) {
+    for (const name of agentCliExecutableCandidates(spec.name)) {
       const candidate = path.join(dir, name);
       if (isExecutable(candidate)) return candidate;
     }
