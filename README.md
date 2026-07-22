@@ -32,7 +32,7 @@ Local files -> Convert -> Index -> Retrieve -> MCP -> Agents
 
 Curious about StashBase but not sure what to try first? Open this repo's `design-docs/` folder in StashBase and ask the built-in Agent how the project is designed.
 
-![StashBase demo: opening local design docs and asking the Agent about architecture and roadmap](assets/readme/demo.gif)
+![StashBase demo: opening local design docs and asking the Agent about architecture and product direction](assets/readme/demo.gif)
 
 ---
 
