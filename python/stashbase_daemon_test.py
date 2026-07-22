@@ -23,6 +23,7 @@ class StashbaseDaemonTests(unittest.TestCase):
             self.skipTest("milvus_lite is not installed")
 
         from milvus_lite.engine.collection import Collection
+        from milvus_lite.storage import manifest as manifest_module
         from mfs.store import ChunkRecord
 
         class FakeEmbedder:
@@ -36,15 +37,18 @@ class StashbaseDaemonTests(unittest.TestCase):
             root = Path(tmp) / "library"
             store_root = Path(tmp) / "store"
             root.mkdir()
-            root_source = str(root)
+            # The Node -> Python protocol retains absolute POSIX spelling on
+            # every platform, independently of the native Path used for I/O.
+            root_source = root.as_posix()
+            original_manifest_save = manifest_module.Manifest.save
             # Keep the two flushed segments separate. Their local ordering is
             # valid, but their combined physical ordering is not global PK
             # ordering; that is the real shape that exposed the live bug.
             with mock.patch.object(Collection, "_schedule_bg_maintenance", lambda self: None):
                 svc = stashbase_daemon.StashbaseStore(str(store_root))
-                store = svc._ensure_store(FakeEmbedder())
-                svc.bind_root(root_source, "openai", root_identity=root_source)
                 try:
+                    store = svc._ensure_store(FakeEmbedder())
+                    svc.bind_root(root_source, "openai", root_identity=root_source)
                     records = []
                     # The first page ends on the lexicographically greatest id;
                     # the final physical row has a smaller id. A primary-key
@@ -57,7 +61,7 @@ class StashbaseDaemonTests(unittest.TestCase):
                         note.write_text(content, encoding="utf-8")
                         records.append(ChunkRecord(
                             id=chunk_id,
-                            source=str(note),
+                            source=note.as_posix(),
                             parent_dir=root_source,
                             chunk_index=0,
                             start_line=1,
@@ -85,8 +89,43 @@ class StashbaseDaemonTests(unittest.TestCase):
                         stashbase_daemon.op_status(svc, {"folder": root_source})["pending"],
                         [],
                     )
+
+                    svc.close_all(clear_bindings=False)
+                    reopened = svc._ensure_store(FakeEmbedder())
+                    self.assertIsNot(reopened, store)
                 finally:
                     svc.close_all()
+                    manifest_module.Manifest.save = original_manifest_save
+
+    def test_close_all_releases_shared_milvus_lite_resources(self) -> None:
+        try:
+            from milvus_lite.server_manager import server_manager_instance
+            from pymilvus.client.connection_manager import ConnectionManager
+        except ImportError:
+            self.skipTest("milvus_lite is not installed")
+
+        store = mock.Mock()
+        connection_manager = mock.Mock()
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = stashbase_daemon.StashbaseStore(tmp)
+            svc._store = store
+
+            with (
+                mock.patch.object(
+                    ConnectionManager,
+                    "get_instance",
+                    return_value=connection_manager,
+                ),
+                mock.patch.object(
+                    server_manager_instance,
+                    "release_server",
+                ) as release_server,
+            ):
+                svc.close_all()
+
+            store.close.assert_called_once_with()
+            connection_manager.close_all.assert_called_once_with()
+            release_server.assert_called_once_with(str(svc._db_path))
 
     def test_filesystem_roots_keep_root_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -337,8 +376,10 @@ class StashbaseDaemonTests(unittest.TestCase):
         except ImportError:
             self.skipTest("milvus_lite is not installed")
 
-        original_save = manifest_module.Manifest.save
+        installed_save = manifest_module.Manifest.save
+        original_save = getattr(installed_save, "__stashbase_original__", installed_save)
         original_rename = manifest_module.os.rename
+        manifest_module.Manifest.save = original_save
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             manifest = manifest_module.Manifest(str(root))
@@ -371,7 +412,7 @@ class StashbaseDaemonTests(unittest.TestCase):
                 self.assertEqual(manifest._version, 2)
             finally:
                 manifest_module.os.rename = original_rename
-                manifest_module.Manifest.save = original_save
+                manifest_module.Manifest.save = installed_save
 
 
 if __name__ == "__main__":

@@ -65,6 +65,11 @@ user-visible source file.
   deleting the user's source files.
 - File mutation and deletion must retire or invalidate related derived state so
   retrieval never presents orphaned or stale evidence as current.
+- Import publishes through a no-clobber path; recovery only removes an
+  identity-proven partial reservation, never a completed or externally replaced
+  destination.
+- Closing or failing to open the local index must release the client connection
+  and local database server before cleanup returns.
 
 ## Trust Boundaries
 

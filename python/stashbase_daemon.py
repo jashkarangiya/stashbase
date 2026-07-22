@@ -359,6 +359,7 @@ def _patch_milvus_manifest_windows_replace(*, force: bool = False) -> bool:
             pass
 
     save.__stashbase_windows_replace__ = True  # type: ignore[attr-defined]
+    save.__stashbase_original__ = Manifest.save  # type: ignore[attr-defined]
     Manifest.save = save
     return True
 
@@ -403,6 +404,41 @@ def _patch_mfs_local_query_snapshot() -> None:
 
     _query_all.__stashbase_local_snapshot__ = True  # type: ignore[attr-defined]
     MilvusStore._query_all = _query_all
+
+
+def _close_milvus_lite_resources(store: Any, db_path: Path) -> None:
+    """Release every process-owned handle for one local Milvus database.
+
+    Recent pymilvus versions keep ``MilvusClient`` connections in a shared
+    process registry. ``MilvusStore.close()`` only drops the caller reference,
+    so the registry and Milvus Lite server can continue holding the database
+    lock. This daemon owns exactly one local database, which makes closing the
+    process registry before releasing that server both safe and necessary.
+    """
+    if store is not None:
+        try:
+            store.close()
+        except Exception as err:
+            print(f"[stashbase] close store warn: {err}", file=sys.stderr)
+
+    try:
+        from pymilvus.client.connection_manager import ConnectionManager
+
+        ConnectionManager.get_instance().close_all()
+    except (ImportError, AttributeError):
+        # Older pymilvus versions close the connection from MilvusClient.close.
+        pass
+    except Exception as err:
+        print(f"[stashbase] close pymilvus connections warn: {err}", file=sys.stderr)
+
+    try:
+        from milvus_lite.server_manager import server_manager_instance
+
+        server_manager_instance.release_server(str(db_path))
+    except ImportError:
+        pass
+    except Exception as err:
+        print(f"[stashbase] close milvus server warn: {err}", file=sys.stderr)
 
 
 def _patch_scanner_blake3() -> None:
@@ -602,6 +638,7 @@ class StashbaseStore:
         try:
             store.connect()
         except Exception as err:
+            _close_milvus_lite_resources(store, self._db_path)
             # pymilvus wraps Milvus Lite's lock error generically, so we
             # walk the exception chain (both __cause__ and __context__)
             # and also pattern-match the wrapper message.
@@ -723,11 +760,7 @@ class StashbaseStore:
 
     def close_all(self, *, clear_bindings: bool = True) -> None:
         """Release Milvus Lite's flock. The next ``bind_folder`` reopens."""
-        if self._store is not None:
-            try:
-                self._store.close()
-            except Exception:
-                pass
+        _close_milvus_lite_resources(self._store, self._db_path)
         self._store = None
         self._embedder = None
         self._dim = 0

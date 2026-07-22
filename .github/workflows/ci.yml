@@ -44,6 +44,7 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-nasm
             mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-nodejs
             mingw-w64-x86_64-pkgconf
 
       - name: Install dependencies
