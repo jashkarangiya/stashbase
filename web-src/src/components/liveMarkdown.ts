@@ -2,7 +2,7 @@ import { syntaxTree } from '@codemirror/language';
 import { StateEffect, StateField, type EditorState } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, type ViewUpdate, ViewPlugin, WidgetType } from '@codemirror/view';
 
-type ConstructKind = 'heading' | 'emphasis' | 'strong' | 'strikethrough' | 'inline-code' | 'horizontal-rule' | 'link';
+type ConstructKind = 'heading' | 'emphasis' | 'strong' | 'strikethrough' | 'inline-code' | 'fenced-code' | 'horizontal-rule' | 'link';
 
 export type ProjectionRange = { from: number; to: number };
 
@@ -26,6 +26,10 @@ type ProjectionRule = {
   nodeNames: readonly string[];
   markerNames: readonly string[];
   level?: (nodeName: string) => number | undefined;
+  /** Class applied to every line the construct spans, giving block
+   *  forms a stable full-width presentation independent of the
+   *  active/inactive marker reveal. */
+  lineClass?: string;
   sourceRanges?: (state: EditorState, construct: Construct) => ProjectionRange[];
   decorations: (construct: Construct, active: boolean) => Decoration[];
 };
@@ -132,6 +136,18 @@ const projectionRules: readonly ProjectionRule[] = [
     nodeNames: ['InlineCode'],
     markerNames: ['CodeMark'],
     decorations: () => [Decoration.mark({ class: 'cm-live-inline-code' })],
+  },
+  {
+    // The block is presented as an inert monospace surface; entering it
+    // reveals the concealed fences and language label as one construct.
+    // The parser owns the boundaries, so backticks inside content and
+    // unterminated fences never split a block. The label is never parsed
+    // or executed — it is only concealed markup.
+    kind: 'fenced-code',
+    nodeNames: ['FencedCode'],
+    markerNames: ['CodeMark', 'CodeInfo'],
+    lineClass: 'cm-live-code-block',
+    decorations: () => [],
   },
   {
     kind: 'horizontal-rule',
@@ -282,6 +298,15 @@ function buildDecorations(view: EditorView, onLinkActivate: LiveMarkdownLinkActi
     }
     for (const decoration of construct.rule.decorations(construct, active)) {
       markers.push({ from: construct.from, to: construct.to, decoration });
+    }
+    if (construct.rule.lineClass) {
+      const lineDecoration = Decoration.line({ class: construct.rule.lineClass });
+      for (let pos = construct.from; pos <= construct.to;) {
+        const line = state.doc.lineAt(pos);
+        markers.push({ from: line.from, to: line.from, decoration: lineDecoration });
+        if (line.to >= construct.to) break;
+        pos = line.to + 1;
+      }
     }
     if (!active) {
       for (const marker of sourceRangesFor(state, construct)) {

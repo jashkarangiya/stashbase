@@ -14,6 +14,12 @@ without a conversion layer becoming the product.
   changing their source offsets: click reveals source, modifier-click or
   keyboard activation follows safe local links in StashBase and HTTP(S) links
   through the system browser.
+- In Live Editing, fenced code presents as an inert monospace block with its
+  fences and language label concealed; entering or selecting inside reveals
+  them as one editable construct and leaving restores the block, all without
+  changing source. The parser owns block boundaries, so backticks inside
+  content and unterminated fences do not corrupt them, and the language label
+  is only concealed markup — never parsed or executed.
 - Safe local links remain in StashBase; external links retain their normal
   browser behaviour.
 - Agent responses and Markdown documents remain distinct presentation contexts.

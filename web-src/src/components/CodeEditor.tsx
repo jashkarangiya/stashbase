@@ -131,6 +131,11 @@ export function CodeEditor({
           borderRadius: '4px',
           padding: '0.1em 0.25em',
         },
+        '.cm-live-code-block': {
+          fontFamily: '"SF Mono", "JetBrains Mono", Menlo, Consolas, monospace',
+          fontSize: '0.9em',
+          backgroundColor: 'rgba(175, 184, 193, 0.16)',
+        },
         '.cm-live-strikethrough': { textDecoration: 'line-through' },
         '.cm-live-link': {
           color: '#0e7490',

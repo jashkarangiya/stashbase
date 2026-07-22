@@ -86,6 +86,10 @@ test('Live Editing and Reading View share the supported Markdown construct subse
     '',
     '---',
     '',
+    '```ts',
+    'const value = 42;',
+    '```',
+    '',
   ].join('\n');
 
   const projectedKinds = new Set(
@@ -98,6 +102,7 @@ test('Live Editing and Reading View share the supported Markdown construct subse
     'strong',
     'strikethrough',
     'inline-code',
+    'fenced-code',
     'horizontal-rule',
   ]));
   assert.equal(
@@ -120,6 +125,7 @@ test('Live Editing and Reading View share the supported Markdown construct subse
   assert.match(readingView, /<del>strikethrough<\/del>/);
   assert.match(readingView, /<code>inline code<\/code>/);
   assert.match(readingView, /<hr\s*\/?>/);
+  assert.match(readingView, /<pre><code class="language-ts">/);
 });
 
 test('inactive Markdown constructs hide only recognized syntax and reveal every intersected construct', () => {
@@ -162,6 +168,83 @@ test('inactive Markdown constructs hide only recognized syntax and reveal every 
     { from: 14, to: 18 },
     { from: 25, to: 29 },
   ]);
+});
+
+test('Live fenced code presents an inert block and reveals its fences on entry', () => {
+  const doc = '```ts\nconst x = 1;\n```\n\nafter';
+
+  const inactive = describeLiveMarkdownProjection(markdownState(doc, { anchor: doc.length }));
+  assert.equal(inactive.length, 1);
+  assert.equal(inactive[0].kind, 'fenced-code');
+  assert.equal(inactive[0].from, 0);
+  assert.equal(inactive[0].active, false);
+
+  // Inactive conceals exactly the two fences and the language label.
+  assert.deepEqual(
+    hiddenMarkdownMarkupRanges(markdownState(doc, { anchor: doc.length }))
+      .map((range) => markdownState(doc).sliceDoc(range.from, range.to)),
+    ['```', 'ts', '```'],
+  );
+
+  // A cursor anywhere inside the block reveals it and conceals nothing.
+  const inside = doc.indexOf('const') + 2;
+  const active = describeLiveMarkdownProjection(markdownState(doc, { anchor: inside }));
+  assert.equal(active.length, 1);
+  assert.equal(active[0].active, true);
+  assert.deepEqual(hiddenMarkdownMarkupRanges(markdownState(doc, { anchor: inside })), []);
+
+  // Leaving the block restores its inactive presentation, and the
+  // projection never rewrites source in either state.
+  assert.equal(describeLiveMarkdownProjection(markdownState(doc, { anchor: doc.length }))[0].active, false);
+  assert.equal(markdownState(doc, { anchor: inside }).doc.toString(), doc);
+});
+
+test('Live fenced code stays safe across labels, unknown languages, and fenced content', () => {
+  // Unlabeled, known, and unknown-language blocks all project one block
+  // without throwing; the label is only concealed markup, never parsed.
+  for (const info of ['', 'ts', 'totally-unknown-language']) {
+    const doc = '```' + info + '\nvalue\n```\n\nafter';
+    const projected = describeLiveMarkdownProjection(markdownState(doc, { anchor: doc.length }));
+    assert.equal(projected.filter((construct) => construct.kind === 'fenced-code').length, 1);
+  }
+
+  // Backticks mid-line are content, not a fence, so the block stays whole.
+  const withTicks = '```\na ``` b\nc\n```\n\nafter';
+  assert.equal(
+    describeLiveMarkdownProjection(markdownState(withTicks, { anchor: withTicks.length }))
+      .filter((construct) => construct.kind === 'fenced-code').length,
+    1,
+  );
+
+  // An unterminated fence uses the parser-defined boundary and never throws.
+  const unterminated = '```ts\nstill going';
+  assert.doesNotThrow(() => describeLiveMarkdownProjection(markdownState(unterminated, { anchor: 0 })));
+
+  // Reading View remains the independent authority for fenced rendering.
+  assert.match(renderMarkdown('```ts\nconst x = 1;\n```'), /<pre><code class="language-ts">/);
+});
+
+test('Find and undo operate on fenced-code source through Live Editing concealment', () => {
+  // Find searches the document, so concealed fences and content stay
+  // reachable: the token inside the block is matched.
+  const doc = '```ts\nconst needle = 42;\n```';
+  let searchState = EditorState.create({
+    doc,
+    extensions: [markdown({ base: markdownLanguage }), search()],
+  });
+  const searchView = {
+    get state() { return searchState; },
+    dispatch(spec: Parameters<EditorState['update']>[0]) { searchState = searchState.update(spec).state; },
+  } as unknown as EditorView;
+  assert.equal(applyEditorQuery(searchView, 'needle', false, false, false).total, 1);
+
+  // The projection adds no history, so an edit inside a block undoes as
+  // one ordinary edit back to the exact source.
+  const editView = testView(markdownState(doc, { anchor: doc.indexOf('needle') }));
+  editView.dispatch({ changes: { from: doc.indexOf('needle'), insert: 'X' } });
+  assert.equal(editView.state.doc.toString(), doc.replace('needle', 'Xneedle'));
+  assert.equal(undo(editView), true);
+  assert.equal(editView.state.doc.toString(), doc);
 });
 
 test('Live projection limits work to visible parsed ranges and falls back to source while composing', () => {
