@@ -20,6 +20,7 @@ import {
 } from './conversion.ts';
 import { readAll as readConversionStatus } from './conversion-status.ts';
 import { closeStateDb } from './state-db.ts';
+import { filesystemPath } from './filesystem-path.ts';
 import {
   derivedAudioPreviewFor,
   derivedAudioPreviewMetadataFor,
@@ -274,6 +275,7 @@ test('blocked readiness lists only incomplete audio sources', async () => {
     });
     assert.deepEqual(await incompleteAudioSourcesForFolder(temp), []);
   } finally {
+    closeStateDb();
     if (previousRoot === undefined) delete process.env.STASHBASE_LOCAL_DATA_ROOT;
     else process.env.STASHBASE_LOCAL_DATA_ROOT = previousRoot;
     fs.rmSync(temp, { recursive: true, force: true });
@@ -331,7 +333,7 @@ test('explicit audio cancel gates a preview-finally resume before awaiting task 
     await resumeAttempt;
     assert.equal(getScheduledConversion(source), null);
     assert.equal(fs.existsSync(derived), false);
-    assert.equal(readConversionStatus()[source]?.status, 'cancelled');
+    assert.equal(readConversionStatus()[filesystemPath.absolute(source)]?.status, 'cancelled');
   } finally {
     await resumeAttempt?.catch(() => undefined);
     closeStateDb();

@@ -225,7 +225,7 @@ test('startup recovery removes an abandoned fallback reservation', async () => {
   }
 });
 
-test('startup recovery preserves a completed fallback rename', async () => {
+test('startup recovery preserves a committed fallback stream', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stashbase-upload-commit-recovery-test-'));
   const library = path.join(root, 'Library');
   const stagingRoot = path.join(root, 'staging');
@@ -239,6 +239,43 @@ test('startup recovery preserves a completed fallback rename', async () => {
   fs.mkdirSync(stagingRoot, { recursive: true });
   fs.writeFileSync(staged, 'staged recording');
   fs.writeFileSync(target, 'complete published recording');
+  const committed = fs.statSync(target);
+  fs.writeFileSync(recordPath, `${JSON.stringify({
+    schemaVersion: 1,
+    pid: deadPid,
+    createdAt: Date.now(),
+    stagedPath: staged,
+    targetPath: target,
+    temporaryPath: temporary,
+    reservation: { device: String(committed.dev), inode: String(committed.ino) },
+    committed: true,
+  })}\n`);
+  try {
+    const { cleanupStaleUploads } = await import('./routes/upload.ts');
+    cleanupStaleUploads(stagingRoot);
+
+    assert.equal(fs.readFileSync(target, 'utf8'), 'complete published recording');
+    assert.equal(fs.existsSync(recordPath), false);
+    assert.equal(fs.existsSync(staged), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('startup recovery preserves a legacy completed fallback rename', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stashbase-upload-legacy-recovery-test-'));
+  const library = path.join(root, 'Library');
+  const stagingRoot = path.join(root, 'staging');
+  const deadPid = 2147483647;
+  const id = '00000000-0000-4000-8000-000000000002';
+  const staged = path.join(stagingRoot, `${deadPid}-1-${id}.upload`);
+  const target = path.join(library, 'recording.wav');
+  const temporary = path.join(library, `.recording.wav.${deadPid}.${id}.tmp`);
+  const recordPath = `${staged}.publication.json`;
+  fs.mkdirSync(library, { recursive: true });
+  fs.mkdirSync(stagingRoot, { recursive: true });
+  fs.writeFileSync(staged, 'staged recording');
+  fs.writeFileSync(target, 'legacy complete published recording');
   fs.writeFileSync(recordPath, `${JSON.stringify({
     schemaVersion: 1,
     pid: deadPid,
@@ -252,7 +289,44 @@ test('startup recovery preserves a completed fallback rename', async () => {
     const { cleanupStaleUploads } = await import('./routes/upload.ts');
     cleanupStaleUploads(stagingRoot);
 
-    assert.equal(fs.readFileSync(target, 'utf8'), 'complete published recording');
+    assert.equal(fs.readFileSync(target, 'utf8'), 'legacy complete published recording');
+    assert.equal(fs.existsSync(recordPath), false);
+    assert.equal(fs.existsSync(staged), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('startup recovery preserves a target without a durable ownership identity', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stashbase-upload-unknown-owner-test-'));
+  const library = path.join(root, 'Library');
+  const stagingRoot = path.join(root, 'staging');
+  const deadPid = 2147483647;
+  const id = '00000000-0000-4000-8000-000000000003';
+  const staged = path.join(stagingRoot, `${deadPid}-1-${id}.upload`);
+  const target = path.join(library, 'recording.wav');
+  const temporary = path.join(library, `.recording.wav.${deadPid}.${id}.tmp`);
+  const recordPath = `${staged}.publication.json`;
+  fs.mkdirSync(library, { recursive: true });
+  fs.mkdirSync(stagingRoot, { recursive: true });
+  fs.writeFileSync(staged, 'staged recording');
+  fs.writeFileSync(temporary, 'complete hidden recording');
+  fs.closeSync(fs.openSync(target, 'wx'));
+  fs.writeFileSync(recordPath, `${JSON.stringify({
+    schemaVersion: 1,
+    pid: deadPid,
+    createdAt: Date.now(),
+    stagedPath: staged,
+    targetPath: target,
+    temporaryPath: temporary,
+  })}\n`);
+  try {
+    const { cleanupStaleUploads } = await import('./routes/upload.ts');
+    cleanupStaleUploads(stagingRoot);
+
+    assert.equal(fs.existsSync(target), true);
+    assert.equal(fs.statSync(target).size, 0);
+    assert.equal(fs.existsSync(temporary), false);
     assert.equal(fs.existsSync(recordPath), false);
     assert.equal(fs.existsSync(staged), false);
   } finally {

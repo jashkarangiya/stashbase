@@ -27,6 +27,7 @@ interface PublicationRecoveryRecord {
   targetPath: string;
   temporaryPath: string;
   reservation?: FileIdentity;
+  committed?: true;
 }
 
 export interface PublishedImport {
@@ -110,13 +111,12 @@ async function publishNoClobber(
   }
 }
 
-/** exFAT/FAT and some network filesystems cannot create hard links. The
- * expensive copy has already completed into `tmp`, so fallback publication
- * must only expose that complete same-directory file. Windows rename is
- * no-clobber. POSIX rename can replace, so it first claims the target with an
- * exclusive empty reservation and records its inode before atomically
- * replacing that reservation. A dead-process recovery record distinguishes
- * an abandoned reservation from a completed rename. */
+/** exFAT/FAT and some network filesystems cannot create hard links. Reserve
+ * the target with `wx`, record its identity, and stream the already-complete
+ * same-directory temporary through that owned handle. This is the portable
+ * no-clobber primitive: Node's Windows rename replaces an existing target,
+ * so it cannot safely commit the temporary. The durable record distinguishes
+ * an abandoned partial reservation from a synced committed target. */
 async function publishWithoutHardLinks(
   tmp: string,
   target: string,
@@ -136,24 +136,29 @@ async function publishWithoutHardLinks(
   await appendRecoveryRecord(recordPath, record, 'wx');
 
   let reservation: FileIdentity | undefined;
+  let handle: fs.promises.FileHandle | undefined;
   try {
-    if (process.platform === 'win32') {
-      // MoveFileEx without a replace flag is the native no-clobber behavior
-      // exposed by Node's rename on Windows.
-      await fs.promises.rename(tmp, target);
-    } else {
-      const handle = await fs.promises.open(target, 'wx');
-      try {
-        reservation = identityForStat(await handle.stat());
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      await appendRecoveryRecord(recordPath, { ...record, reservation }, 'a');
-      if (signal.aborted) throw signal.reason ?? new Error('upload request closed');
-      await fs.promises.rename(tmp, target);
+    handle = await fs.promises.open(target, 'wx');
+    reservation = identityForStat(await handle.stat());
+    await appendRecoveryRecord(recordPath, { ...record, reservation }, 'a');
+    if (signal.aborted) throw signal.reason ?? new Error('upload request closed');
+    await pipeline(
+      fs.createReadStream(tmp),
+      handle.createWriteStream({ autoClose: true, flush: true }),
+      { signal },
+    );
+    handle = undefined;
+    if (signal.aborted) throw signal.reason ?? new Error('upload request closed');
+
+    const publishedIdentity = identityForStat(await fs.promises.stat(target));
+    if (!sameIdentity(publishedIdentity, reservation)) {
+      const collision = new Error(`upload target changed during publication: ${target}`) as NodeJS.ErrnoException;
+      collision.code = 'EEXIST';
+      throw collision;
     }
+    await appendRecoveryRecord(recordPath, { ...record, reservation, committed: true }, 'a');
   } catch (err: unknown) {
+    try { await handle?.close(); } catch { /* continue identity-safe cleanup */ }
     let cleanupComplete = true;
     if (reservation) {
       try { await removeIfIdentityMatches(target, reservation); }
@@ -165,7 +170,7 @@ async function publishWithoutHardLinks(
     throw err;
   }
 
-  try { await fs.promises.rm(recordPath, { force: true }); } catch { /* completed rename is recovery-safe */ }
+  try { await fs.promises.rm(recordPath, { force: true }); } catch { /* committed stream is recovery-safe */ }
 }
 
 async function appendRecoveryRecord(
@@ -195,28 +200,20 @@ async function removeIfIdentityMatches(target: string, identity: FileIdentity): 
 }
 
 /** Startup recovery for one dead upload owner's fallback publication. A
- * matching reservation inode is incomplete and removed. A different inode
- * means the atomic rename completed (or another actor replaced the path), so
- * user bytes are preserved. */
+ * matching recorded reservation is incomplete and removed. A committed
+ * stream, different identity, or target whose identity was never durably
+ * recorded is preserved because recovery cannot prove that it owns the path. */
 export function recoverInterruptedPublication(recordPath: string): void {
   const record = readRecoveryRecord(recordPath);
   validateRecoveryRecord(recordPath, record);
-  const temporaryExists = fs.existsSync(record.temporaryPath);
-  if (record.reservation) {
+  if (record.committed) {
+    // The owned target was fully written and synced before this marker.
+  } else if (record.reservation) {
     try {
       const targetIdentity = identityForStat(fs.statSync(record.targetPath));
       if (sameIdentity(targetIdentity, record.reservation)) {
         fs.rmSync(record.targetPath, { force: true });
       }
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
-    }
-  } else if (temporaryExists) {
-    // Crash window: POSIX may have created the zero-byte reservation before
-    // appending its inode to the durable record. A non-empty or replaced path
-    // is never removed without the recorded identity.
-    try {
-      if (fs.statSync(record.targetPath).size === 0) fs.rmSync(record.targetPath, { force: true });
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
     }
@@ -250,6 +247,7 @@ function isRecoveryRecord(value: unknown): value is PublicationRecoveryRecord {
     && typeof record.stagedPath === 'string'
     && typeof record.targetPath === 'string'
     && typeof record.temporaryPath === 'string'
+    && (record.committed === undefined || (record.committed === true && record.reservation !== undefined))
     && (record.reservation === undefined || (
       typeof record.reservation?.device === 'string'
       && typeof record.reservation?.inode === 'string'
