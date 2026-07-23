@@ -1305,6 +1305,47 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      min-width: 0;
+    }
+
+    /* Relative match-strength bar, right-aligned in the hit meta row. */
+    .search-hit-relevance {
+      flex: 0 0 44px;
+      height: 4px;
+      margin-left: 8px;
+      border-radius: 2px;
+      background: var(--active);
+      overflow: hidden;
+    }
+
+    .search-hit-relevance-fill {
+      display: block;
+      height: 100%;
+      border-radius: 2px;
+      background: var(--accent);
+    }
+
+    /* Semantic result count, matching the keyword summary treatment. */
+    .search-summary {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 2px 10px 6px;
+    }
+
+    .search-show-more {
+      width: 100%;
+      margin-top: 2px;
+      padding: 6px;
+      font-size: 12px;
+      color: var(--accent);
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .search-show-more:hover {
+      background: var(--hover);
     }
 
     /* Keyword (ripgrep) results — VS-Code-style: a per-file header with a

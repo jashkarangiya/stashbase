@@ -11,6 +11,10 @@ as the result identity.
 - In-app search starts from the current folder and can narrow its scope.
 - Results identify the source file, path, and useful evidence such as a snippet
   or page/timestamp hint.
+- Semantic results show a result count and a per-hit relative match-strength
+  indicator, and reveal a long candidate list progressively. The indicator is
+  relative to the current result set, not an absolute score, because hybrid
+  scores have no absolute meaning.
 - Prepared PDF, image, DOCX, and media transcript text can be evidence, but
   opening a result returns to the original source file.
 - MCP offers orientation, search, read, reindex, and bounded file operations
