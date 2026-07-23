@@ -20,6 +20,9 @@ without a conversion layer becoming the product.
   changing source. The parser owns block boundaries, so backticks inside
   content and unterminated fences do not corrupt them, and the language label
   is only concealed markup — never parsed or executed.
+- Live Editing copy, cut, paste, and Find operate on Markdown source even
+  where the writing surface conceals syntax or presents a widget; Reading
+  View retains its rendered-text clipboard and Find behaviour.
 - Safe local links remain in StashBase; external links retain their normal
   browser behaviour.
 - Agent responses and Markdown documents remain distinct presentation contexts.
@@ -34,6 +37,10 @@ without a conversion layer becoming the product.
 - Interactive editing presentation must remain a projection over Markdown:
   link navigation never writes source or becomes an undo step, and malformed
   or unsupported links remain ordinary source.
+- Source-oriented Live Editing operations must not substitute rendered labels
+  or convert clipboard HTML into Markdown. Find and selected-word occurrence
+  highlighting share one source match model, reveal each intersected source
+  construct, and keep the active result editable and visually distinct.
 - Rich preview support must preserve the local preview trust boundary.
 - Links, anchors, assets, find, and search-result navigation should preserve
   the reader's place and lead to the intended source context.
