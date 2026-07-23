@@ -5,7 +5,6 @@ import {
   defaultKeymap,
   history,
   historyKeymap,
-  indentWithTab,
 } from '@codemirror/commands';
 import {
   bracketMatching,
@@ -29,7 +28,10 @@ import GithubSlugger from 'github-slugger';
 import { useApp, type MatchInfo } from '../store/AppContext';
 import {
   completeMarkdownBacktick,
+  continueMarkdownListLine,
+  continueMarkdownStructure,
   createLiveMarkdownProjection,
+  indentMarkdownListItem,
   liveMarkdownCompositionGuard,
   toggleMarkdownEmphasis,
   toggleMarkdownLink,
@@ -104,6 +106,10 @@ export function CodeEditor({
       { key: 'Mod-b', run: toggleMarkdownStrong },
       { key: 'Mod-i', run: toggleMarkdownEmphasis },
       { key: 'Mod-k', run: toggleMarkdownLink },
+      { key: 'Enter', run: continueMarkdownStructure },
+      { key: 'Shift-Enter', run: continueMarkdownListLine },
+      { key: 'Tab', run: indentMarkdownListItem },
+      { key: 'Shift-Tab', run: (view: EditorView) => indentMarkdownListItem(view, true) },
     ];
     const extensions = [
       EditorState.allowMultipleSelections.of(true),
@@ -132,7 +138,7 @@ export function CodeEditor({
       // native panel is open. StashBase supplies that UI itself, so install
       // the same source-range decorations independently of that panel.
       sourceMatchHighlighter,
-      keymap.of([indentWithTab, ...writingKeymap, ...defaultKeymap, ...historyKeymap, ...editorSearchKeymap]),
+      keymap.of([...writingKeymap, ...defaultKeymap, ...historyKeymap, ...editorSearchKeymap]),
       EditorView.theme({
         '&': { height: '100%', fontSize: '16px' },
         '.cm-scroller': {
@@ -191,6 +197,18 @@ export function CodeEditor({
           minHeight: '1px',
           margin: '1.25em 0',
           width: '100%',
+        },
+        '.cm-live-list-marker': {
+          color: '#57606a',
+        },
+        // The marker itself begins two character spaces in from prose; the
+        // third-space content gutter keeps wrapped text aligned beneath it.
+        '.cm-live-list-item': {
+          paddingLeft: '3ch',
+          textIndent: '-1ch',
+        },
+        '.cm-live-blockquote': {
+          borderLeft: '3px solid #d0d7de', color: '#57606a', marginLeft: '0.2rem', paddingLeft: '0.9rem',
         },
       }),
       liveMarkdownLanguage,

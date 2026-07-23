@@ -24,6 +24,16 @@ without a conversion layer becoming the product.
   language label as an accessible copy control for the code contents; typing
   an opening triple fence completes its closing fence and a single inline
   backtick pairs its closing delimiter.
+- In Live Editing, parser-recognized list markers have a reading-oriented
+  presentation in a two-space hanging list gutter: an unordered `-` becomes a
+  dot while ordered markers remain their actual numbers. Source spaces and
+  item indentation remain unchanged. The gutter
+  begins as soon as a marker and following space form a list, including an
+  empty item. Only a cursor or selection on that marker reveals it. Enter continues a list or quote; from the start of a non-empty item's content it detaches that text into the next normal paragraph without adding vertical space; empty
+  nested items outdent one level, and Tab or Shift+Tab moves an item with its
+  child branch without trapping focus outside a list. Task markers are plain,
+  disabled native HTML checkboxes. They remain source-backed and
+  non-interactive in this slice.
 - Live Editing copy, cut, paste, and Find operate on Markdown source even
   where the writing surface conceals syntax or presents a widget; Reading
   View retains its rendered-text clipboard and Find behaviour.
@@ -54,7 +64,7 @@ without a conversion layer becoming the product.
 ### Next
 
 - Make editing more writer-first: reduce code-editor cues and improve headings,
-  lists, links, and image insertion.
+  links, and image insertion.
 - Improve preview fidelity and narrow-window behaviour for tables, long inline
   content, tasks, and large documents.
 - Improve continuity between editor, preview, anchors, find, and search

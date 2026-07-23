@@ -3,7 +3,7 @@ import { StateEffect, StateField, type EditorState } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, type ViewUpdate, ViewPlugin, WidgetType } from '@codemirror/view';
 import { sourceMatches, sourceMatchVersion } from './editorMatches';
 
-type ConstructKind = 'heading' | 'emphasis' | 'strong' | 'strikethrough' | 'inline-code' | 'fenced-code' | 'horizontal-rule' | 'link';
+type ConstructKind = 'heading' | 'emphasis' | 'strong' | 'strikethrough' | 'inline-code' | 'fenced-code' | 'horizontal-rule' | 'link' | 'list-item' | 'blockquote';
 
 export type ProjectionRange = { from: number; to: number };
 
@@ -151,6 +151,20 @@ const projectionRules: readonly ProjectionRule[] = [
     markerNames: [],
     decorations: (_construct, active) => active ? [] : [horizontalRuleDecoration],
   },
+  {
+    // A list item, rather than its containing list, owns its visible marker.
+    // This keeps a nested branch readable while the current row is edited.
+    kind: 'list-item',
+    nodeNames: ['ListItem'],
+    markerNames: ['ListMark', 'TaskMarker'],
+    decorations: () => [],
+  },
+  {
+    kind: 'blockquote',
+    nodeNames: ['Blockquote'],
+    markerNames: ['QuoteMark'],
+    decorations: () => [],
+  },
 ];
 
 const ruleByNodeName = new Map(projectionRules.flatMap((rule) => rule.nodeNames.map((name) => [name, rule] as const)));
@@ -164,12 +178,15 @@ export function describeLiveMarkdownProjection(
   return collectConstructs(state, options.ranges)
     .filter((construct) => !intersectsAny(construct, options.sourceFallbackRanges))
     .filter((construct) => construct.kind !== 'link' || !!inlineLinkFor(state, construct))
-    .map((construct) => ({
-      kind: construct.kind,
-      from: construct.from,
-      to: construct.to,
-      active: isConstructActive(state, construct),
-    }));
+    .map((construct) => {
+      const marker = construct.kind === 'list-item' ? listItemMarker(state, construct) : null;
+      return {
+        kind: construct.kind,
+        from: construct.from,
+        to: construct.to,
+        active: marker ? isSourceMarkerActive(state, marker) : isConstructActive(state, construct),
+      };
+    });
 }
 
 /** A selection-aware, syntax-tree-derived presentation layer. It adds no
@@ -313,6 +330,220 @@ export function completeMarkdownBacktick(view: EditorView, from: number, to: num
   return true;
 }
 
+type ListPrefix = {
+  indent: string;
+  marker: string;
+  spacing: string;
+  task: boolean;
+  taskLength: number;
+  content: string;
+};
+
+/** Enter is a list-item transform, not a source-line regex convenience. The
+ * parser establishes that the cursor is in a real list before we preserve its
+ * marker form, branch indentation, and one-step undo boundary. */
+export function continueMarkdownListItem(view: EditorView): boolean {
+  const selection = view.state.selection.main;
+  if (selection.from !== selection.to) return false;
+  const item = listItemAt(view.state, selection.from);
+  if (!item) return false;
+  const line = view.state.doc.lineAt(selection.from);
+  const prefix = listPrefix(view.state.sliceDoc(line.from, line.to));
+  if (!prefix) return false;
+  const after = view.state.sliceDoc(selection.from, line.to);
+  if (prefix.content !== '') {
+    if (selection.from === listContentStart(line.from, prefix)) {
+      // A writer can turn a newly-created item back into prose without
+      // retaining a Markdown indentation that would keep it in the list.
+      view.dispatch({
+        changes: {
+          from: line.from,
+          to: selection.from,
+          insert: '',
+        },
+        selection: { anchor: line.from },
+        userEvent: 'input.type',
+      });
+      return true;
+    }
+    const next = `${prefix.indent}${nextListMarker(prefix)}${prefix.spacing}${prefix.task ? '[ ] ' : ''}`;
+    view.dispatch({
+      changes: { from: selection.from, to: line.to, insert: `\n${next}${after}` },
+      selection: { anchor: selection.from + 1 + next.length },
+      userEvent: 'input.type',
+    });
+    return true;
+  }
+
+  const parent = parentListPrefix(view.state, line.number, prefix.indent);
+  if (parent) {
+    const next = `${parent.indent}${nextListMarker(parent)}${parent.spacing}${parent.task ? '[ ] ' : ''}`;
+    const descendants = dedentListBranch(view.state.sliceDoc(line.to, item.to), prefix.indent);
+    view.dispatch({
+      changes: { from: line.from, to: item.to, insert: `${next}${descendants}` },
+      selection: { anchor: line.from + next.length },
+      userEvent: 'input.type',
+    });
+  } else {
+    const descendants = view.state.sliceDoc(line.to + (line.to < item.to ? 1 : 0), item.to);
+    view.dispatch({
+      // Removing a root item must promote its branch as a branch, rather than
+      // leaving its children indented beneath a marker that no longer exists.
+      changes: { from: line.from, to: item.to, insert: dedentListBranchToRoot(descendants) },
+      selection: { anchor: line.from },
+      userEvent: 'input.type',
+    });
+  }
+  return true;
+}
+
+export function continueMarkdownStructure(view: EditorView): boolean {
+  return continueMarkdownListItem(view) || continueMarkdownBlockquote(view);
+}
+
+/** Continue one parser-recognized quote line. An empty quote drops a single
+ * nesting level, preserving the outer quote when there is one. */
+export function continueMarkdownBlockquote(view: EditorView): boolean {
+  const selection = view.state.selection.main;
+  if (selection.from !== selection.to || !enclosingConstruct(view.state, 'Blockquote', selection.from, selection.from)) return false;
+  const line = view.state.doc.lineAt(selection.from);
+  const source = view.state.sliceDoc(line.from, line.to);
+  const quote = /^(\s*(?:>\s*)+)(.*)$/.exec(source);
+  if (!quote) return false;
+  const [, prefix, content] = quote;
+  if (content !== '') {
+    const after = view.state.sliceDoc(selection.from, line.to);
+    view.dispatch({
+      changes: { from: selection.from, to: line.to, insert: `\n${prefix}${after}` },
+      selection: { anchor: selection.from + 1 + prefix.length },
+      userEvent: 'input.type',
+    });
+  } else {
+    const outerPrefix = prefix.replace(/>\s*$/, '');
+    view.dispatch({
+      changes: { from: line.from, to: line.to, insert: outerPrefix },
+      selection: { anchor: line.from + outerPrefix.length },
+      userEvent: 'input.type',
+    });
+  }
+  return true;
+}
+
+/** Indent/outdent the current list-item branch. Every source line in the
+ * parser-owned item moves together, so children cannot be detached from their
+ * parent by a Tab press. Outside a list we return false and do not trap focus. */
+export function indentMarkdownListItem(view: EditorView, outdent = false): boolean {
+  const items = selectedListItems(view.state);
+  if (!items.length) return false;
+  const changes: Array<{ from: number; to?: number; insert?: string }> = [];
+  for (const item of items) {
+    const firstLine = view.state.doc.lineAt(item.from);
+    const prefix = listPrefix(view.state.sliceDoc(firstLine.from, firstLine.to));
+    if (!prefix) return false;
+    if (!outdent && !hasPreviousListSibling(view.state, firstLine.number, prefix.indent)) return false;
+    const unit = indentationUnit(prefix.indent);
+    if (outdent && !prefix.indent) continue;
+    for (let number = firstLine.number; number <= view.state.doc.lineAt(item.to).number; number++) {
+      const line = view.state.doc.line(number);
+      if (outdent) {
+        const removable = line.text.startsWith('\t') ? '\t' : line.text.match(/^ {1,2}/)?.[0];
+        if (removable) changes.push({ from: line.from, to: line.from + removable.length });
+      } else {
+        changes.push({ from: line.from, insert: unit });
+      }
+    }
+  }
+  if (!changes.length) return false;
+  view.dispatch({ changes, userEvent: 'input.indent' });
+  return true;
+}
+
+function hasPreviousListSibling(state: EditorState, beforeLine: number, indent: string) {
+  for (let number = beforeLine - 1; number >= 1; number--) {
+    const prefix = listPrefix(state.doc.line(number).text);
+    if (!prefix) continue;
+    if (prefix.indent === indent) return true;
+    if (prefix.indent.length < indent.length) return false;
+  }
+  return false;
+}
+
+/** Shift+Enter keeps a continuation paragraph in the same list item. */
+export function continueMarkdownListLine(view: EditorView): boolean {
+  const selection = view.state.selection.main;
+  if (selection.from !== selection.to || !listItemAt(view.state, selection.from)) return false;
+  const line = view.state.doc.lineAt(selection.from);
+  const prefix = listPrefix(view.state.sliceDoc(line.from, line.to));
+  if (!prefix) return false;
+  const after = view.state.sliceDoc(selection.from, line.to);
+  const indent = `${prefix.indent}${' '.repeat(prefix.marker.length + prefix.spacing.length + (prefix.task ? 4 : 0))}`;
+  view.dispatch({
+    changes: { from: selection.from, to: line.to, insert: `\n${indent}${after}` },
+    selection: { anchor: selection.from + 1 + indent.length },
+    userEvent: 'input.type',
+  });
+  return true;
+}
+
+function listPrefix(source: string): ListPrefix | null {
+  const match = /^(\s*)([-+*]|\d+[.)])(\s+)(\[(?: |x|X)\]\s*)?(.*)$/.exec(source);
+  if (!match) return null;
+  const [, indent, marker, spacing, task = '', content] = match;
+  return { indent, marker, spacing, task: !!task, taskLength: task.length, content };
+}
+
+function listContentStart(lineFrom: number, prefix: ListPrefix) {
+  return lineFrom + prefix.indent.length + prefix.marker.length + prefix.spacing.length + prefix.taskLength;
+}
+
+function nextListMarker(prefix: ListPrefix) {
+  const ordered = /^(\d+)([.)])$/.exec(prefix.marker);
+  if (!ordered) return prefix.marker;
+  const [, number, delimiter] = ordered;
+  return `${String(Number(number) + 1).padStart(number.length, '0')}${delimiter}`;
+}
+
+function parentListPrefix(state: EditorState, beforeLine: number, indent: string): ListPrefix | null {
+  for (let number = beforeLine - 1; number >= 1; number--) {
+    const prefix = listPrefix(state.doc.line(number).text);
+    if (!prefix) continue;
+    if (prefix.indent.length < indent.length) return prefix;
+  }
+  return null;
+}
+
+function dedentListBranch(source: string, indent: string) {
+  if (!indent) return source;
+  return source.split('\n').map((line, index) => index && line.startsWith(indent)
+    ? line.slice(indent.length)
+    : line).join('\n');
+}
+
+function dedentListBranchToRoot(source: string) {
+  const firstContent = source.split('\n').find((line) => line.trim() !== '');
+  const indent = firstContent?.match(/^[\t ]*/)?.[0] ?? '';
+  if (!indent) return source;
+  return source.split('\n').map((line) => line.startsWith(indent)
+    ? line.slice(indent.length)
+    : line).join('\n');
+}
+
+function indentationUnit(indent: string) {
+  return indent.includes('\t') ? '\t' : '  ';
+}
+
+function listItemAt(state: EditorState, position: number): ProjectionRange | null {
+  return enclosingConstruct(state, 'ListItem', position, position);
+}
+
+function selectedListItems(state: EditorState): ProjectionRange[] {
+  const items = state.selection.ranges
+    .map((selection) => listItemAt(state, selection.from))
+    .filter((item): item is ProjectionRange => !!item)
+    .sort((a, b) => a.from - b.from || b.to - a.to);
+  return items.filter((item, index) => !items.slice(0, index).some((other) => other.from <= item.from && other.to >= item.to));
+}
+
 function buildDecorations(view: EditorView, onLinkActivate: LiveMarkdownLinkActivation): DecorationSet {
   const state = view.state;
   const markers: Array<{ from: number; to?: number; decoration: Decoration }> = [];
@@ -333,6 +564,44 @@ function buildDecorations(view: EditorView, onLinkActivate: LiveMarkdownLinkActi
           to: construct.to,
           decoration: Decoration.replace({ widget: new LiveLinkWidget(construct.from, construct.to, link, onLinkActivate) }),
         });
+      }
+      continue;
+    }
+    if (construct.kind === 'list-item') {
+      const marker = listItemMarker(state, construct);
+      if (!marker) continue;
+      // A list owns a first-line hanging gutter as soon as the parser accepts
+      // its marker (including an empty `- ` item). This is independent of
+      // whether the marker is currently shown as source or as a bullet.
+      const line = state.doc.lineAt(marker.from);
+      markers.push({
+        from: line.from,
+        to: line.from,
+        decoration: Decoration.line({ class: 'cm-live-list-item' }),
+      });
+      // Ordered markers are already the readable Markdown presentation. Only
+      // unordered bullets and task controls receive a replacement widget.
+      if ((marker.unordered || marker.task) && !isSourceMarkerActive(state, marker)) {
+        markers.push({
+          from: marker.from,
+          to: marker.to,
+          decoration: Decoration.replace({ widget: new LiveListMarkerWidget(marker.task, marker.checked) }),
+        });
+      }
+      continue;
+    }
+    if (construct.kind === 'blockquote') {
+      for (const quoteMarker of construct.markers) {
+        const line = state.doc.lineAt(quoteMarker.from);
+        markers.push({
+          from: line.from,
+          to: line.from,
+          decoration: Decoration.line({ class: 'cm-live-blockquote' }),
+        });
+        if (!isMarkerLineActive(state, quoteMarker)) {
+          const to = state.sliceDoc(quoteMarker.to, quoteMarker.to + 1) === ' ' ? quoteMarker.to + 1 : quoteMarker.to;
+          markers.push({ from: quoteMarker.from, to, decoration: hiddenMarkdownMarkupDecoration });
+        }
       }
       continue;
     }
@@ -388,6 +657,65 @@ function buildDecorations(view: EditorView, onLinkActivate: LiveMarkdownLinkActi
   }
   markers.sort((a, b) => a.from - b.from || (b.to ?? b.from) - (a.to ?? a.from));
   return Decoration.set(markers.map(({ from, to, decoration }) => decoration.range(from, to)), true);
+}
+
+type ListItemMarker = ProjectionRange & { unordered: boolean; task: boolean; checked: boolean };
+
+function listItemMarker(state: EditorState, item: Construct): ListItemMarker | null {
+  const list = item.markers.find((marker) => /^[-+*]|^\d+[.)]$/.test(state.sliceDoc(marker.from, marker.to)));
+  if (!list) return null;
+  const markerText = state.sliceDoc(list.from, list.to);
+  const task = item.markers.find((marker) => /^\[(?: |x|X)\]$/.test(state.sliceDoc(marker.from, marker.to)));
+  const markerTo = task?.to ?? list.to;
+  return {
+    from: list.from,
+    // A normal bullet replaces only its source character. The existing space
+    // remains in the document, so the dot occupies exactly the `-` position.
+    to: task ? (state.sliceDoc(markerTo, markerTo + 1) === ' ' ? markerTo + 1 : markerTo) : markerTo,
+    unordered: /^[-+*]$/.test(markerText),
+    task: !!task,
+    checked: !!task && /^\[[xX]\]$/.test(state.sliceDoc(task.from, task.to)),
+  };
+}
+
+function isMarkerLineActive(state: EditorState, marker: ProjectionRange) {
+  const line = state.doc.lineAt(marker.from);
+  return state.selection.ranges.some((selection) => {
+    const from = Math.min(selection.from, selection.to);
+    const to = Math.max(selection.from, selection.to);
+    return from <= line.to && to >= line.from;
+  }) || sourceMatches(state).matches.some((match) => match.from < line.to && match.to > line.from);
+}
+
+function isSourceMarkerActive(state: EditorState, marker: ProjectionRange) {
+  return state.selection.ranges.some((selection) => {
+    if (selection.empty) return marker.from <= selection.from && selection.from < marker.to;
+    return selection.from < marker.to && selection.to > marker.from;
+  }) || sourceMatches(state).matches.some((match) => match.from < marker.to && match.to > marker.from);
+}
+
+class LiveListMarkerWidget extends WidgetType {
+  constructor(private readonly task: boolean, private readonly checked: boolean) { super(); }
+
+  eq(other: LiveListMarkerWidget) { return this.task === other.task && this.checked === other.checked; }
+
+  toDOM() {
+    if (this.task) {
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = this.checked;
+      checkbox.disabled = true;
+      checkbox.tabIndex = -1;
+      return checkbox;
+    }
+    const marker = document.createElement('span');
+    marker.className = 'cm-live-list-marker';
+    marker.textContent = '•';
+    marker.setAttribute('aria-hidden', 'true');
+    return marker;
+  }
+
+  ignoreEvent() { return true; }
 }
 
 /** The Markdown parser owns these ranges, so copying does not depend on

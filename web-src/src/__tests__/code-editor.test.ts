@@ -21,7 +21,11 @@ import { renderMarkdown } from '../markdown.ts';
 import {
   describeLiveMarkdownProjection,
   completeMarkdownBacktick,
+  continueMarkdownBlockquote,
+  continueMarkdownListItem,
+  continueMarkdownListLine,
   hiddenMarkdownMarkupRanges,
+  indentMarkdownListItem,
   isLiveMarkdownComposition,
   liveMarkdownCompositionGuard,
   setLiveMarkdownComposition,
@@ -442,6 +446,94 @@ test('Live Editing completes inline backticks and empty-line fences', () => {
     closing.dispatch({ changes: { from: position, insert: '`' }, selection: { anchor: position + 1 } });
   }
   assert.equal(closing.state.doc.toString(), `${unterminated}\`\`\``);
+});
+
+test('Live lists replace only the marker and reveal it only at its source position', () => {
+  const doc = '- parent\n  - child\n- [ ] task';
+  const projection = describeLiveMarkdownProjection(markdownState(doc, { anchor: doc.indexOf('child') }));
+  const items = projection.filter((construct) => construct.kind === 'list-item');
+  assert.equal(items.length, 3);
+  assert.deepEqual(items.map((item) => item.active), [false, false, false]);
+  const markerProjection = describeLiveMarkdownProjection(markdownState(doc, { anchor: 0 }))
+    .filter((construct) => construct.kind === 'list-item');
+  assert.deepEqual(markerProjection.map((item) => item.active), [true, false, false]);
+  const afterBullet = describeLiveMarkdownProjection(markdownState('- item', { anchor: 1 }))
+    .find((item) => item.kind === 'list-item');
+  assert.equal(afterBullet?.active, false);
+  const afterTaskMarker = describeLiveMarkdownProjection(markdownState('- [ ] task', { anchor: 6 }))
+    .find((item) => item.kind === 'list-item');
+  assert.equal(afterTaskMarker?.active, false);
+  assert.equal(markdownState(doc).doc.toString(), doc);
+});
+
+test('An empty Markdown list item becomes a projected list as soon as its marker has a space', () => {
+  const projection = describeLiveMarkdownProjection(markdownState('- ', { anchor: 2 }));
+  const item = projection.find((construct) => construct.kind === 'list-item');
+  assert.ok(item);
+  assert.equal(item.active, false);
+});
+
+test('Ordered list markers remain source-visible while retaining list presentation', () => {
+  const projection = describeLiveMarkdownProjection(markdownState('2. second item', { anchor: 12 }));
+  const item = projection.find((construct) => construct.kind === 'list-item');
+  assert.ok(item);
+  assert.equal(item.active, false);
+});
+
+test('Live list commands preserve branches, marker forms, and source fallback', () => {
+  const ordered = testView(markdownState('009) first', { anchor: 10 }));
+  assert.equal(continueMarkdownListItem(ordered), true);
+  assert.equal(ordered.state.doc.toString(), '009) first\n010) ');
+  assert.equal(undo(ordered), true);
+  assert.equal(ordered.state.doc.toString(), '009) first');
+
+  const task = testView(markdownState('- [x] done', { anchor: 10 }));
+  assert.equal(continueMarkdownListItem(task), true);
+  assert.equal(task.state.doc.toString(), '- [x] done\n- [ ] ');
+
+  const detachAtContentStart = testView(markdownState('- first item\n- hello', { anchor: 15 }));
+  assert.equal(continueMarkdownListItem(detachAtContentStart), true);
+  assert.equal(detachAtContentStart.state.doc.toString(), '- first item\nhello');
+
+  const nestedExit = testView(markdownState('- parent\n  - ', { anchor: 12 }));
+  assert.equal(continueMarkdownListItem(nestedExit), true);
+  assert.equal(nestedExit.state.doc.toString(), '- parent\n- ');
+
+  const rootExit = testView(markdownState('- ', { anchor: 2 }));
+  assert.equal(continueMarkdownListItem(rootExit), true);
+  assert.equal(rootExit.state.doc.toString(), '');
+
+  const rootBranchExit = testView(markdownState('- \n  - child\n    - grandchild', { anchor: 2 }));
+  assert.equal(continueMarkdownListItem(rootBranchExit), true);
+  assert.equal(rootBranchExit.state.doc.toString(), '- child\n  - grandchild');
+
+  const nestedBranchExit = testView(markdownState('- parent\n  - \n    - child', { anchor: 12 }));
+  assert.equal(continueMarkdownListItem(nestedBranchExit), true);
+  assert.equal(nestedBranchExit.state.doc.toString(), '- parent\n- \n  - child');
+
+  const quote = testView(markdownState('> first', { anchor: 7 }));
+  assert.equal(continueMarkdownBlockquote(quote), true);
+  assert.equal(quote.state.doc.toString(), '> first\n> ');
+  const nestedQuote = testView(markdownState('> > ', { anchor: 4 }));
+  assert.equal(continueMarkdownBlockquote(nestedQuote), true);
+  assert.equal(nestedQuote.state.doc.toString(), '> ');
+
+  const branch = testView(markdownState('- one\n- two\n  - child', { anchor: 8 }));
+  assert.equal(indentMarkdownListItem(branch), true);
+  assert.equal(branch.state.doc.toString(), '- one\n  - two\n    - child');
+  assert.equal(indentMarkdownListItem(branch, true), true);
+  assert.equal(branch.state.doc.toString(), '- one\n- two\n  - child');
+
+  const firstItem = testView(markdownState('- only', { anchor: 2 }));
+  assert.equal(indentMarkdownListItem(firstItem), false);
+
+  const continuation = testView(markdownState('- first', { anchor: 7 }));
+  assert.equal(continueMarkdownListLine(continuation), true);
+  assert.equal(continuation.state.doc.toString(), '- first\n  ');
+
+  const codeFallback = testView(markdownState('    - code', { anchor: 10 }));
+  assert.equal(continueMarkdownListItem(codeFallback), false);
+  assert.equal(indentMarkdownListItem(codeFallback), false);
 });
 
 test('Find and undo operate on fenced-code source through Live Editing concealment', () => {
