@@ -6,6 +6,7 @@ data/
 dist/
 release/
 release.nosync/
+graphify-out/
 test/
 web/dist-app/
 models/
