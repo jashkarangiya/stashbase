@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { EditorState } from '@codemirror/state';
+import { EditorSelection, EditorState, StateEffect } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import {
   defaultKeymap,
@@ -13,7 +13,6 @@ import {
 } from '@codemirror/language';
 import {
   searchKeymap,
-  highlightSelectionMatches,
   search,
   setSearchQuery,
   getSearchQuery,
@@ -33,6 +32,7 @@ import {
   toggleMarkdownStrong,
   type LiveMarkdownLink,
 } from './liveMarkdown';
+import { setSourceFindQuery, sourceMatchHighlighter, sourceMatchState } from './editorMatches';
 
 /**
  * CodeMirror 6 host. Mounts a CM EditorView into a div the first time,
@@ -94,17 +94,30 @@ export function CodeEditor({
       { key: 'Mod-k', run: toggleMarkdownLink },
     ];
     const extensions = [
+      EditorState.allowMultipleSelections.of(true),
+      sourceMatchState,
       history(),
       bracketMatching(),
       indentOnInput(),
       EditorView.lineWrapping,
       liveMarkdownCompositionGuard,
       createLiveMarkdownProjection((link) => followLiveMarkdownLink(link, nameRef.current, actions.navigateTo)),
-      highlightSelectionMatches(),
+      // Live Editing is a presentation layer over Markdown, so native DOM
+      // selection must never copy a replacement widget's displayed label.
+      // These handlers read and edit CodeMirror's source ranges directly.
+      EditorView.domEventHandlers({
+        copy: (event, view) => copyLiveMarkdownSource(event, view),
+        cut: (event, view) => cutLiveMarkdownSource(event, view),
+        paste: (event, view) => pasteLiveMarkdownPlainText(event, view),
+      }),
       // search() owns the SearchQuery state + match decorations even
       // though we never call openSearchPanel — our FindBar drives it
       // imperatively via setSearchQuery / findNext / findPrevious.
       search(),
+      // CodeMirror's built-in search highlighter only paints while its own
+      // native panel is open. StashBase supplies that UI itself, so install
+      // the same source-range decorations independently of that panel.
+      sourceMatchHighlighter,
       keymap.of([indentWithTab, ...writingKeymap, ...defaultKeymap, ...historyKeymap, ...editorSearchKeymap]),
       EditorView.theme({
         '&': { height: '100%', fontSize: '16px' },
@@ -144,7 +157,15 @@ export function CodeEditor({
           textDecorationColor: 'rgba(14, 116, 144, 0.5)',
         },
         '.cm-live-link:focus-visible': { outline: '2px solid #0e7490', outlineOffset: '2px', borderRadius: '2px' },
-        '.cm-live-horizontal-rule': { border: '0', borderTop: '1px solid #d0d7de', margin: '1.25em 0', width: '100%' },
+        '.cm-live-horizontal-rule': {
+          borderTop: '1px solid #d0d7de',
+          color: 'transparent',
+          fontSize: '0',
+          lineHeight: '0',
+          minHeight: '1px',
+          margin: '1.25em 0',
+          width: '100%',
+        },
       }),
       lang,
       EditorView.updateListener.of((u) => {
@@ -154,8 +175,17 @@ export function CodeEditor({
 
     const session = actions.getEditorSession(tabId);
     const savedSession = session?.version === sessionVersion ? session : undefined;
+    let initialState = savedSession?.state ?? EditorState.create({ doc: initialContent, extensions });
+    // Editor sessions preserve undo history across view switches. When a
+    // session predates a new state field (for example after dev hot reload),
+    // attach only the missing match extensions instead of replacing its state.
+    if (savedSession && !initialState.field(sourceMatchState, false)) {
+      initialState = initialState.update({
+        effects: StateEffect.appendConfig.of([sourceMatchState, sourceMatchHighlighter]),
+      }).state;
+    }
     const view = new EditorView({
-      state: savedSession?.state ?? EditorState.create({ doc: initialContent, extensions }),
+      state: initialState,
       parent: host,
     });
     if (savedSession) {
@@ -173,7 +203,10 @@ export function CodeEditor({
       next: () => { findNext(view); return matchInfoFor(view); },
       prev: () => { findPrevious(view); return matchInfoFor(view); },
       close: () => {
-        view.dispatch({ effects: setSearchQuery.of(new SearchQuery({ search: '' })) });
+        view.dispatch({ effects: [
+          setSearchQuery.of(new SearchQuery({ search: '' })),
+          setSourceFindQuery.of(null),
+        ] });
       },
     });
     if (!renamingAtMountRef.current) view.focus();
@@ -274,9 +307,68 @@ export function applyEditorQuery(
     regexp: false,
     wholeWord,
   });
-  view.dispatch({ effects: setSearchQuery.of(query) });
+  view.dispatch({ effects: [setSearchQuery.of(query), setSourceFindQuery.of(query)] });
   if (selectMatch && q && query.valid) findNext(view);
   return matchInfoFor(view);
+}
+
+/** Copy the exact CodeMirror source selection, including syntax concealed by
+ * the Live Editing projection. Returning false leaves unrelated clipboard
+ * events alone when the browser does not expose a writable clipboard. */
+export function copyLiveMarkdownSource(event: ClipboardEvent, view: EditorView): boolean {
+  const clipboard = event.clipboardData;
+  if (!clipboard || !hasMarkdownSourceSelection(view.state)) return false;
+  clipboard.setData('text/plain', selectedMarkdownSource(view.state));
+  event.preventDefault();
+  return true;
+}
+
+/** Cut is one CodeMirror transaction, so every selected source range and its
+ * undo history remain authoritative even when its DOM presentation is a widget. */
+export function cutLiveMarkdownSource(event: ClipboardEvent, view: EditorView): boolean {
+  const clipboard = event.clipboardData;
+  if (!clipboard || !hasMarkdownSourceSelection(view.state)) return false;
+  const source = selectedMarkdownSource(view.state);
+  clipboard.setData('text/plain', source);
+  event.preventDefault();
+  view.dispatch(view.state.changeByRange((range) => ({
+    changes: { from: range.from, to: range.to },
+    range: EditorSelection.cursor(range.from),
+  })));
+  return true;
+}
+
+/** Paste is deliberately plain-text only. This keeps Markdown input literal
+ * and prevents browser HTML clipboard conversion from inventing source. */
+export function pasteLiveMarkdownPlainText(event: ClipboardEvent, view: EditorView): boolean {
+  const clipboard = event.clipboardData;
+  if (!clipboard) return false;
+  // Do not delegate an HTML-only clipboard event to the browser or
+  // CodeMirror: either can apply its own conversion policy.
+  if (!clipboard.types.includes('text/plain')) {
+    event.preventDefault();
+    return true;
+  }
+  const text = clipboard.getData('text/plain');
+  event.preventDefault();
+  view.dispatch(view.state.changeByRange((range) => ({
+    changes: { from: range.from, to: range.to, insert: text },
+    range: EditorSelection.cursor(range.from + text.length),
+  })));
+  return true;
+}
+
+/** Joins disjoint selections in document order, matching the editor's plain
+ * text clipboard representation while retaining exact underlying Markdown. */
+export function selectedMarkdownSource(state: EditorState): string {
+  return state.selection.ranges
+    .filter((range) => !range.empty)
+    .map((range) => state.sliceDoc(range.from, range.to))
+    .join('\n');
+}
+
+function hasMarkdownSourceSelection(state: EditorState): boolean {
+  return state.selection.ranges.some((range) => !range.empty);
 }
 
 /** Compute "current of total" by iterating the search cursor across the

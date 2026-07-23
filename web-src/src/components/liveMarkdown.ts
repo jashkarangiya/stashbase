@@ -1,6 +1,7 @@
 import { syntaxTree } from '@codemirror/language';
 import { StateEffect, StateField, type EditorState } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, type ViewUpdate, ViewPlugin, WidgetType } from '@codemirror/view';
+import { sourceMatches, sourceMatchVersion } from './editorMatches';
 
 type ConstructKind = 'heading' | 'emphasis' | 'strong' | 'strikethrough' | 'inline-code' | 'fenced-code' | 'horizontal-rule' | 'link';
 
@@ -75,18 +76,11 @@ export const liveMarkdownCompositionGuard = [
   }),
 ];
 
-class HorizontalRuleWidget extends WidgetType {
-  toDOM() {
-    const rule = document.createElement('hr');
-    rule.className = 'cm-live-horizontal-rule';
-    return rule;
-  }
-
-  eq() { return true; }
-}
-
 const hiddenMarkdownMarkupDecoration = Decoration.replace({});
-const horizontalRuleDecoration = Decoration.replace({ widget: new HorizontalRuleWidget(), block: true });
+// View plugins may neither provide block decorations nor replace line breaks.
+// A line decoration leaves the source range intact and projects the rule with
+// CSS only, so it remains legal in the viewport-bounded projection.
+const horizontalRuleDecoration = Decoration.line({ class: 'cm-live-horizontal-rule' });
 
 /**
  * Rules are deliberately internal: Live Editing has one CodeMirror adapter,
@@ -165,7 +159,6 @@ export function describeLiveMarkdownProjection(
   state: EditorState,
   options: ProjectionOptions = {},
 ): LiveMarkdownProjection[] {
-  const selection = state.selection.main;
   return collectConstructs(state, options.ranges)
     .filter((construct) => !intersectsAny(construct, options.sourceFallbackRanges))
     .filter((construct) => construct.kind !== 'link' || !!inlineLinkFor(state, construct))
@@ -173,7 +166,7 @@ export function describeLiveMarkdownProjection(
       kind: construct.kind,
       from: construct.from,
       to: construct.to,
-      active: intersectsSelection(construct, selection.from, selection.to),
+      active: isConstructActive(state, construct),
     }));
 }
 
@@ -200,11 +193,13 @@ export function createLiveMarkdownProjection(onLinkActivate: LiveMarkdownLinkAct
       return;
     }
     const treeChanged = syntaxTree(update.startState) !== syntaxTree(update.state);
+    const searchChanged = sourceMatchVersion(update.startState) !== sourceMatchVersion(update.state);
     if (this.composing || shouldRefreshLiveMarkdownProjection({
       docChanged: update.docChanged,
       selectionSet: update.selectionSet,
       viewportChanged: update.viewportChanged,
       treeChanged,
+      searchChanged,
     })) {
       this.decorations = buildDecorations(update.view, onLinkActivate);
     }
@@ -268,23 +263,23 @@ export function shouldRefreshLiveMarkdownProjection(change: {
   selectionSet: boolean;
   viewportChanged: boolean;
   treeChanged: boolean;
+  searchChanged?: boolean;
 }): boolean {
-  return change.docChanged || change.selectionSet || change.viewportChanged || change.treeChanged;
+  return change.docChanged || change.selectionSet || change.viewportChanged || change.treeChanged || !!change.searchChanged;
 }
 
 function buildDecorations(view: EditorView, onLinkActivate: LiveMarkdownLinkActivation): DecorationSet {
   const state = view.state;
-  const selection = state.selection.main;
-  const markers: Array<{ from: number; to: number; decoration: Decoration }> = [];
+  const markers: Array<{ from: number; to?: number; decoration: Decoration }> = [];
   const constructs = collectConstructs(state, view.visibleRanges);
   const inactiveLinks = constructs.filter((construct) => construct.kind === 'link'
-    && !intersectsSelection(construct, selection.from, selection.to)
+    && !isConstructActive(state, construct)
     && inlineLinkFor(state, construct));
   for (const construct of constructs) {
     // A presented link replaces its full source range. Nested presentation
     // would make the source only partly visible when the link is activated.
     if (construct.kind !== 'link' && inactiveLinks.some((link) => link.from <= construct.from && link.to >= construct.to)) continue;
-    const active = intersectsSelection(construct, selection.from, selection.to);
+    const active = isConstructActive(state, construct);
     if (construct.kind === 'link') {
       const link = inlineLinkFor(state, construct);
       if (!active && link) {
@@ -297,7 +292,17 @@ function buildDecorations(view: EditorView, onLinkActivate: LiveMarkdownLinkActi
       continue;
     }
     for (const decoration of construct.rule.decorations(construct, active)) {
-      markers.push({ from: construct.from, to: construct.to, decoration });
+      markers.push({
+        // A parser node can begin after indentation, but a line decoration
+        // must be anchored exactly at the line start.
+        from: construct.kind === 'horizontal-rule'
+          ? state.doc.lineAt(construct.from).from
+          : construct.from,
+        // Line decorations are anchored at a line start and may not cover
+        // source text; all other construct decorations cover their range.
+        ...(construct.kind === 'horizontal-rule' ? {} : { to: construct.to }),
+        decoration,
+      });
     }
     if (construct.rule.lineClass) {
       const lineDecoration = Decoration.line({ class: construct.rule.lineClass });
@@ -310,11 +315,16 @@ function buildDecorations(view: EditorView, onLinkActivate: LiveMarkdownLinkActi
     }
     if (!active) {
       for (const marker of sourceRangesFor(state, construct)) {
-        markers.push({ from: marker.from, to: marker.to, decoration: hiddenMarkdownMarkupDecoration });
+        // ViewPlugin replacement decorations cannot span a line break. Setext
+        // heading markers can include their leading newline, so conceal every
+        // same-line slice independently instead of invalidating the editor.
+        for (const segment of inlineDecorationRanges(state, marker)) {
+          markers.push({ from: segment.from, to: segment.to, decoration: hiddenMarkdownMarkupDecoration });
+        }
       }
     }
   }
-  markers.sort((a, b) => a.from - b.from || b.to - a.to);
+  markers.sort((a, b) => a.from - b.from || (b.to ?? b.from) - (a.to ?? a.from));
   return Decoration.set(markers.map(({ from, to, decoration }) => decoration.range(from, to)), true);
 }
 
@@ -361,15 +371,26 @@ class LiveLinkWidget extends WidgetType {
 
 /** Returns source ranges that inactive constructs conceal. */
 export function hiddenMarkdownMarkupRanges(state: EditorState, one?: Construct) {
-  const selection = state.selection.main;
   const constructs = one ? [one] : collectConstructs(state);
   return constructs
-    .filter((construct) => !intersectsSelection(construct, selection.from, selection.to))
+    .filter((construct) => !isConstructActive(state, construct))
     .flatMap((construct) => sourceRangesFor(state, construct));
 }
 
 function sourceRangesFor(state: EditorState, construct: Construct): ProjectionRange[] {
   return construct.rule.sourceRanges?.(state, construct) ?? construct.markers;
+}
+
+function inlineDecorationRanges(state: EditorState, range: ProjectionRange): ProjectionRange[] {
+  const ranges: ProjectionRange[] = [];
+  let from = range.from;
+  for (let pos = range.from; pos < range.to; pos += 1) {
+    if (state.sliceDoc(pos, pos + 1) !== '\n') continue;
+    if (from < pos) ranges.push({ from, to: pos });
+    from = pos + 1;
+  }
+  if (from < range.to) ranges.push({ from, to: range.to });
+  return ranges;
 }
 
 function headingSourceRanges(state: EditorState, construct: Construct): ProjectionRange[] {
@@ -469,6 +490,11 @@ function intersectsAny(construct: ProjectionRange, ranges: readonly ProjectionRa
 function intersectsSelection(construct: Construct, from: number, to: number): boolean {
   if (from === to) return construct.from <= from && from <= construct.to;
   return construct.from < Math.max(from, to) && construct.to > Math.min(from, to);
+}
+
+function isConstructActive(state: EditorState, construct: Construct): boolean {
+  return state.selection.ranges.some((range) => intersectsSelection(construct, range.from, range.to))
+    || sourceMatches(state).matches.some((match) => match.from < construct.to && match.to > construct.from);
 }
 
 function toggleMarkdownDelimiter(view: EditorView, delimiter: string, nodeName: string): boolean {

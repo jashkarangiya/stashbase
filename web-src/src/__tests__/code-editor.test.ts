@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { EditorState } from '@codemirror/state';
+import { EditorSelection, EditorState } from '@codemirror/state';
 import { history, undo } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { ensureSyntaxTree } from '@codemirror/language';
 import { search } from '@codemirror/search';
 import type { EditorView } from '@codemirror/view';
-import { applyEditorQuery, followLiveMarkdownLink, liveHeadingPosition } from '../components/CodeEditor.tsx';
+import {
+  applyEditorQuery,
+  copyLiveMarkdownSource,
+  cutLiveMarkdownSource,
+  followLiveMarkdownLink,
+  liveHeadingPosition,
+  pasteLiveMarkdownPlainText,
+  selectedMarkdownSource,
+} from '../components/CodeEditor.tsx';
 import { renderMarkdown } from '../markdown.ts';
 import {
   describeLiveMarkdownProjection,
@@ -19,6 +27,7 @@ import {
   toggleMarkdownLink,
   toggleMarkdownStrong,
 } from '../components/liveMarkdown.ts';
+import { sourceMatches, sourceMatchState } from '../components/editorMatches.ts';
 
 test('restoring an open find query preserves a saved editor selection', () => {
   let state = EditorState.create({
@@ -39,11 +48,160 @@ test('restoring an open find query preserves a saved editor selection', () => {
   assert.deepEqual(result, { current: 0, total: 2 });
 });
 
-function markdownState(doc: string, selection?: { anchor: number; head?: number }) {
+function clipboardEvent(plainText = '', types = ['text/plain']) {
+  const written = new Map<string, string>();
+  let prevented = false;
+  return {
+    event: {
+      clipboardData: {
+        types,
+        getData: (type: string) => type === 'text/plain' ? plainText : '<b>converted</b>',
+        setData: (type: string, value: string) => written.set(type, value),
+      },
+      preventDefault: () => { prevented = true; },
+    } as unknown as ClipboardEvent,
+    written,
+    wasPrevented: () => prevented,
+  };
+}
+
+test('Live Editing clipboard operations use exact Markdown source through concealed constructs', () => {
+  const doc = 'Before [StashBase](docs/guide.md) and **strong** after';
+  const linkFrom = doc.indexOf('[');
+  const linkTo = doc.indexOf(')') + 1;
+  const strongFrom = doc.indexOf('**strong**');
+  const state = markdownState(doc, EditorSelection.create([
+    EditorSelection.range(linkFrom, linkTo),
+    EditorSelection.range(strongFrom, strongFrom + '**strong**'.length),
+  ]));
+  const view = testView(state);
+  assert.equal(selectedMarkdownSource(view.state), '[StashBase](docs/guide.md)\n**strong**');
+
+  const copy = clipboardEvent();
+  assert.equal(copyLiveMarkdownSource(copy.event, view), true);
+  assert.equal(copy.written.get('text/plain'), '[StashBase](docs/guide.md)\n**strong**');
+  assert.equal(copy.wasPrevented(), true);
+
+  const cut = clipboardEvent();
+  assert.equal(cutLiveMarkdownSource(cut.event, view), true);
+  assert.equal(cut.written.get('text/plain'), '[StashBase](docs/guide.md)\n**strong**');
+  assert.equal(view.state.doc.toString(), 'Before  and  after');
+  assert.equal(undo(view), true);
+  assert.equal(view.state.doc.toString(), doc);
+
+  const cursorOnly = testView(markdownState('unchanged', { anchor: 3 }));
+  const cursorCopy = clipboardEvent();
+  const cursorCut = clipboardEvent();
+  assert.equal(copyLiveMarkdownSource(cursorCopy.event, cursorOnly), false);
+  assert.equal(cutLiveMarkdownSource(cursorCut.event, cursorOnly), false);
+  assert.equal(cursorCopy.wasPrevented(), false);
+  assert.equal(cursorCut.wasPrevented(), false);
+  assert.equal(cursorOnly.state.doc.toString(), 'unchanged');
+});
+
+test('Live Editing pastes plain text at every selection and ignores clipboard HTML', () => {
+  const view = testView(markdownState('one [label](url) two **three**', EditorSelection.create([
+    EditorSelection.range(4, 16), EditorSelection.range(21, 30),
+  ])));
+  const paste = clipboardEvent('literal <b>text</b>');
+  assert.equal(pasteLiveMarkdownPlainText(paste.event, view), true);
+  assert.equal(paste.wasPrevented(), true);
+  assert.equal(view.state.doc.toString(), 'one literal <b>text</b> two literal <b>text</b>');
+  assert.equal(undo(view), true);
+  assert.equal(view.state.doc.toString(), 'one [label](url) two **three**');
+
+  const htmlOnly = clipboardEvent('', ['text/html']);
+  assert.equal(pasteLiveMarkdownPlainText(htmlOnly.event, view), true);
+  assert.equal(htmlOnly.wasPrevented(), true);
+  assert.equal(view.state.doc.toString(), 'one [label](url) two **three**');
+});
+
+test('Live Find searches concealed Markdown source and reveals every matching construct', () => {
+  const doc = '**concealed** [label](hidden-destination.md)\n<div data-hidden="source">raw</div>\n---\ntitle: source\n---\nunsupported :term:';
+  let state = EditorState.create({
+    doc,
+    extensions: [EditorState.allowMultipleSelections.of(true), markdown({ base: markdownLanguage }), search()],
+  });
+  ensureSyntaxTree(state, state.doc.length, 1_000);
+  const view = {
+    get state() { return state; },
+    dispatch(spec: Parameters<EditorState['update']>[0]) { state = state.update(spec).state; },
+    plugin: () => null,
+  } as unknown as EditorView;
+
+  assert.deepEqual(applyEditorQuery(view, 'hidden-destination.md', false, false), { current: 1, total: 1 });
+  const link = describeLiveMarkdownProjection(view.state).find((construct) => construct.kind === 'link');
+  assert.deepEqual(link, {
+    kind: 'link',
+    from: doc.indexOf('[label]'),
+    to: doc.indexOf(')') + 1,
+    active: true,
+  });
+  assert.deepEqual(applyEditorQuery(view, 'data-hidden', false, false), { current: 1, total: 1 });
+  assert.deepEqual(applyEditorQuery(view, 'title:', false, false), { current: 1, total: 1 });
+  assert.deepEqual(applyEditorQuery(view, ':term:', false, false), { current: 1, total: 1 });
+});
+
+test('Live Find reveals non-current source matches so all result decorations remain visible', () => {
+  const doc = '[first](hidden-destination.md) and [second](hidden-destination.md)';
+  let state = EditorState.create({
+    doc,
+    selection: { anchor: doc.length },
+    extensions: [sourceMatchState, markdown({ base: markdownLanguage }), search()],
+  });
+  ensureSyntaxTree(state, state.doc.length, 1_000);
+  const view = {
+    get state() { return state; },
+    dispatch(spec: Parameters<EditorState['update']>[0]) { state = state.update(spec).state; },
+  } as unknown as EditorView;
+
+  assert.deepEqual(applyEditorQuery(view, 'hidden-destination.md', false, false, false), { current: 0, total: 2 });
+  assert.equal(sourceMatches(view.state).mode, 'find');
+  const links = describeLiveMarkdownProjection(view.state).filter((construct) => construct.kind === 'link');
+  assert.equal(links.length, 2);
+  assert.ok(links.every((link) => link.active));
+});
+
+test('selected-word matching shares Find case rules and reveals matching headings', () => {
+  const doc = '# Footnote verification\n\nfootnote';
+  const selectedFrom = doc.lastIndexOf('footnote');
+  const state = EditorState.create({
+    doc,
+    selection: EditorSelection.range(selectedFrom, selectedFrom + 'footnote'.length),
+    extensions: [sourceMatchState, markdown({ base: markdownLanguage }), search()],
+  });
+  ensureSyntaxTree(state, state.doc.length, 1_000);
+
+  assert.deepEqual(sourceMatches(state), {
+    mode: 'selection',
+    matches: [
+      { from: doc.indexOf('Footnote'), to: doc.indexOf('Footnote') + 'Footnote'.length },
+      { from: selectedFrom, to: selectedFrom + 'footnote'.length },
+    ],
+    activeIndex: 1,
+  });
+  assert.equal(describeLiveMarkdownProjection(state).find((construct) => construct.kind === 'heading')?.active, true);
+});
+
+test('a secondary selection reveals its intersected Live Editing construct', () => {
+  const doc = 'before [label](destination.md) after';
+  const state = markdownState(doc, EditorSelection.create([
+    EditorSelection.cursor(0),
+    EditorSelection.range(doc.indexOf('destination.md'), doc.indexOf('destination.md') + 'destination.md'.length),
+  ]));
+  assert.deepEqual(describeLiveMarkdownProjection(state).find((construct) => construct.kind === 'link'), {
+    kind: 'link',
+    from: doc.indexOf('[label]'),
+    to: doc.indexOf(')') + 1,
+    active: true,
+  });
+});
+
+function markdownState(doc: string, selection?: EditorSelection | { anchor: number; head?: number }) {
   const state = EditorState.create({
     doc,
     selection,
-    extensions: [markdown({ base: markdownLanguage }), history()],
+    extensions: [EditorState.allowMultipleSelections.of(true), markdown({ base: markdownLanguage }), history()],
   });
   // The production projection is intentionally viewport-bounded and can wait
   // for a background parse. These complete-document assertions need a stable
@@ -168,6 +326,18 @@ test('inactive Markdown constructs hide only recognized syntax and reveal every 
     { from: 14, to: 18 },
     { from: 25, to: 29 },
   ]);
+});
+
+test('indented horizontal rules remain valid Live Editing constructs', () => {
+  const doc = 'before\n\n   ---\n\nafter';
+  const rule = describeLiveMarkdownProjection(markdownState(doc, { anchor: doc.length }))
+    .find((construct) => construct.kind === 'horizontal-rule');
+  assert.deepEqual(rule, {
+    kind: 'horizontal-rule',
+    from: doc.indexOf('---'),
+    to: doc.indexOf('---') + 3,
+    active: false,
+  });
 });
 
 test('Live fenced code presents an inert block and reveals its fences on entry', () => {

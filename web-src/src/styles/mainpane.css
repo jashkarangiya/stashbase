@@ -114,15 +114,22 @@
      * lightningcss from warning about the (real but unrecognised) CSS
      * Custom Highlight pseudo-element. */
 
-    /* CM6's built-in match decoration (used by our editor controller).
-     * Match Chrome's palette so the editor and previews feel uniform. */
-    .cm-searchMatch {
+    /* One source-match system drives Find and selected-word occurrences.
+     * Find mirrors Chrome; selected-word peers stay quieter and let the
+     * browser's native selection paint the active occurrence. */
+    .cm-source-find-match {
       background: #ffe082 !important;
     }
-    .cm-searchMatch.cm-searchMatch-selected,
-    .cm-searchMatch-selected {
+    .cm-source-find-match-active {
       background: #1a73e8 !important;
       color: #fff !important;
+    }
+    .cm-source-selection-match {
+      background: #b9f6a5 !important;
+    }
+    .cm-live-heading .cm-source-match {
+      box-decoration-break: clone;
+      line-height: inherit;
     }
 
     /* Floating actions in the main pane's top-right. Replaces the
