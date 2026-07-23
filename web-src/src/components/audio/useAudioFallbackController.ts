@@ -83,7 +83,7 @@ export function useAudioFallbackController(input: {
     if (!usingFallback) {
       void prepare();
     } else if (!preparing) {
-      setError('This audio file could not be played or converted for preview.');
+      setError('This media file could not be played or converted for preview.');
     }
   }
 

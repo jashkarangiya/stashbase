@@ -47,7 +47,7 @@ const SEARCH_TYPE_CHIPS: Array<{ type: SearchTypeCategory; label: string; title:
   { type: 'pdf', label: 'PDF', title: 'PDF documents' },
   { type: 'image', label: 'Images', title: 'OCR-searchable images' },
   { type: 'docx', label: 'DOCX', title: 'Word documents' },
-  { type: 'audio', label: 'Audio', title: 'Transcribed audio' },
+  { type: 'audio', label: 'Media', title: 'Transcribed audio and video' },
 ];
 
 /** Subfolder scope + file-type chips. Both narrow the NEXT search in
@@ -185,7 +185,7 @@ function SearchStatusBanner() {
         <div className="search-status-copy">
           <div className="search-status-title">Transcription setup required</div>
           <div className="search-status-detail">
-            {readyCount} file{readyCount === 1 ? ' is' : 's are'} ready to search. {blockedCount} audio file{blockedCount === 1 ? '' : 's'} need transcription setup.
+            {readyCount} file{readyCount === 1 ? ' is' : 's are'} ready to search. {blockedCount} media file{blockedCount === 1 ? '' : 's'} need transcription setup.
           </div>
         </div>
         <div className="search-status-actions">

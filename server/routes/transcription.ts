@@ -95,7 +95,7 @@ export function mount(app: express.Express): void {
   app.get('/api/audio/transcript', (req, res) => {
     try {
       const rel = typeof req.query.path === 'string' ? req.query.path.trim() : '';
-      if (!rel || !isAudioFile(rel)) return res.status(415).json({ error: 'audio path required' });
+      if (!rel || !isAudioFile(rel)) return res.status(415).json({ error: 'media path required' });
       const sourceAbs = resolveExisting(rel);
       if (!sourceAbs) return res.status(404).json({ error: 'file not found' });
       const transcript = readAudioTranscript(sourceAbs);

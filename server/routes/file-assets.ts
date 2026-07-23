@@ -39,6 +39,11 @@ const MIME: Record<string, string> = {
   '.aif': 'audio/aiff',
   '.aiff': 'audio/aiff',
   '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.m4v': 'video/x-m4v',
+  '.webm': 'video/webm',
+  '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo',
 };
 
 export function mountFileAssetRoutes(app: express.Express): void {
@@ -66,9 +71,9 @@ export function mountFileAssetRoutes(app: express.Express): void {
     fs.createReadStream(abs).pipe(res);
   });
 
-  // Chromium can play most accepted audio sources directly. If a codec or
-  // container is unsupported, AudioPreview retries through this AppData-only
-  // WebM/Opus representation. Generation is deduplicated per source.
+  // Chromium can play many accepted audio/video sources directly. If a codec
+  // or container is unsupported, AudioPreview retries through this AppData-only
+  // WebM/Opus audio representation. Generation is deduplicated per source.
   app.get('/asset-audio-preview/*', async (req, res) => {
     const rel = stripAssetWindowPrefix((req.params as any)[0] as string);
     if (!isAudioFile(rel)) return res.status(415).end();
@@ -98,7 +103,7 @@ export function mountFileAssetRoutes(app: express.Express): void {
   // the last interested preview.
   app.post('/api/audio/preview/prepare', async (req, res) => {
     const rel = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
-    if (!rel || !isAudioFile(rel)) return res.status(415).json({ error: 'audio path required' });
+    if (!rel || !isAudioFile(rel)) return res.status(415).json({ error: 'media path required' });
     const controller = new AbortController();
     const abort = () => controller.abort(new Error('audio preview request closed'));
     const abortOnPrematureClose = () => { if (!res.writableEnded) abort(); };
@@ -120,7 +125,7 @@ export function mountFileAssetRoutes(app: express.Express): void {
 
   app.get('/api/audio/preview/status', (req, res) => {
     const rel = typeof req.query.path === 'string' ? req.query.path.trim() : '';
-    if (!rel || !isAudioFile(rel)) return res.status(415).json({ error: 'audio path required' });
+    if (!rel || !isAudioFile(rel)) return res.status(415).json({ error: 'media path required' });
     try {
       const sourceAbs = resolveExisting(rel);
       if (!sourceAbs) return res.status(404).json({ error: 'file not found' });

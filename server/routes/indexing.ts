@@ -194,7 +194,7 @@ function prepareConvertibleInFolder(relPath: string, folderName?: string): void 
   const { folderRoot } = requireRequestFolder(folderName?.trim() || undefined);
   const abs = requireExistingFileInFolder(folderRoot, rel);
   if (!prepareConvertibleSource(abs, rel)) {
-    const err = new Error('only DOCX and audio files require interactive preparation');
+    const err = new Error('only DOCX and media files require interactive preparation');
     (err as any).status = 415;
     throw err;
   }
@@ -274,7 +274,7 @@ export function mount(app: express.Express): void {
       // Daemon hits arrive as absolute paths; translate fileName back to
       // folder-relative for the sidebar (which only knows the current
       // folder). Then `displayPathForHit` rewrites a derived note to its
-      // source PDF/image/audio file (or drops an orphan) so hidden derived
+      // source PDF/image/media file (or drops an orphan) so hidden derived
       // text never shows — the corresponding viewer picks up chunk text from
       // pendingHighlight and jump to the matching passage.
       const out = remapSearchHitsForDisplay(

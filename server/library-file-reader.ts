@@ -88,7 +88,7 @@ export async function agentContextFile(rawPath: unknown): Promise<AgentContextFi
         reason: sourceFormat === 'docx'
           ? 'No extracted HTML exists yet for this DOCX; retry after conversion if you need text context.'
           : sourceFormat === 'audio'
-            ? 'No transcript exists yet for this audio file; install the selected local model or retry after transcription.'
+            ? 'No transcript exists yet for this media file; install the selected local model or retry after transcription.'
             : 'No extracted Markdown exists yet for this PDF; retry after conversion if you need text context.',
       };
     }
@@ -216,7 +216,7 @@ function readDerivedText(derivedAbs: string, sourceFormat: 'pdf' | 'docx' | 'aud
     throw routeError(sourceFormat === 'docx'
       ? 'extracted HTML is not available for this DOCX yet; retry conversion or run reindex first'
       : sourceFormat === 'audio'
-        ? 'transcript Markdown is not available for this audio file yet; install a model or retry transcription first'
+        ? 'transcript Markdown is not available for this media file yet; install a model or retry transcription first'
         : 'extracted Markdown is not available for this PDF yet; retry conversion or run reindex first', 409, 'CONVERSION_NOT_READY');
   }
 }

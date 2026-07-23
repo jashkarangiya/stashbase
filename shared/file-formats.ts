@@ -11,8 +11,15 @@ export const NOTE_EXTENSIONS = [...MARKDOWN_NOTE_EXTENSIONS, ...HTML_NOTE_EXTENS
 export const PDF_EXTENSIONS = ['pdf'] as const;
 export const IMAGE_SOURCE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'] as const;
 export const DOCX_EXTENSIONS = ['docx'] as const;
-export const AUDIO_SOURCE_EXTENSIONS = [
+export const AUDIO_ONLY_SOURCE_EXTENSIONS = [
   'mp3', 'wav', 'm4a', 'flac', 'ogg', 'opus', 'aac', 'aiff', 'aif',
+] as const;
+export const VIDEO_SOURCE_EXTENSIONS = [
+  'mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi',
+] as const;
+export const AUDIO_SOURCE_EXTENSIONS = [
+  ...AUDIO_ONLY_SOURCE_EXTENSIONS,
+  ...VIDEO_SOURCE_EXTENSIONS,
 ] as const;
 
 export const CONVERTIBLE_SOURCE_EXTENSIONS = [

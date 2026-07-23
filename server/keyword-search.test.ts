@@ -60,7 +60,10 @@ test('search type categories map to source extensions', () => {
   assert.deepEqual(searchExtensionsForTypes(['docx', 'docx']), ['.docx']);
   assert.deepEqual(
     searchExtensionsForTypes(['audio']),
-    ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.aac', '.aiff', '.aif'],
+    [
+      '.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.aac', '.aiff', '.aif',
+      '.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi',
+    ],
   );
   assert.equal(searchExtensionsForTypes([]), null);
   assert.equal(searchExtensionsForTypes(['notes', 'pdf', 'image', 'docx', 'audio']), null);
@@ -72,6 +75,7 @@ test('type membership checks extensions case-insensitively', () => {
   assert.equal(matchesSearchTypes('shot.jpeg', ['image']), true);
   assert.equal(matchesSearchTypes('doc.docx', ['pdf', 'docx']), true);
   assert.equal(matchesSearchTypes('meeting.M4A', ['audio']), true);
+  assert.equal(matchesSearchTypes('clip.MOV', ['audio']), true);
   assert.equal(matchesSearchTypes('meeting.m4a', ['docx']), false);
   assert.equal(matchesSearchTypes('note.md', []), true);
 });

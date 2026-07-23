@@ -137,8 +137,9 @@ export function isDocxFile(name: string): boolean {
   return DOCX_PATTERN.test(base) && !base.startsWith('~$') && !base.startsWith('.~');
 }
 
-/** Audio sources accepted by the local transcription pipeline. Video
- *  containers are deliberately excluded even when they carry audio. */
+/** Audio and video-container sources accepted by the local transcription
+ *  pipeline. Video containers are treated as transcribable media: FFmpeg
+ *  extracts their audio track and discards video. */
 export function isAudioFile(name: string): boolean {
   return AUDIO_PATTERN.test(pathBasename(name));
 }

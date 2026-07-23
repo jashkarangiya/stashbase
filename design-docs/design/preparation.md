@@ -10,8 +10,9 @@ preserving the original file as the user's visible object.
 - PDFs retain native preview and gain derived text for Agent reading and search.
 - DOCX retains a readable source-based preview and gains derived retrieval text.
 - Images remain visible while OCR can supply searchable text.
-- Audio remains playable while a transcript supplies searchable, timestamped
-  context.
+- Audio files and supported video containers can produce searchable,
+  timestamped transcripts; video transcription extracts the audio track and
+  does not make StashBase a video editor.
 - Preparation runs in the background, prioritizes direct interaction, and can
   be retried when a recoverable failure needs user attention.
 

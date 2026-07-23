@@ -11,8 +11,8 @@ as the result identity.
 - In-app search starts from the current folder and can narrow its scope.
 - Results identify the source file, path, and useful evidence such as a snippet
   or page/timestamp hint.
-- Prepared PDF, image, DOCX, and audio text can be evidence, but opening a
-  result returns to the original source file.
+- Prepared PDF, image, DOCX, and media transcript text can be evidence, but
+  opening a result returns to the original source file.
 - MCP offers orientation, search, read, reindex, and bounded file operations
   to authorized Agent clients.
 
